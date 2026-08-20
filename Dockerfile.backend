@@ -4,7 +4,6 @@ WORKDIR /app
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
     build-essential \
-    curl \
     && rm -rf /var/lib/apt/lists/*
 
 COPY requirements.txt .
@@ -12,6 +11,7 @@ RUN pip install --no-cache-dir -r requirements.txt
 
 COPY ./backend /app/backend
 
-ENV PYTHONPATH=/app
+# PYTHONPATH aponta para /app/backend para que "from app.xxx" funcione diretamente
+ENV PYTHONPATH=/app/backend
 
-CMD ["uvicorn", "backend.app.main:app", "--host", "0.0.0.0", "--port", "8000"]
+CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000"]
