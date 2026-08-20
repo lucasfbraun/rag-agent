@@ -1,28 +1,97 @@
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, BackgroundTasks
 from pydantic import BaseModel
 from typing import List, Optional
 from app.rag.engine import run_pu_matcher_agent
 from app.templates import TEMPLATES_DISPONIVEIS
+import logging
+import os
 
-app = FastAPI(title="PU Matcher API", version="2.0.0")
+logger = logging.getLogger(__name__)
+
+app = FastAPI(
+    title="PU Matcher API",
+    version="2.1.0",
+    description="Agente investigativo RAG para match de produtos de poliuretano"
+)
+
+# ---------------------------------------------------------------------------
+# Schemas
+# ---------------------------------------------------------------------------
 
 class MatchRequest(BaseModel):
     query: str
     template_id: str = "proposta_tecnica_completa"
-    model_name: str = "gemini/gemini-1.5-flash"
+    model_name: str = "gemini/gemini-2.0-flash"
     history: Optional[List[dict]] = []
 
+class IngestRequest(BaseModel):
+    dir_path: str = "/app/data/raw_documents"
+    embedding_model: str = "text-embedding-3-small"
+
+# ---------------------------------------------------------------------------
+# Endpoints
+# ---------------------------------------------------------------------------
+
 @app.get("/")
-def health():
-    return {"status": "online", "service": "PU Matcher - Product Match & Consultative Sales"}
+def health_simple():
+    return {"status": "online", "service": "PU Matcher - Product Match & Consultative Sales", "version": "2.1.0"}
+
+
+@app.get("/api/health")
+def health_detailed():
+    """
+    Health check detalhado: verifica conectividade com o Qdrant e status da coleção.
+    Útil para monitoramento, liveness probe do Docker e debug de ambiente.
+    """
+    qdrant_status = "unknown"
+    collection_info = {}
+
+    try:
+        from qdrant_client import QdrantClient
+        from app.rag.ingestion import COLLECTION_NAME
+
+        qdrant_host = os.getenv("QDRANT_HOST", "localhost")
+        qdrant_port = int(os.getenv("QDRANT_PORT", 6333))
+        client = QdrantClient(host=qdrant_host, port=qdrant_port, timeout=5)
+
+        collections = client.get_collections().collections
+        qdrant_status = "online"
+
+        col_names = [c.name for c in collections]
+        if COLLECTION_NAME in col_names:
+            col_info = client.get_collection(COLLECTION_NAME)
+            collection_info = {
+                "name": COLLECTION_NAME,
+                "points_count": col_info.points_count,
+                "status": str(col_info.status)
+            }
+        else:
+            collection_info = {
+                "name": COLLECTION_NAME,
+                "points_count": 0,
+                "status": "não inicializada — execute a ingestão"
+            }
+
+    except Exception as e:
+        qdrant_status = f"offline ({e})"
+        logger.warning("Qdrant inacessível no health check: %s", e)
+
+    return {
+        "api": "online",
+        "qdrant": qdrant_status,
+        "collection": collection_info
+    }
+
 
 @app.get("/api/templates")
 def list_templates():
     """Lista todos os templates cadastrados no sistema."""
     return TEMPLATES_DISPONIVEIS
 
+
 @app.post("/api/match")
 def match_product(req: MatchRequest):
+    """Executa o agente investigativo para match de produto."""
     try:
         res = run_pu_matcher_agent(
             query=req.query,
@@ -32,4 +101,34 @@ def match_product(req: MatchRequest):
         )
         return res
     except Exception as e:
+        logger.error("Erro no agente PU Matcher: %s", e, exc_info=True)
         raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/api/ingest")
+def trigger_ingest(req: IngestRequest, background_tasks: BackgroundTasks):
+    """
+    Dispara a ingestão do diretório de documentos em background.
+    Útil para reindexar via API sem precisar de acesso ao shell do container.
+    """
+    import os
+    if not os.path.isdir(req.dir_path):
+        raise HTTPException(
+            status_code=400,
+            detail=f"Diretório não encontrado: {req.dir_path}"
+        )
+
+    def run_ingest():
+        from app.rag.ingestion import ingest_catalog_directory
+        try:
+            ingest_catalog_directory(req.dir_path, req.embedding_model)
+        except Exception as e:
+            logger.error("Erro na ingestão via API: %s", e, exc_info=True)
+
+    background_tasks.add_task(run_ingest)
+    return {
+        "status": "ingestão iniciada em background",
+        "dir_path": req.dir_path,
+        "embedding_model": req.embedding_model,
+        "message": "Acompanhe os logs do container para progresso. Use GET /api/health para verificar o status da coleção após a ingestão."
+    }

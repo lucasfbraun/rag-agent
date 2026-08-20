@@ -1,17 +1,16 @@
 import os
 import json
-from typing import List, Dict, Any
-from qdrant_client import QdrantClient
-from qdrant_client.http import models as qmodels
+import logging
+from typing import List, Dict, Any, Optional
 import litellm
 from app.templates import obter_instrucao_template
 from app.mcp.pu_mcp_server import MCP_TOOLS_DEFINITIONS, execute_mcp_tool
 
+logger = logging.getLogger(__name__)
+
 QDRANT_HOST = os.getenv("QDRANT_HOST", "localhost")
 QDRANT_PORT = int(os.getenv("QDRANT_PORT", 6333))
 COLLECTION_NAME = "pu_products_catalog"
-
-client = QdrantClient(host=QDRANT_HOST, port=QDRANT_PORT)
 
 AGENT_SYSTEM_PROMPT = """Você é o PU Matcher, um Consultor Técnico Sênior e Especialista em Vendas Técnicas e Aplicações de Poliuretanos (PU).
 
@@ -31,31 +30,64 @@ COMPORTAMENTO INVESTIGATIVO E OPINATIVO (MUITO IMPORTANTE):
    - Seja opinativo: se o cliente pedir algo incompatível (ex: densidade baixíssima com ultra resiliência sem antichama), alerte e sugira a melhor prática de mercado.
 """
 
-def retrieve_products_context(query: str, top_k: int = 6) -> List[Dict[str, Any]]:
-    """Busca trechos de TDS e catálogos no banco vetorial Qdrant."""
-    emb_res = litellm.embedding(model="text-embedding-3-small", input=[query])
-    query_vector = emb_res.data[0]['embedding']
+def _get_qdrant_client():
+    """Instancia o QdrantClient de forma lazy (não falha no import-time)."""
+    from qdrant_client import QdrantClient
+    return QdrantClient(host=QDRANT_HOST, port=QDRANT_PORT, timeout=10)
 
-    results = client.search(
-        collection_name=COLLECTION_NAME,
-        query_vector=query_vector,
-        limit=top_k
-    )
-    return [hit.payload for hit in results]
+def retrieve_products_context(query: str, top_k: int = 6) -> List[Dict[str, Any]]:
+    """
+    Busca trechos de TDS e catálogos no banco vetorial Qdrant.
+    Retorna lista vazia (com aviso) se a coleção não existir ou estiver vazia.
+    """
+    try:
+        client = _get_qdrant_client()
+
+        # Verifica se a coleção existe antes de buscar
+        collections = client.get_collections().collections
+        if not any(c.name == COLLECTION_NAME for c in collections):
+            logger.warning(
+                "Coleção '%s' não encontrada no Qdrant. "
+                "Execute a ingestão de documentos antes de consultar.",
+                COLLECTION_NAME
+            )
+            return []
+
+        emb_res = litellm.embedding(model="text-embedding-3-small", input=[query])
+        query_vector = emb_res.data[0]["embedding"]
+
+        results = client.search(
+            collection_name=COLLECTION_NAME,
+            query_vector=query_vector,
+            limit=top_k
+        )
+        return [hit.payload for hit in results]
+
+    except Exception as e:
+        logger.error("Erro ao buscar no Qdrant: %s", e)
+        return []
 
 def run_pu_matcher_agent(
     query: str,
     template_id: str = "proposta_tecnica_completa",
-    model_name: str = "gemini/gemini-1.5-flash",
-    history: List[Dict[str, str]] = None
+    model_name: str = "gemini/gemini-2.0-flash",
+    history: Optional[List[Dict[str, str]]] = None
 ) -> Dict[str, Any]:
     """Executa o agente investigativo com suporte a RAG, MCP e Templates Padronizados."""
     docs = retrieve_products_context(query)
 
-    context_str = "\n\n---\n\n".join([
-        f"[Catálogo / TDS: {d.get('filename')}]\n{d.get('content')}"
-        for d in docs
-    ])
+    # Monta contexto RAG (ou aviso de base vazia)
+    if docs:
+        context_str = "\n\n---\n\n".join([
+            f"[Catálogo / TDS: {d.get('filename')}]\n{d.get('content')}"
+            for d in docs
+        ])
+    else:
+        context_str = (
+            "⚠️ ATENÇÃO: A base de dados de produtos ainda não foi indexada ou está vazia. "
+            "Responda apenas com base no seu conhecimento técnico geral de poliuretanos, "
+            "mas deixe claro que não há dados do catálogo interno disponíveis no momento."
+        )
 
     template_instruction = obter_instrucao_template(template_id)
 

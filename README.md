@@ -28,15 +28,25 @@ Acompanhamento do desenvolvimento:
    ```bash
    cp .env.example .env
    ```
-2. Suba os contêineres:
+2. Suba os contêineres (aguarda healthchecks automaticamente):
    ```bash
    docker-compose up -d --build
    ```
-3. Indexe documentos técnicos (coloque os arquivos em `data/raw_documents/` antes):
+3. Verifique se todos os serviços estão saudáveis:
    ```bash
-   docker exec -it pu_matcher_backend python -c "from app.rag.ingestion import ingest_catalog_directory; ingest_catalog_directory('/app/data/raw_documents')"
+   docker-compose ps
+   # ou via API:
+   curl http://localhost:8000/api/health
    ```
-4. Acesse a interface em `http://localhost:8501`.
+4. Indexe documentos técnicos (coloque os arquivos em `data/raw_documents/` antes):
+   ```bash
+   # CLI (recomendado):
+   docker exec -it pu_matcher_backend python -m app.cli ingest
+
+   # Ou via API REST (roda em background):
+   curl -X POST http://localhost:8000/api/ingest -H "Content-Type: application/json" -d '{"dir_path": "/app/data/raw_documents"}'
+   ```
+5. Acesse a interface em `http://localhost:8501`.
 
 ## Estrutura do projeto
 
@@ -56,6 +66,28 @@ Acompanhamento do desenvolvimento:
 └── docs/                   # Documentos originais da proposta e guia técnico
 ```
 
+## APIs disponíveis
+
+| Endpoint | Método | Descrição |
+|---|---|---|
+| `/` | GET | Health check simples |
+| `/api/health` | GET | Status detalhado (Qdrant + coleção) |
+| `/api/templates` | GET | Lista os templates disponíveis |
+| `/api/match` | POST | Executa o agente investigativo |
+| `/api/ingest` | POST | Dispara ingestão de documentos em background |
+
+## CLI de Ingestão
+
+```bash
+# Verificar saúde do sistema
+docker exec -it pu_matcher_backend python -m app.cli health
+
+# Indexar documentos
+docker exec -it pu_matcher_backend python -m app.cli ingest
+docker exec -it pu_matcher_backend python -m app.cli ingest --dir /app/data/raw_documents
+```
+
 ## Status
 
-MVP em fase de scaffold inicial (Fase 0 do [CRONOGRAMA.md](CRONOGRAMA.md)). Ferramentas de ERP/normas ainda simuladas.
+Fase 0 (Setup) concluída — código robusto com healthchecks, CLI e tratamento de erros. Aguardando chaves de API e documentos reais para Fase 1.
+Ferramentas de ERP/normas ainda simuladas (Fase 4 do [CRONOGRAMA.md](CRONOGRAMA.md)).

@@ -5,6 +5,34 @@ Ver visão geral de fases em [CRONOGRAMA.md](CRONOGRAMA.md).
 
 ---
 
+## 2026-08-20 — Sess\u00e3o 2: Robustez da Fase 0 e melhorias de qualidade
+
+**Feito:**
+- Avalia\u00e7\u00e3o completa do c\u00f3digo existente — 4 bugs cr\u00edticos identificados e corrigidos:
+  1. `ingestion.py`: `point_id` agora usa UUID determin\u00edstico (`uuid5` baseado em filepath+chunk) → ingest\u00e3o idempotente
+  2. `ingestion.py`: suporte a `.txt` adicionado em `extract_text_from_file()`
+  3. `engine.py`: `QdrantClient` movido para lazy init → backend sobe mesmo sem Qdrant disponível no boot
+  4. `engine.py` + `frontend/app.py`: modelos Gemini atualizados de `1.5-flash/pro` para `2.0-flash`, `2.5-flash`, `2.5-pro`
+- Novas funcionalidades adicionadas:
+  - `backend/app/main.py`: endpoint `GET /api/health` com status do Qdrant e contagem de pontos indexados
+  - `backend/app/main.py`: endpoint `POST /api/ingest` para disparar reindexação via REST (roda em background)
+  - `backend/app/cli.py`: CLI `python -m app.cli ingest` e `python -m app.cli health`
+  - `docker-compose.yml`: healthchecks nos 3 serviços + `depends_on: condition: service_healthy`
+  - `frontend/app.py`: indicador de status do backend/Qdrant na sidebar + exibição do modelo usado em cada resposta
+- `README.md` atualizado com tabela de APIs e documentação do CLI
+- `CRONOGRAMA.md` atualizado: Fase 0 com 10 itens concluídos
+
+**Estado atual:** Código da Fase 0 completo e robusto. Todos os itens implementáveis estão concluídos.
+
+**Próximos passos:**
+1. Preencher `.env` com chaves reais de API → validar `docker-compose up -d --build`
+2. Confirmar Qdrant em `localhost:6333` e rodar `python -m app.cli health`
+3. Providenciar 2–5 PDFs/DOCX de TDS reais para testar o pipeline de ingestão → início da Fase 1
+
+**Bloqueios:** chaves de API reais ainda não fornecidas; acervo de TDS/catálogos ainda não disponibilizado.
+
+---
+
 ## 2026-08-20 — Kickoff do desenvolvimento
 
 **Feito:**

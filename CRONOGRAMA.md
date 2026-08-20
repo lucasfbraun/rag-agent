@@ -8,12 +8,18 @@ Legenda de status: ⬜ Não iniciado · 🟨 Em andamento · ✅ Concluído · �
 ---
 
 ## Fase 0 — Setup do Ambiente
-**Status:** 🟨 Em andamento (scaffold de código concluído; validação de execução pendente)
+**Status:** 🟨 Em andamento (código completo e robusto; validação de execução bloqueada por dependências externas)
 
 - [x] Estrutura de diretórios do projeto (`backend/`, `frontend/`, `data/`)
 - [x] `docker-compose.yml`, Dockerfiles, `requirements.txt`
 - [x] `.env.example` (variáveis de ambiente sem segredos reais)
 - [x] Código base do backend (FastAPI), frontend (Streamlit), RAG e MCP simulado
+- [x] Correção de bugs críticos: idempotência da ingestão, lazy init do Qdrant, suporte a `.txt`, modelos Gemini atualizados
+- [x] Endpoint `/api/health` com status do Qdrant e da coleção
+- [x] Endpoint `/api/ingest` para disparar reindexacão via REST
+- [x] CLI `python -m app.cli ingest` e `python -m app.cli health`
+- [x] Healthchecks nos 3 serviços Docker (`depends_on: condition: service_healthy`)
+- [x] Indicador de status do backend/Qdrant na sidebar do frontend
 - [ ] Preencher `.env` local com chaves reais de API (Gemini/OpenAI/Anthropic)
 - [ ] Validar `docker-compose up -d --build` rodando localmente
 - [ ] Confirmar Qdrant acessível em `localhost:6333`
