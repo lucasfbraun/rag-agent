@@ -1,0 +1,41 @@
+version: '3.8'
+
+services:
+  # 1. Banco de Dados Vetorial On-Premise
+  qdrant:
+    image: qdrant/qdrant:v1.9.2
+    container_name: pu_matcher_qdrant
+    restart: always
+    ports:
+      - "6333:6333"
+      - "6334:6334"
+    volumes:
+      - ./data/qdrant_storage:/qdrant/storage
+
+  # 2. Backend FastAPI + Agente Investigativo
+  backend:
+    build:
+      context: .
+      dockerfile: Dockerfile.backend
+    container_name: pu_matcher_backend
+    restart: always
+    env_file: .env
+    ports:
+      - "8000:8000"
+    depends_on:
+      - qdrant
+    volumes:
+      - ./data/raw_documents:/app/data/raw_documents
+
+  # 3. Frontend Web Streamlit (Campo & Vendas Técnicas)
+  frontend:
+    build:
+      context: .
+      dockerfile: Dockerfile.frontend
+    container_name: pu_matcher_frontend
+    restart: always
+    env_file: .env
+    ports:
+      - "8501:8501"
+    depends_on:
+      - backend
