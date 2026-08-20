@@ -1,7 +1,8 @@
 from fastapi import FastAPI, HTTPException, BackgroundTasks
+from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 from typing import List, Optional
-from app.rag.engine import run_pu_matcher_agent
+from app.rag.engine import run_pu_matcher_agent, stream_pu_matcher_agent
 from app.templates import TEMPLATES_DISPONIVEIS
 import logging
 import os
@@ -103,6 +104,29 @@ def match_product(req: MatchRequest):
     except Exception as e:
         logger.error("Erro no agente PU Matcher: %s", e, exc_info=True)
         raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/api/match/stream")
+def match_product_stream(req: MatchRequest):
+    """
+    Versão streaming do agente (Server-Sent Events).
+    Cada linha do response body é um objeto JSON com campos:
+      - {"type": "meta", "sources": [...], "model_used": "..."}
+      - {"type": "delta", "content": "..."}
+      - {"type": "done"}
+      - {"type": "error", "message": "..."}
+    """
+    generator = stream_pu_matcher_agent(
+        query=req.query,
+        template_id=req.template_id,
+        model_name=req.model_name,
+        history=req.history
+    )
+    return StreamingResponse(
+        generator,
+        media_type="application/x-ndjson",
+        headers={"X-Accel-Buffering": "no"}
+    )
 
 
 @app.post("/api/ingest")

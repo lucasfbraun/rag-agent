@@ -48,6 +48,24 @@ Acompanhamento do desenvolvimento:
    ```
 5. Acesse a interface em `http://localhost:8501`.
 
+## Como rodar localmente (sem Docker)
+
+Útil para desenvolvimento e debug sem precisar do Docker Desktop.
+
+```bash
+# Instalar dependências
+pip install -r requirements.txt
+
+# Terminal 1 — Backend
+python backend/run_local.py
+
+# Terminal 2 — Frontend
+python frontend/run_local.py
+```
+
+A interface estará em `http://localhost:8501` e o backend em `http://localhost:8000`.
+> **Qdrant:** Instale e rode localmente (`docker run -p 6333:6333 qdrant/qdrant`) ou aponte `QDRANT_HOST` para um servidor remoto.
+
 ## Estrutura do projeto
 
 ```

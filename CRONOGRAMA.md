@@ -20,6 +20,9 @@ Legenda de status: ⬜ Não iniciado · 🟨 Em andamento · ✅ Concluído · �
 - [x] CLI `python -m app.cli ingest` e `python -m app.cli health`
 - [x] Healthchecks nos 3 serviços Docker (`depends_on: condition: service_healthy`)
 - [x] Indicador de status do backend/Qdrant na sidebar do frontend
+- [x] Streaming de resposta: endpoint `POST /api/match/stream` (SSE/NDJSON) + `st.write_stream()` no frontend
+- [x] Toggle de streaming na sidebar (ativar/desativar por sessão)
+- [x] Scripts de dev local sem Docker (`backend/run_local.py`, `frontend/run_local.py`)
 - [ ] Preencher `.env` local com chaves reais de API (Gemini/OpenAI/Anthropic)
 - [ ] Validar `docker-compose up -d --build` rodando localmente
 - [ ] Confirmar Qdrant acessível em `localhost:6333`

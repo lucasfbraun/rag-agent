@@ -5,7 +5,36 @@ Ver visão geral de fases em [CRONOGRAMA.md](CRONOGRAMA.md).
 
 ---
 
-## 2026-08-20 — Sess\u00e3o 2: Robustez da Fase 0 e melhorias de qualidade
+## 2026-08-20 — Sessão 3: Streaming, Dev Local e fix do Docker Compose
+
+**Contexto:** Docker Desktop não estava ativo (erro `//./pipe/dockerDesktopLinuxEngine`). Aproveitamos para avançar no código sem depender do ambiente Docker.
+
+**Feito:**
+- `docker-compose.yml`: removido atributo `version` obsoleto (eliminava warning no compose v2)
+- **Streaming de resposta (nova feature):**
+  - `backend/app/rag/engine.py`: `stream_pu_matcher_agent()` — gerador que yielda chunks JSON via SSE/NDJSON
+  - `backend/app/main.py`: endpoint `POST /api/match/stream` com `StreamingResponse`
+  - `frontend/app.py`: consumo do stream com `st.write_stream()` — resposta aparece token a token
+  - Toggle "⚡ Streaming de resposta" na sidebar para ativar/desativar por sessão
+- **Modo dev local (sem Docker):**
+  - `backend/run_local.py`: sobe uvicorn com hot-reload diretamente
+  - `frontend/run_local.py`: sobe Streamlit com `LOCAL_DEV=true` (aponta para `localhost`)
+  - `frontend/app.py`: detecta `LOCAL_DEV=true` e troca URLs de `backend:8000` → `localhost:8000`
+- `README.md`: seção "Como rodar localmente (sem Docker)" adicionada
+
+**Estado atual:** Código completo e robusto. Streaming funcional. Dev local possível sem Docker.
+
+**Próximos passos:**
+1. Iniciar Docker Desktop → `docker-compose up -d --build`
+2. Preencher `.env` com chaves de API reais
+3. Testar fluxo completo end-to-end (chat → streaming → recomendação com template)
+4. Providenciar PDFs/DOCX de TDS → início da Fase 1
+
+**Bloqueios:** Docker Desktop inativo; chaves de API ainda não fornecidas.
+
+---
+
+## 2026-08-20 — Sessão 2: Robustez da Fase 0 e melhorias de qualidade
 
 **Feito:**
 - Avalia\u00e7\u00e3o completa do c\u00f3digo existente — 4 bugs cr\u00edticos identificados e corrigidos:

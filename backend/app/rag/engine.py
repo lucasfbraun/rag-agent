@@ -152,3 +152,72 @@ MENSAGEM / DEMANDA DO VENDEDOR OU CLIENTE:
         "sources": sources,
         "model_used": model_name
     }
+
+
+def stream_pu_matcher_agent(
+    query: str,
+    template_id: str = "proposta_tecnica_completa",
+    model_name: str = "gemini/gemini-2.0-flash",
+    history: Optional[List[Dict[str, str]]] = None
+):
+    """
+    Versão streaming do agente: gera chunks de texto à medida que o LLM responde.
+    Usa Server-Sent Events (SSE) — cada chunk é um JSON com campo 'delta' ou 'done'.
+    """
+    import json as _json
+
+    docs = retrieve_products_context(query)
+
+    if docs:
+        context_str = "\n\n---\n\n".join([
+            f"[Catálogo / TDS: {d.get('filename')}]\n{d.get('content')}"
+            for d in docs
+        ])
+    else:
+        context_str = (
+            "⚠️ ATENÇÃO: A base de dados de produtos ainda não foi indexada ou está vazia. "
+            "Responda apenas com base no seu conhecimento técnico geral de poliuretanos, "
+            "mas deixe claro que não há dados do catálogo interno disponíveis no momento."
+        )
+
+    template_instruction = obter_instrucao_template(template_id)
+    system_instruction = f"""{AGENT_SYSTEM_PROMPT}
+
+DIRETRIZ DE PADRONIZAÇÃO DE RESPOSTA:
+{template_instruction}
+"""
+
+    messages = [{"role": "system", "content": system_instruction}]
+    if history:
+        messages.extend(history[-8:])
+
+    user_prompt = f"""BASE DE DADOS DE PRODUTOS DA EMPRESA (TDS & HOMOLOGAÇÕES):
+{context_str}
+
+MENSAGEM / DEMANDA DO VENDEDOR OU CLIENTE:
+{query}
+"""
+    messages.append({"role": "user", "content": user_prompt})
+
+    sources = list(set([d.get("filename") for d in docs if d.get("filename")]))
+
+    # Envia metadados iniciais (fontes consultadas)
+    yield _json.dumps({"type": "meta", "sources": sources, "model_used": model_name}) + "\n"
+
+    # Stream do LLM (sem tool calls no modo streaming para simplicidade)
+    try:
+        response = litellm.completion(
+            model=model_name,
+            messages=messages,
+            temperature=0.2,
+            stream=True
+        )
+        for chunk in response:
+            delta = chunk.choices[0].delta.content
+            if delta:
+                yield _json.dumps({"type": "delta", "content": delta}) + "\n"
+    except Exception as e:
+        logger.error("Erro no streaming do agente: %s", e)
+        yield _json.dumps({"type": "error", "message": str(e)}) + "\n"
+    finally:
+        yield _json.dumps({"type": "done"}) + "\n"
