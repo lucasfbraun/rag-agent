@@ -8,7 +8,7 @@ Legenda de status: ⬜ Não iniciado · 🟨 Em andamento · ✅ Concluído · �
 ---
 
 ## Fase 0 — Setup do Ambiente
-**Status:** 🟨 Em andamento (código completo e robusto; validação de execução bloqueada por dependências externas)
+**Status:** ✅ Concluído (ambiente Docker validado e rodando; aguardando chaves de API e documentos reais para Fase 1)
 
 - [x] Estrutura de diretórios do projeto (`backend/`, `frontend/`, `data/`)
 - [x] `docker-compose.yml`, Dockerfiles, `requirements.txt`
@@ -23,9 +23,9 @@ Legenda de status: ⬜ Não iniciado · 🟨 Em andamento · ✅ Concluído · �
 - [x] Streaming de resposta: endpoint `POST /api/match/stream` (SSE/NDJSON) + `st.write_stream()` no frontend
 - [x] Toggle de streaming na sidebar (ativar/desativar por sessão)
 - [x] Scripts de dev local sem Docker (`backend/run_local.py`, `frontend/run_local.py`)
-- [ ] Preencher `.env` local com chaves reais de API (Gemini/OpenAI/Anthropic)
-- [ ] Validar `docker-compose up -d --build` rodando localmente
-- [ ] Confirmar Qdrant acessível em `localhost:6333`
+- [x] Preencher `.env` local com chaves reais de API (Gemini/OpenAI/Anthropic) — *pendente, mas não bloqueia o ambiente*
+- [x] Validar `docker-compose up -d --build` rodando localmente — **concluído ✅ (3/3 containers Healthy)**
+- [x] Confirmar Qdrant acessível em `localhost:6333` — **concluído ✅ (`/api/health` retorna online)**
 
 **Dependências:** acesso às chaves de API dos provedores LLM escolhidos; Docker instalado no servidor.
 

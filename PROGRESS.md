@@ -5,6 +5,41 @@ Ver visão geral de fases em [CRONOGRAMA.md](CRONOGRAMA.md).
 
 ---
 
+## 2026-08-20 — Sessão 4: Debug Docker — todos os containers Healthy
+
+**Contexto:** `docker-compose up` falhava com containers unhealthy após healthchecks.
+
+**Diagnóstico e correções:**
+- Healthcheck Qdrant: `curl: not found` → imagem qdrant/qdrant não tem curl nem wget (imagem ultra-minimalista)
+  - Correção: usar `bash -c 'exec 3<>/dev/tcp/localhost/6333'` (TCP nativo do bash, sem dependências)
+  - Validado com `docker exec qdrant_test bash -c '...'` → `TCP OK`
+- Healthcheck Backend/Frontend: `curl: not found` → python:3.11-slim também não tem curl
+  - Correção: usar `python -c "import urllib.request..."` (Python sempre disponível)
+- Backend crashava no boot: `ModuleNotFoundError: No module named 'app'`
+  - Causa: `PYTHONPATH=/app` mas código usa `from app.xxx` (precisa de `/app/backend` no path)
+  - Correção: `Dockerfile.backend` → `PYTHONPATH=/app/backend`, `CMD uvicorn app.main:app`
+  - Removido `curl` da instalação apt (não era necessário)
+- Containers antigos presos após falha: `docker rm -f` para limpeza forçada
+
+**Resultado:** Stack completa rodando:
+```
+pu_matcher_qdrant    → healthy ✅
+pu_matcher_backend   → healthy ✅  
+pu_matcher_frontend  → healthy ✅
+```
+`GET /api/health` retorna `{"api": "online", "qdrant": "online", "collection": {"points_count": 0}}`
+
+**Estado atual:** Ambiente Docker 100% funcional. Pronto para ingestão de dados reais (Fase 1).
+
+**Próximos passos:**
+1. Preencher `.env` com chaves de API reais (Gemini/OpenAI/Anthropic)
+2. Colocar PDFs/DOCX de TDS em `data/raw_documents/` e rodar ingestão
+3. Testar fluxo completo end-to-end no frontend em `http://localhost:8501`
+
+**Bloqueios:** chaves de API ainda não fornecidas; acervo de TDS/catálogos ainda não disponibilizado.
+
+---
+
 ## 2026-08-20 — Sessão 3: Streaming, Dev Local e fix do Docker Compose
 
 **Contexto:** Docker Desktop não estava ativo (erro `//./pipe/dockerDesktopLinuxEngine`). Aproveitamos para avançar no código sem depender do ambiente Docker.
