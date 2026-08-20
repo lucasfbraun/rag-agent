@@ -8,8 +8,9 @@ Documentação de origem do projeto em [docs/](docs/):
 - [Guia Técnico do MVP](docs/guia_mvp_e_codigo_similaridade.md)
 
 Acompanhamento do desenvolvimento:
-- [CRONOGRAMA.md](CRONOGRAMA.md) — fases e marcos do projeto
-- [PROGRESS.md](PROGRESS.md) — log de progresso sessão a sessão
+- [CRONOGRAMA.md](CRONOGRAMA.md) — fases e marcos do projeto (fonte da verdade, versionada)
+- [PROGRESS.md](PROGRESS.md) — log de progresso sessão a sessão (fonte da verdade, versionada)
+- [Painel visual do projeto](https://claude.ai/code/artifact/91bf54cd-d88a-4816-abee-80f362863581) — dashboard com o mesmo conteúdo acima, republicado a cada avanço relevante
 
 ## Stack
 

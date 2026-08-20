@@ -8,7 +8,7 @@ Legenda de status: ⬜ Não iniciado · 🟨 Em andamento · ✅ Concluído · �
 ---
 
 ## Fase 0 — Setup do Ambiente
-**Status:** ✅ Concluído (scaffold inicial)
+**Status:** 🟨 Em andamento (scaffold de código concluído; validação de execução pendente)
 
 - [x] Estrutura de diretórios do projeto (`backend/`, `frontend/`, `data/`)
 - [x] `docker-compose.yml`, Dockerfiles, `requirements.txt`
