@@ -11,7 +11,9 @@ import litellm
 QDRANT_HOST = os.getenv("QDRANT_HOST", "localhost")
 QDRANT_PORT = int(os.getenv("QDRANT_PORT", 6333))
 COLLECTION_NAME = "pu_products_catalog"
-VECTOR_SIZE = 1536  # text-embedding-3-small
+# text-embedding-004 (Google/Gemini) = 768 dims | text-embedding-3-small (OpenAI) = 1536 dims
+VECTOR_SIZE = int(os.getenv("VECTOR_SIZE", "768"))
+EMBEDDING_MODEL = os.getenv("EMBEDDING_MODEL", "gemini/text-embedding-004")
 
 def get_qdrant_client() -> QdrantClient:
     """Cria e retorna um cliente Qdrant (lazy, evita falha no import-time)."""
@@ -73,7 +75,7 @@ def chunk_text(text: str, chunk_size: int = 700, overlap: int = 120) -> List[str
             chunks.append(chunk)
     return chunks
 
-def ingest_catalog_directory(dir_path: str, embedding_model: str = "text-embedding-3-small"):
+def ingest_catalog_directory(dir_path: str, embedding_model: str = EMBEDDING_MODEL):
     """
     Indexa Boletins Técnicos (TDS), Catálogos e Homologações no Qdrant.
 

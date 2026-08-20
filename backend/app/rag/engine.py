@@ -11,6 +11,8 @@ logger = logging.getLogger(__name__)
 QDRANT_HOST = os.getenv("QDRANT_HOST", "localhost")
 QDRANT_PORT = int(os.getenv("QDRANT_PORT", 6333))
 COLLECTION_NAME = "pu_products_catalog"
+# Deve ser o mesmo modelo usado na ingestão
+EMBEDDING_MODEL = os.getenv("EMBEDDING_MODEL", "gemini/text-embedding-004")
 
 AGENT_SYSTEM_PROMPT = """Você é o PU Matcher, um Consultor Técnico Sênior e Especialista em Vendas Técnicas e Aplicações de Poliuretanos (PU).
 
@@ -43,7 +45,6 @@ def retrieve_products_context(query: str, top_k: int = 6) -> List[Dict[str, Any]
     try:
         client = _get_qdrant_client()
 
-        # Verifica se a coleção existe antes de buscar
         collections = client.get_collections().collections
         if not any(c.name == COLLECTION_NAME for c in collections):
             logger.warning(
@@ -53,7 +54,7 @@ def retrieve_products_context(query: str, top_k: int = 6) -> List[Dict[str, Any]
             )
             return []
 
-        emb_res = litellm.embedding(model="text-embedding-3-small", input=[query])
+        emb_res = litellm.embedding(model=EMBEDDING_MODEL, input=[query])
         query_vector = emb_res.data[0]["embedding"]
 
         results = client.search(
@@ -76,7 +77,6 @@ def run_pu_matcher_agent(
     """Executa o agente investigativo com suporte a RAG, MCP e Templates Padronizados."""
     docs = retrieve_products_context(query)
 
-    # Monta contexto RAG (ou aviso de base vazia)
     if docs:
         context_str = "\n\n---\n\n".join([
             f"[Catálogo / TDS: {d.get('filename')}]\n{d.get('content')}"
@@ -90,7 +90,6 @@ def run_pu_matcher_agent(
         )
 
     template_instruction = obter_instrucao_template(template_id)
-
     system_instruction = f"""{AGENT_SYSTEM_PROMPT}
 
 DIRETRIZ DE PADRONIZAÇÃO DE RESPOSTA:
@@ -98,7 +97,6 @@ DIRETRIZ DE PADRONIZAÇÃO DE RESPOSTA:
 """
 
     messages = [{"role": "system", "content": system_instruction}]
-
     if history:
         messages.extend(history[-8:])
 
@@ -110,7 +108,6 @@ MENSAGEM / DEMANDA DO VENDEDOR OU CLIENTE:
 """
     messages.append({"role": "user", "content": user_prompt})
 
-    # Chamada com ferramentas MCP (Catálogo ERP + Normas)
     response = litellm.completion(
         model=model_name,
         messages=messages,
@@ -121,13 +118,11 @@ MENSAGEM / DEMANDA DO VENDEDOR OU CLIENTE:
 
     choice = response.choices[0]
 
-    # Processamento de ferramentas MCP se o modelo acionar
     if choice.message.tool_calls:
         for tool_call in choice.message.tool_calls:
             fn_name = tool_call.function.name
             fn_args = json.loads(tool_call.function.arguments)
             tool_result = execute_mcp_tool(fn_name, fn_args)
-
             messages.append(choice.message)
             messages.append({
                 "role": "tool",
@@ -135,23 +130,13 @@ MENSAGEM / DEMANDA DO VENDEDOR OU CLIENTE:
                 "name": fn_name,
                 "content": tool_result
             })
-
-        final_response = litellm.completion(
-            model=model_name,
-            messages=messages,
-            temperature=0.2
-        )
+        final_response = litellm.completion(model=model_name, messages=messages, temperature=0.2)
         answer = final_response.choices[0].message.content
     else:
         answer = choice.message.content
 
     sources = list(set([d.get("filename") for d in docs if d.get("filename")]))
-
-    return {
-        "answer": answer,
-        "sources": sources,
-        "model_used": model_name
-    }
+    return {"answer": answer, "sources": sources, "model_used": model_name}
 
 
 def stream_pu_matcher_agent(
@@ -200,11 +185,8 @@ MENSAGEM / DEMANDA DO VENDEDOR OU CLIENTE:
     messages.append({"role": "user", "content": user_prompt})
 
     sources = list(set([d.get("filename") for d in docs if d.get("filename")]))
-
-    # Envia metadados iniciais (fontes consultadas)
     yield _json.dumps({"type": "meta", "sources": sources, "model_used": model_name}) + "\n"
 
-    # Stream do LLM (sem tool calls no modo streaming para simplicidade)
     try:
         response = litellm.completion(
             model=model_name,
