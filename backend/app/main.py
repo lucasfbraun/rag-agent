@@ -22,12 +22,12 @@ app = FastAPI(
 class MatchRequest(BaseModel):
     query: str
     template_id: str = "proposta_tecnica_completa"
-    model_name: str = "gemini/gemini-2.0-flash"
+    model_name: str = "gemini/gemini-flash-latest"
     history: Optional[List[dict]] = []
 
 class IngestRequest(BaseModel):
     dir_path: str = "/app/data/raw_documents"
-    embedding_model: str = "text-embedding-3-small"
+    embedding_model: str = "gemini/gemini-embedding-001"
 
 # ---------------------------------------------------------------------------
 # Endpoints

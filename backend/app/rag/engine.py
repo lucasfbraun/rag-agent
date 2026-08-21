@@ -5,6 +5,7 @@ from typing import List, Dict, Any, Optional
 import litellm
 from app.templates import obter_instrucao_template
 from app.mcp.pu_mcp_server import MCP_TOOLS_DEFINITIONS, execute_mcp_tool
+from app.rag.embeddings import get_embedding
 
 logger = logging.getLogger(__name__)
 
@@ -12,7 +13,7 @@ QDRANT_HOST = os.getenv("QDRANT_HOST", "localhost")
 QDRANT_PORT = int(os.getenv("QDRANT_PORT", 6333))
 COLLECTION_NAME = "pu_products_catalog"
 # Deve ser o mesmo modelo usado na ingestão
-EMBEDDING_MODEL = os.getenv("EMBEDDING_MODEL", "gemini/text-embedding-004")
+EMBEDDING_MODEL = os.getenv("EMBEDDING_MODEL", "gemini/gemini-embedding-001")
 
 AGENT_SYSTEM_PROMPT = """Você é o PU Matcher, um Consultor Técnico Sênior e Especialista em Vendas Técnicas e Aplicações de Poliuretanos (PU).
 
@@ -54,8 +55,7 @@ def retrieve_products_context(query: str, top_k: int = 6) -> List[Dict[str, Any]
             )
             return []
 
-        emb_res = litellm.embedding(model=EMBEDDING_MODEL, input=[query])
-        query_vector = emb_res.data[0]["embedding"]
+        query_vector = get_embedding(query, EMBEDDING_MODEL)
 
         results = client.search(
             collection_name=COLLECTION_NAME,
@@ -71,7 +71,7 @@ def retrieve_products_context(query: str, top_k: int = 6) -> List[Dict[str, Any]
 def run_pu_matcher_agent(
     query: str,
     template_id: str = "proposta_tecnica_completa",
-    model_name: str = "gemini/gemini-2.0-flash",
+    model_name: str = "gemini/gemini-flash-latest",
     history: Optional[List[Dict[str, str]]] = None
 ) -> Dict[str, Any]:
     """Executa o agente investigativo com suporte a RAG, MCP e Templates Padronizados."""
@@ -113,7 +113,8 @@ MENSAGEM / DEMANDA DO VENDEDOR OU CLIENTE:
         messages=messages,
         tools=MCP_TOOLS_DEFINITIONS,
         tool_choice="auto",
-        temperature=0.2
+        temperature=0.2,
+        num_retries=3
     )
 
     choice = response.choices[0]
@@ -130,7 +131,7 @@ MENSAGEM / DEMANDA DO VENDEDOR OU CLIENTE:
                 "name": fn_name,
                 "content": tool_result
             })
-        final_response = litellm.completion(model=model_name, messages=messages, temperature=0.2)
+        final_response = litellm.completion(model=model_name, messages=messages, temperature=0.2, num_retries=3)
         answer = final_response.choices[0].message.content
     else:
         answer = choice.message.content
@@ -142,7 +143,7 @@ MENSAGEM / DEMANDA DO VENDEDOR OU CLIENTE:
 def stream_pu_matcher_agent(
     query: str,
     template_id: str = "proposta_tecnica_completa",
-    model_name: str = "gemini/gemini-2.0-flash",
+    model_name: str = "gemini/gemini-flash-latest",
     history: Optional[List[Dict[str, str]]] = None
 ):
     """
@@ -192,7 +193,8 @@ MENSAGEM / DEMANDA DO VENDEDOR OU CLIENTE:
             model=model_name,
             messages=messages,
             temperature=0.2,
-            stream=True
+            stream=True,
+            num_retries=3
         )
         for chunk in response:
             delta = chunk.choices[0].delta.content

@@ -16,8 +16,8 @@ load_dotenv(os.path.join(os.path.dirname(__file__), ".env"))
 # Garante que o modulo app seja encontrado
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "backend"))
 
-ACERVO_BASE = r"\\10.1.1.205\flexivel\GRUPOS\Qualidade\Documentacao de Produto"
-ACERVO_TESTE = r"\\10.1.1.205\flexivel\GRUPOS\Qualidade\Documentação de Produto\FLEXXI® AG"
+ACERVO_BASE = r"\\10.1.1.205\flexivel\GRUPOS\Qualidade\Documentação de Produto"
+ACERVO_TESTE = r"\\10.1.1.205\flexivel\GRUPOS\Qualidade\Documentação de Produto\FLEXX® AG"
 
 from app.rag.ingestion import ingest_catalog_directory
 

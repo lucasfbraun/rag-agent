@@ -6,14 +6,14 @@ from pypdf import PdfReader
 import docx
 from qdrant_client import QdrantClient
 from qdrant_client.http import models as qmodels
-import litellm
+from app.rag.embeddings import get_embedding
 
 QDRANT_HOST = os.getenv("QDRANT_HOST", "localhost")
 QDRANT_PORT = int(os.getenv("QDRANT_PORT", 6333))
 COLLECTION_NAME = "pu_products_catalog"
-# text-embedding-004 (Google/Gemini) = 768 dims | text-embedding-3-small (OpenAI) = 1536 dims
-VECTOR_SIZE = int(os.getenv("VECTOR_SIZE", "768"))
-EMBEDDING_MODEL = os.getenv("EMBEDDING_MODEL", "gemini/text-embedding-004")
+# gemini-embedding-001 (Google/Gemini, substituiu o descontinuado text-embedding-004) = 3072 dims
+VECTOR_SIZE = int(os.getenv("VECTOR_SIZE", "3072"))
+EMBEDDING_MODEL = os.getenv("EMBEDDING_MODEL", "gemini/gemini-embedding-001")
 
 def get_qdrant_client() -> QdrantClient:
     """Cria e retorna um cliente Qdrant (lazy, evita falha no import-time)."""
@@ -112,8 +112,7 @@ def ingest_catalog_directory(dir_path: str, embedding_model: str = EMBEDDING_MOD
                     f"{file_path}::{chunk_idx}"
                 ))
 
-                emb_res = litellm.embedding(model=embedding_model, input=[chunk])
-                vector = emb_res.data[0]["embedding"]
+                vector = get_embedding(chunk, embedding_model)
 
                 points.append(
                     qmodels.PointStruct(

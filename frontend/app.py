@@ -77,13 +77,15 @@ with st.sidebar:
     selected_model = st.selectbox(
         "Provedor / Modelo:",
         [
-            "gemini/gemini-2.0-flash",
-            "gemini/gemini-2.5-flash",
-            "gemini/gemini-2.5-pro",
+            "ollama/qwen2.5:3b",
+            "ollama/qwen2.5:7b",
+            "gemini/gemini-flash-latest",
+            "gemini/gemini-3.6-flash",
+            "gemini/gemini-pro-latest",
             "gpt-4o",
             "gpt-4o-mini",
-            "claude-sonnet-4-5",
-            "claude-3-5-haiku-20241022",
+            "claude-sonnet-5",
+            "claude-haiku-4-5-20251001",
             "groq/llama-3.3-70b-versatile"
         ],
         index=0
@@ -137,13 +139,14 @@ if prompt := st.chat_input("Digite a demanda ou responda às perguntas do agente
 
     with st.chat_message("assistant"):
         if use_streaming:
-            _stream_sources = []
-            _stream_model = selected_model
-            _full_answer = ""
+            _stream_state = {
+                "sources": [],
+                "model": selected_model,
+                "answer": "",
+            }
 
             def _token_generator():
                 """Consome o stream NDJSON e yield apenas os tokens de texto."""
-                nonlocal _stream_sources, _stream_model, _full_answer
                 try:
                     with requests.post(
                         API_URL, json=payload, stream=True, timeout=120
@@ -158,11 +161,11 @@ if prompt := st.chat_input("Digite a demanda ou responda às perguntas do agente
                                 continue
 
                             if event["type"] == "meta":
-                                _stream_sources = event.get("sources", [])
-                                _stream_model = event.get("model_used", selected_model)
+                                _stream_state["sources"] = event.get("sources", [])
+                                _stream_state["model"] = event.get("model_used", selected_model)
                             elif event["type"] == "delta":
                                 token = event.get("content", "")
-                                _full_answer += token
+                                _stream_state["answer"] += token
                                 yield token
                             elif event["type"] == "error":
                                 yield f"\n\n❌ Erro: {event.get('message', 'desconhecido')}"
@@ -180,15 +183,15 @@ if prompt := st.chat_input("Digite a demanda ou responda às perguntas do agente
 
             st.write_stream(_token_generator())
 
-            if _stream_sources:
-                st.caption(f"📚 **Boletins Técnicos (TDS) Consultados:** {', '.join(_stream_sources)}")
-            st.caption(f"🤖 Modelo: `{_stream_model}`")
+            if _stream_state["sources"]:
+                st.caption(f"📚 **Boletins Técnicos (TDS) Consultados:** {', '.join(_stream_state['sources'])}")
+            st.caption(f"🤖 Modelo: `{_stream_state['model']}`")
 
             st.session_state.messages.append({
                 "role": "assistant",
-                "content": _full_answer,
-                "sources": _stream_sources,
-                "model_used": _stream_model
+                "content": _stream_state["answer"],
+                "sources": _stream_state["sources"],
+                "model_used": _stream_state["model"]
             })
 
         else:

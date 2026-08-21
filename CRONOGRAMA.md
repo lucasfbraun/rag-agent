@@ -23,37 +23,48 @@ Legenda de status: ⬜ Não iniciado · 🟨 Em andamento · ✅ Concluído · �
 - [x] Streaming de resposta: endpoint `POST /api/match/stream` (SSE/NDJSON) + `st.write_stream()` no frontend
 - [x] Toggle de streaming na sidebar (ativar/desativar por sessão)
 - [x] Scripts de dev local sem Docker (`backend/run_local.py`, `frontend/run_local.py`)
-- [x] Preencher `.env` local com chaves reais de API (Gemini/OpenAI/Anthropic) — *pendente, mas não bloqueia o ambiente*
+- [x] Migração do modelo de embedding para Gemini (`text-embedding-004`, 768 dims) via `EMBEDDING_MODEL`/`VECTOR_SIZE` — alinhado com a chave de API já disponível
+- [x] Preencher `.env` local com `GEMINI_API_KEY` real — **concluído** (OpenAI/Anthropic/Grok seguem em branco, não bloqueia)
 - [x] Validar `docker-compose up -d --build` rodando localmente — **concluído ✅ (3/3 containers Healthy)**
 - [x] Confirmar Qdrant acessível em `localhost:6333` — **concluído ✅ (`/api/health` retorna online)**
 
 **Dependências:** acesso às chaves de API dos provedores LLM escolhidos; Docker instalado no servidor.
 
+**⚠️ Risco aberto:** a `GEMINI_API_KEY` atual está num tier de quota bem restrito (`quotaValue: "20"` observado em erro 429) — modelos antigos hardcoded no código (`gemini-2.0-flash`, `text-embedding-004`) já foram descontinuados pelo Google e foram trocados por `gemini-flash-latest`/`gemini-embedding-001` (2026-08-21). Verificar se há billing habilitado antes de qualquer uso em volume.
+
 ---
 
 ## Fase 1 — Ingestão de Dados Reais
-**Status:** ⬜ Não iniciado
+**Status:** 🟨 Em andamento (primeira ingestão real feita e validada — falta o acervo completo)
 
-- [ ] Levantar acervo real de TDS, catálogos e laudos de homologação (PDF/DOCX)
-- [ ] Definir volume inicial de teste (ex: 20–50 documentos representativos)
-- [ ] Rodar `ingest_catalog_directory()` sobre os documentos reais
-- [ ] Validar qualidade da extração de texto/tabelas (especialmente tabelas técnicas em PDF)
+- [x] Levantar acervo real de TDS, catálogos e laudos de homologação — pasta de rede identificada: `\\10.1.1.205\flexivel\GRUPOS\Qualidade\Documentação de Produto` (~37 famílias de produto, ex. FLEXX® AG, BT, CAT, HR, RIM etc., PDF+DOC)
+- [x] Script `ingest_network.py` criado para apontar a ingestão à pasta de rede (`--test` = 1 família de produto / `--full` = acervo completo, ~12k arquivos)
+- [x] Definir volume inicial de teste — subconjunto `FLEXX® AG` (71 arquivos PDF/DOC) escolhido como piloto via `--test`
+- [x] Rodar `ingest_catalog_directory()` sobre os documentos reais — **feito 2026-08-21**: 52 trechos indexados de 39 arquivos (só PDFs; motor 100% local/gratuito via Ollama)
+- [x] Validar qualidade do retrieval — pergunta de teste sobre "FLEXX AG 2047" retornou o boletim correto como top resultado (score 0.86)
+- [ ] Rodar `--full` sobre o acervo completo (~12k arquivos) — ainda não feito, avaliar tempo antes de comprometer horas rodando em CPU local
 - [ ] Ajustar `chunk_size`/`overlap` conforme padrão dos documentos da empresa
+- [ ] Resolver `.doc` legado — `python-docx` só lê `.docx`; confirmado por assinatura de arquivo (OLE2) que são Word 97-2003 binário real, não corrupção. 30 dos 69 arquivos testados foram pulados por isso
+- [ ] Confirmar billing/quota da `GEMINI_API_KEY`/OpenAI antes de usar esses provedores em volume (hoje sem crédito nos dois — ver Fase 0)
 
-**Dependências:** Fase 0 concluída; acesso aos documentos técnicos da empresa (SharePoint/OneDrive ou pasta local).
+**Dependências:** Fase 0 concluída ✅; acesso aos documentos técnicos da empresa — ✅ pasta de rede acessível a partir desta máquina (`\\10.1.1.205\flexivel`, testado 2026-08-21).
+
+**⚠️ Bug crítico corrigido nesta fase:** a busca RAG (`retrieve_products_context`) estava **quebrada desde a Fase 0** — `qdrant-client` sem teto de versão instalava sempre a última (1.19.0), incompatível com o servidor Qdrant pinado (`v1.9.2`). O erro ficava mascarado por um `try/except` amplo que devolvia lista vazia, então o chat sempre respondia normalmente (via ferramenta MCP simulada ou conhecimento geral do modelo) sem nunca sinalizar que a base real nunca era consultada. Corrigido fixando `qdrant-client>=1.9.0,<1.10.0` no `requirements.txt`. Validado end-to-end em 2026-08-21.
 
 ---
 
 ## Fase 2 — Motor RAG & Agente Investigativo
-**Status:** ⬜ Não iniciado
+**Status:** 🟨 Em andamento (retrieval validado; teste de conversa pausado por lentidão da máquina)
 
 - [ ] Testar fluxo conversacional investigativo (perguntas antes da recomendação)
-- [ ] Validar qualidade do retrieval (top_k, relevância dos trechos retornados)
+- [x] Validar qualidade do retrieval — testado com múltiplas perguntas reais (ex: "FLEXX AG 2047", "FLEXX ADT 41200"), retornou os documentos corretos como top resultado em todos os casos
 - [ ] Ajustar `AGENT_SYSTEM_PROMPT` com terminologia e critérios reais da empresa
 - [ ] Testar comportamento "opinativo" em casos de requisitos incompatíveis
 - [ ] Avaliar necessidade de reranking ou filtros por metadados (família química, norma)
 
 **Dependências:** Fase 1 concluída (dados reais indexados).
+
+**🚫 Bloqueio atual:** teste de conversa (qualidade da resposta gerada, não do retrieval) pausado — máquina de dev está anormalmente lenta pra inferência local (ver PROGRESS.md Sessão 9: resposta trivial sem contexto levou 278s com modelo de 3B). Retoma quando a máquina normalizar ou quando Gemini/OpenAI tiverem crédito de novo.
 
 ---
 
