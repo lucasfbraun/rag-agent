@@ -18,7 +18,7 @@ Acompanhamento do desenvolvimento:
 
 - **Backend:** FastAPI
 - **RAG / Vector DB:** Qdrant
-- **Multi-LLM:** LiteLLM (Gemini, OpenAI, Anthropic, Grok)
+- **Multi-LLM:** LiteLLM (Gemini, OpenAI, Anthropic, Grok, ou Ollama local/gratuito — ver `.env.example`)
 - **Frontend:** Streamlit
 - **Ferramentas vivas:** MCP (catálogo ERP e normas/homologações — atualmente simuladas, ver Fase 4 do cronograma)
 
