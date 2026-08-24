@@ -5,6 +5,36 @@ Ver visão geral de fases em [CRONOGRAMA.md](CRONOGRAMA.md).
 
 ---
 
+## 2026-08-22 — Sessão 14: Fase 2 — `AGENT_SYSTEM_PROMPT` ajustado com terminologia real (escopo limitado)
+
+**Processo seguido:** commit da Sessão 13 feito primeiro (`d7b4565`). Próximo item pendente da Fase 2 em ordem: "Ajustar `AGENT_SYSTEM_PROMPT` com terminologia e critérios reais da empresa".
+
+**Decisão de escopo (antes de implementar):** o item pede duas coisas de natureza diferente — "terminologia" (vocabulário, nomenclatura — tenho evidência real dos documentos indexados) e "critérios" (como o time comercial de fato prioriza/qualifica uma demanda — exige input do time comercial/P&D, que não está disponível; a própria Fase 3 já lista isso como dependência externa). Implementei só a parte de terminologia, documentando a parte de critérios como pendente — evita inventar "critérios de negócio" sem base real.
+
+**Implementado em `backend/app/rag/engine.py` (`AGENT_SYSTEM_PROMPT`):**
+- Menção à marca real "FLEXX®" (antes só "PU" genérico)
+- Nova seção "COMO INTERPRETAR OS DOCUMENTOS DO ACERVO": explica os 3 tipos reais de documento (Boletim Técnico = fonte de especificação/aplicação; FISPQ = só segurança/manuseio, texto repetitivo entre produtos; Certificado/ANALISE = laudo de lote específico) e instrui o agente a priorizar Boletim para specs. Endereça diretamente o achado da Sessão 10 (FISPQ diluindo a busca) no nível do prompt, sem mexer na ingestão.
+
+**Validação:** pergunta combinando as duas categorias de documento ("Quais os EPIs recomendados e a densidade do FLEXX CAT 43?") via `ollama/qwen2.5:3b`, 98.2s:
+- **Densidade: correta** — "1,04 ± 0,01 g/cm³", batendo exatamente com o valor real do Boletim FLEXX CAT 43. Fonte citada: `Boletim FLEXX CAT 43.pdf`.
+- **EPIs: sem alucinação** — como a FISPQ não foi recuperada nessa consulta, o modelo reconheceu a lacuna ("consulte a FISPQ para informações precisas") em vez de inventar equipamentos de proteção específicos. Melhora real de comportamento vs. o teste da Sessão 13 (que tinha inventado especificações completas sem nenhuma fonte real).
+- Formato de saída ainda não segue o template padrão (JSON solto, não a estrutura com emojis/tabela) — limitação já conhecida do modelo pequeno, não é o foco desta tarefa.
+
+**Testes/validações executados:**
+- Rebuild do container `backend` — healthy, `points_count: 11273` intacto
+- Chamada real via `/api/match`, HTTP 200, resposta inspecionada manualmente contra os dados reais do Boletim
+
+**Pendências desta tarefa:**
+1. "Critérios reais da empresa" — não implementado, precisa de input do time comercial/P&D
+2. Formato de saída do template ainda inconsistente com modelo pequeno — considerar se é tarefa separada (Fase 3, validação de templates)
+3. Bug do MCP simulado (Sessão 13) segue sem correção
+
+**Próximo item do cronograma (Fase 2, em ordem):** "Testar comportamento opinativo em casos de requisitos incompatíveis"
+
+**Commit desta sessão:** pendente (a fazer após esta entrada, seguindo o padrão da Sessão 13).
+
+---
+
 ## 2026-08-22 — Sessão 13: Fase 2 — teste do fluxo conversacional investigativo (resultado: gap encontrado)
 
 **Processo seguido:** leitura obrigatória de CRONOGRAMA.md e PROGRESS.md antes de qualquer alteração; fase atual identificada como Fase 2; primeiro item pendente com dependência satisfeita escolhido ("Testar fluxo conversacional investigativo"), após confirmar que o bloqueio documentado (máquina lenta) tinha melhorado o suficiente para tentar.
