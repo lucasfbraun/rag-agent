@@ -177,6 +177,17 @@ def test_me_com_token_valido_retorna_usuario_sem_senha(session, created_user_ids
     assert "password" not in body
 
 
+def test_me_com_token_expirado_retorna_401(client):
+    """Gap da tarefa 8: só havia teste unitário de decode_access_token() para
+    token expirado — nada confirmava que get_current_user() de fato captura
+    TokenInvalidoError e devolve 401 na cadeia HTTP real (dependency injection
+    do FastAPI), não só na chamada direta da função."""
+    payload = {"sub": str(uuid.uuid4()), "exp": time.time() - 60}
+    token_expirado = jwt.encode(payload, SECRET_KEY, algorithm="HS256")
+    resp = client.get("/api/auth/me", headers={"Authorization": f"Bearer {token_expirado}"})
+    assert resp.status_code == 401
+
+
 def test_me_com_token_de_usuario_desativado_apos_login_retorna_401(session, created_user_ids, client):
     """Token continua tecnicamente válido, mas a conta foi desativada depois —
     get_current_user precisa checar o status atual no banco, não só o token."""

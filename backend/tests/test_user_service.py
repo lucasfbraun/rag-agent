@@ -120,6 +120,27 @@ def test_update_user_inexistente_levanta_erro(session):
         update_user(session, uuid.uuid4(), nome="X")
 
 
+def test_update_user_email_duplicado_levanta_erro_de_dominio(session):
+    """Gap da tarefa 8: só havia teste de duplicidade de username na criação —
+    faltava confirmar que _flush_or_raise_duplicate() também protege edição
+    contra reusar o email de outro usuário já existente."""
+    u = _unique()
+    create_user(session, username=f"dono_{u}", nome="Dono do Email", email=f"email_{u}@teste.local",
+                password="senha_segura_123", perfil=Role.VENDEDOR)
+    outro = create_user(session, username=f"outro_{u}", nome="Outro", email=f"outro_{u}@teste.local",
+                        password="senha_segura_123", perfil=Role.VENDEDOR)
+    with pytest.raises(UsuarioJaExisteError):
+        update_user(session, outro.id, email=f"email_{u}@teste.local")
+
+
+def test_set_password_com_senha_fraca_levanta_erro(session):
+    u = _unique()
+    user = create_user(session, username=f"fraca_{u}", nome="A", email=f"fraca_{u}@teste.local",
+                       password="senha_segura_123", perfil=Role.VENDEDOR)
+    with pytest.raises(SenhaFracaError):
+        set_password(session, user.id, "123")
+
+
 def test_set_password_troca_o_hash(session):
     u = _unique()
     user = create_user(session, username=f"pwd_{u}", nome="A", email=f"pwd_{u}@teste.local",

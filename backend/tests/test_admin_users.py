@@ -177,7 +177,7 @@ def test_admin_nao_pode_desativar_a_propria_conta(client, created_user_ids):
     assert resp.status_code == 400
 
 
-# --- casos de erro: 404 / 409 / 400 ---------------------------------------------
+# --- casos de erro: 404 / 409 / 400 / 422 ---------------------------------------
 
 def test_obter_usuario_inexistente_retorna_404(client, created_user_ids):
     token, _ = _token_for(Role.ADMIN_TI, created_user_ids, client)
@@ -207,6 +207,44 @@ def test_criar_usuario_com_username_duplicado_retorna_409(client, created_user_i
     payload["email"] = f"outro_{uuid.uuid4().hex[:8]}@teste.local"
     segundo = client.post("/api/auth/users", json=payload, headers=_auth_header(token))
     assert segundo.status_code == 409
+
+
+def test_editar_usuario_com_email_duplicado_retorna_409(client, created_user_ids):
+    """Gap da tarefa 8: só havia teste de duplicidade de username na criação —
+    faltava confirmar o mesmo caminho de erro (409) na rota de edição, quando
+    o email pedido já pertence a outro usuário."""
+    token, _ = _token_for(Role.ADMIN_TI, created_user_ids, client)
+    dono = client.post("/api/auth/users", json=_novo_usuario_payload(), headers=_auth_header(token)).json()
+    created_user_ids.append(uuid.UUID(dono["id"]))
+    outro = client.post("/api/auth/users", json=_novo_usuario_payload(), headers=_auth_header(token)).json()
+    created_user_ids.append(uuid.UUID(outro["id"]))
+
+    resp = client.patch(
+        f"/api/auth/users/{outro['id']}", json={"email": dono["email"]}, headers=_auth_header(token),
+    )
+    assert resp.status_code == 409
+
+
+def test_redefinir_senha_com_senha_fraca_retorna_400(client, created_user_ids):
+    token, _ = _token_for(Role.ADMIN_TI, created_user_ids, client)
+    criado = client.post("/api/auth/users", json=_novo_usuario_payload(), headers=_auth_header(token)).json()
+    created_user_ids.append(uuid.UUID(criado["id"]))
+
+    resp = client.post(
+        f"/api/auth/users/{criado['id']}/password", json={"new_password": "123"}, headers=_auth_header(token),
+    )
+    assert resp.status_code == 400
+
+
+def test_criar_usuario_com_perfil_invalido_retorna_422(client, created_user_ids):
+    """Confirma que um perfil fora dos 5 valores do enum Role é rejeitado na
+    validação do request (Pydantic), não silenciosamente aceito nem só
+    detectado depois em produção."""
+    token, _ = _token_for(Role.ADMIN_TI, created_user_ids, client)
+    payload = _novo_usuario_payload()
+    payload["perfil"] = "super_admin_inventado"
+    resp = client.post("/api/auth/users", json=payload, headers=_auth_header(token))
+    assert resp.status_code == 422
 
 
 def test_criar_usuario_com_senha_fraca_retorna_400(client, created_user_ids):

@@ -5,6 +5,31 @@ Ver visão geral de fases em [CRONOGRAMA.md](CRONOGRAMA.md).
 
 ---
 
+## 2026-08-24 — Sessão 24: Fase 5 (RBAC) — tarefa 8, testes adicionais
+
+**Abordagem:** em vez de escrever testes novos por escrever, li a suíte inteira já acumulada (81 testes das tarefas 1-7, espalhados por 6 arquivos) e procurei lacunas reais — cenários que o checklist original da fase pede (autenticado/não autenticado, permitido/negado por perfil, campo sensível visível/oculto, edição não autorizada, usuário inativo, perfil inválido, persistência em Postgres) mas que ainda não tinham teste em nenhuma camada.
+
+**Lacunas reais encontradas e fechadas (6 testes novos, zero código de produção alterado):**
+- `test_auth.py`: `test_me_com_token_expirado_retorna_401` — só existia teste unitário de `decode_access_token()` para token expirado; nada confirmava que `get_current_user()` de fato captura `TokenInvalidoError` e devolve 401 na cadeia real de dependency injection do FastAPI.
+- `test_user_service.py`: `test_update_user_email_duplicado_levanta_erro_de_dominio` — duplicidade de email só era testada no caminho de criação, não no de edição (`_flush_or_raise_duplicate()` usado por `update_user()` nunca tinha sido exercitado nesse cenário). `test_set_password_com_senha_fraca_levanta_erro` — senha fraca só era testada no caminho de criação, não no de redefinição.
+- `test_admin_users.py`: `test_editar_usuario_com_email_duplicado_retorna_409` e `test_redefinir_senha_com_senha_fraca_retorna_400` — os mesmos dois gaps acima, na camada HTTP. `test_criar_usuario_com_perfil_invalido_retorna_422` — confirma que um perfil fora dos 5 valores do enum `Role` é rejeitado na validação do request, não silenciosamente aceito.
+
+**O que NÃO foi adicionado, por já estar coberto (evitando padding redundante):** cobertura de autorização por perfil (5 perfis × permissões) já é exaustiva desde a tarefa 4 (`test_permissions.py`, testa `has_permission()` puro para todos os 5 perfis) e a tarefa 5/7 (`test_endpoint_protection.py`/`test_admin_users.py`, testa a fiação HTTP com casos representativos); campos sensíveis já tinham 11 testes da tarefa 6 cobrindo os 3 perfis que exercitam os 3 casos distintos (nenhum/tudo/parcial) — testar Químico-PD e Admin TI também seria repetir o mesmo caminho de código com dado diferente, não um cenário novo.
+
+**Testes:** 87/87 no total (81 anteriores + 6 novos).
+
+**Code review (skill `code-review`, 2 eixos, rodado sobre o diff staged vs. `HEAD` — só testes, sem código de produção):**
+- **Standards:** 1 achado real e menor, corrigido — o comentário de seção `# --- casos de erro: 404 / 409 / 400 ---` em `test_admin_users.py` ficou desatualizado ao ganhar um teste de 422 dentro daquele bloco; atualizado pra `404 / 409 / 400 / 422`. Duplicação de 2 linhas (construção de token expirado, repetida do teste unitário já existente) foi apontada como julgamento, considerada abaixo do limiar que justificaria extrair um helper — não corrigida.
+- **Spec:** confirmou os 3 primeiros grupos de teste como lacunas reais e legítimas; classificou o teste de perfil inválido (422) como o mais fraco dos 4 — tecnicamente redundante com uma garantia do próprio framework (Pydantic rejeita enum inválido independente de qualquer lógica da aplicação), mas "barato e inofensivo", mantido porque bate diretamente com o item "perfil inválido" do checklist original da fase. Verificou lacunas adicionais possíveis (Químico-PD/Admin TI na ponte de campos sensíveis, todas as 6 rotas de admin com 403) e concluiu que seriam redundantes com cobertura já existente — nada mais precisava ser fechado. Veredito final: "about right" (nem de menos, nem de mais).
+
+**Decisão técnica importante:** esta tarefa foi tratada como "auditoria de lacunas reais", não "escrever N testes". A disciplina de não adicionar teste redundante (mesmo quando "mais teste" parece sempre seguro) seguiu o mesmo princípio já aplicado ao código de produção nesta fase inteira — não adicionar complexidade/abstração além do que o risco real exige.
+
+**Pendência que continua real:** as mesmas de sessões anteriores — rate limiting do login, 2 pendências funcionais em `docs/spec_rbac.md`, lacuna de campos sensíveis no RAG não estruturado. Nenhuma delas é testável sem primeiro resolver a decisão/implementação de negócio correspondente — por isso continuam fora do escopo de "testes adicionais".
+
+**Próximo item do cronograma:** tarefa 9 — Documentação final da fase (última tarefa numerada da Fase 5).
+
+---
+
 ## 2026-08-24 — Sessão 23: Fase 5 (RBAC) — tarefa 7, administração/provisionamento de usuários
 
 **Contexto:** até esta tarefa, a única forma de provisionar um usuário era um script/CLI batendo direto no banco (foi assim que o admin real, `lucas.braun`, foi criado — Sessão 16-19). `user_service.py` já tinha toda a lógica de negócio pronta desde a tarefa 2 (create/list/get/update/set_password/deactivate); faltava só expor via HTTP.
