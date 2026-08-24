@@ -1,4 +1,4 @@
-from fastapi import FastAPI, HTTPException, BackgroundTasks
+from fastapi import Depends, FastAPI, HTTPException, BackgroundTasks
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 from typing import List, Optional
@@ -6,6 +6,7 @@ from app.rag.engine import run_pu_matcher_agent, stream_pu_matcher_agent
 from app.templates import TEMPLATES_DISPONIVEIS
 from app.config import QDRANT_HOST, QDRANT_PORT, COLLECTION_NAME, EMBEDDING_MODEL, DEFAULT_CHAT_MODEL
 from app.auth.router import router as auth_router
+from app.auth.permissions import Permission, require_permission
 import logging
 import os
 
@@ -35,6 +36,10 @@ class IngestRequest(BaseModel):
 # ---------------------------------------------------------------------------
 # Endpoints
 # ---------------------------------------------------------------------------
+# "/" e "/api/health" ficam deliberadamente públicos (sem require_permission) —
+# são liveness/monitoramento (Docker healthcheck usa "/"), não expõem dado de
+# negócio, e ferramentas de infra não têm login. Todo o resto abaixo exige
+# autenticação + a permissão certa, via docs/spec_rbac.md.
 
 @app.get("/")
 def health_simple():
@@ -84,13 +89,13 @@ def health_detailed():
     }
 
 
-@app.get("/api/templates")
+@app.get("/api/templates", dependencies=[Depends(require_permission(Permission.SELECT_TEMPLATE))])
 def list_templates():
     """Lista todos os templates cadastrados no sistema."""
     return TEMPLATES_DISPONIVEIS
 
 
-@app.post("/api/match")
+@app.post("/api/match", dependencies=[Depends(require_permission(Permission.VIEW_CATALOG))])
 def match_product(req: MatchRequest):
     """Executa o agente investigativo para match de produto."""
     try:
@@ -106,7 +111,7 @@ def match_product(req: MatchRequest):
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@app.post("/api/match/stream")
+@app.post("/api/match/stream", dependencies=[Depends(require_permission(Permission.VIEW_CATALOG))])
 def match_product_stream(req: MatchRequest):
     """
     Versão streaming do agente (Server-Sent Events).
@@ -129,7 +134,7 @@ def match_product_stream(req: MatchRequest):
     )
 
 
-@app.post("/api/ingest")
+@app.post("/api/ingest", dependencies=[Depends(require_permission(Permission.MANAGE_INGESTION))])
 def trigger_ingest(req: IngestRequest, background_tasks: BackgroundTasks):
     """
     Dispara a ingestão do diretório de documentos em background.

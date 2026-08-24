@@ -5,6 +5,38 @@ Ver visão geral de fases em [CRONOGRAMA.md](CRONOGRAMA.md).
 
 ---
 
+## 2026-08-24 — Sessão 20: Fase 5 (RBAC) — tarefa 5, proteção dos endpoints existentes
+
+**Tarefa implementada:** `require_permission()` (pronto desde a tarefa 4) finalmente aplicado nos endpoints de negócio reais.
+
+- `backend/app/main.py`: `dependencies=[Depends(require_permission(Permission.X))]` em `/api/match` e `/api/match/stream` (`Permission.VIEW_CATALOG`), `/api/templates` (`Permission.SELECT_TEMPLATE`). `/` e `/api/health` deliberadamente deixados públicos — comentário explícito no código explicando por quê (liveness/monitoramento, sem dado de negócio, Docker healthcheck usa `/`).
+- **Lacuna real encontrada:** `/api/ingest` não tinha nenhuma permissão da matriz original que cobrisse ele — `docs/spec_rbac.md` nunca falou de ingestão. Adicionada `Permission.MANAGE_INGESTION` (nova, documentada no código como extensão além da spec original), concedida só a Admin TI — mesmo padrão conservador já usado nas pendências da tarefa 4.
+- `backend/tests/test_endpoint_protection.py` (novo): 11 testes — sem token em cada endpoint de negócio (401), endpoints públicos continuam públicos (sem regressão), perfil com a permissão passa e chega até a lógica de negócio (mockada), perfil sem a permissão é barrado com 403 **antes** de qualquer efeito colateral (confirmado: `ingest_catalog_directory` mockado nunca é chamado quando barrado).
+
+**Testes:** 56/56 no total. Validado também ao vivo contra o servidor real: `/api/match` sem token → 401; com token do Admin real (`lucas.braun`) → 200.
+
+**Code review (skill `code-review`, 2 eixos):**
+- **Standards:** achou 3 pontos. (1) Falso positivo — apontou que o teste de sucesso do `/api/ingest` bateria num diretório inexistente e falharia; **verifiquei ao vivo dentro do container real e o diretório existe** (o sub-agent tinha testado no host, não no container onde os testes rodam) — não corrigido, não era bug. (2) Real — o docstring de `permissions.py` afirmava categoricamente que nenhuma permissão foi "inventada sem evidência", o que ficou falso depois de `MANAGE_INGESTION`; **corrigido**, docstring atualizado pra reconhecer a exceção documentada. (3) Real — faltava teste do caminho de sucesso pra `/api/match/stream` (só tinha o 401); **corrigido**, novo teste adicionado.
+- **Spec:** confirmou as permissões escolhidas batendo com a matriz, `MANAGE_INGESTION` bem documentada e conservadora, zero scope creep em `engine.py`/`rag/`. **Achado mais importante da tarefa:** confirmou que o frontend Streamlit nunca envia header de autenticação — a partir desta tarefa, **toda pergunta pela tela vai falhar com 401**. Não estava sendo tratado em nenhum lugar até esse achado — agora registrado explicitamente no `CRONOGRAMA.md` como pendência urgente nova.
+- **Bug real que eu mesmo introduzi e corrigi durante a sessão:** ao adicionar o teste do `/api/match/stream`, um `Edit` impreciso duplicou/bagunçou o final de outro teste (deixou duas linhas soltas de asserção pertencentes ao teste anterior, causando `KeyError: 'answer'`). Achado ao rodar a suíte (não pelo code review — já tinha commitado a suspeita antes de rodar de novo), corrigido, suíte revalidada.
+
+**Validações executadas:** `py_compile` em todos os arquivos; suíte completa rodada 2x (antes e depois da correção do bug de edição); `SELECT username, perfil FROM users` confirmando só o admin real, sem lixo de teste; `/api/health` confirmando 11.273 pontos intactos; teste ao vivo via `curl` confirmando 401 sem token e 200 com token real.
+
+**Decisões técnicas importantes:**
+1. `/` e `/api/health` permanecem públicos por decisão explícita, não por esquecimento — documentado em comentário no código
+2. `MANAGE_INGESTION` é a segunda vez nesta fase que uma permissão precisou ser criada além da matriz original (documentada, não escondida) — sinal de que a matriz da proposta original nunca cobriu operações "administrativas de plataforma" (ingestão, e futuramente coisas como configuração do sistema), só recursos de negócio
+3. Lógica de negócio mockada nos testes desta tarefa — o objetivo era testar a autorização, não o RAG/ingestão de novo (já cobertos em outras sessões)
+
+**Pendências (fora do escopo desta tarefa):** campos sensíveis (tarefa 6), administração/provisionamento (tarefa 7), testes adicionais (tarefa 8), documentação final (tarefa 9).
+
+**🚨 Pendência nova, urgente, fora do plano de 9 tarefas:** o frontend Streamlit precisa de tela de login (username/senha → guardar token → mandar `Authorization: Bearer` em toda chamada) antes de o sistema voltar a ser usável por qualquer vendedor real. Hoje, literalmente ninguém consegue usar o chat pela interface.
+
+**Riscos:** nenhum novo além do já registrado (rate limiting do login, campos sensíveis em RAG não estruturado). O risco antigo "nenhum endpoint exige autenticação" está **resolvido** — agora é o oposto: autenticação funciona bem demais e quebrou o único jeito que existia de usar o sistema.
+
+**Próximo item do cronograma:** tarefa 6 — Restrição de campos sensíveis (já tem pendência técnica conhecida, ver Sessão 16). Mas pode fazer sentido priorizar a tela de login do frontend antes, já que sem ela o sistema é inutilizável na prática — decisão de prioridade pro usuário.
+
+---
+
 ## 2026-08-24 — Sessão 19: Fase 5 (RBAC) — tarefa 4, camada centralizada de autorização
 
 **Tarefa implementada:** `Permission`/`ROLE_PERMISSIONS`/`require_permission`, seguindo o mesmo processo das tarefas 1-3.

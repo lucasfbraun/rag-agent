@@ -1,7 +1,9 @@
 """
-Camada centralizada de autorização (Fase 5, tarefa 4). Fonte da matriz:
-docs/spec_rbac.md, seção "Matriz de acesso" — nenhuma permissão aqui foi
-inventada sem evidência nesse documento.
+Camada centralizada de autorização (Fase 5, tarefas 4-5). Fonte principal da
+matriz: docs/spec_rbac.md, seção "Matriz de acesso". Toda permissão daquela
+seção veio de lá sem invenção; exceção documentada: MANAGE_INGESTION (tarefa 5)
+não está na matriz original — protege POST /api/ingest, que a spec não cobria
+mas não podia ficar sem nenhuma permissão associada (ver comentário no enum).
 
 Interface: Permission (o que existe pra autorizar), ROLE_PERMISSIONS (quem
 tem o quê — único lugar que muda se a matriz mudar), has_permission() e
@@ -25,6 +27,11 @@ class Permission(str, enum.Enum):
     DELETE_TEMPLATE = "delete_template"
     VIEW_COSTS = "view_costs"
     MANAGE_USERS = "manage_users"
+    # Não vem da matriz da proposta (docs/spec_rbac.md não cobre a ingestão) — adicionada
+    # na tarefa 5 porque POST /api/ingest dispara reindexação de horas do acervo inteiro
+    # e não podia ficar sem nenhuma permissão associada. Só Admin TI, por ser a leitura
+    # mais conservadora (mesmo padrão já usado nas pendências da matriz original).
+    MANAGE_INGESTION = "manage_ingestion"
 
 
 # Matriz de acesso — docs/spec_rbac.md, "Matriz de acesso (formato CRUD pedido)".
