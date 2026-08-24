@@ -4,6 +4,7 @@ from pydantic import BaseModel
 from typing import List, Optional
 from app.rag.engine import run_pu_matcher_agent, stream_pu_matcher_agent
 from app.templates import TEMPLATES_DISPONIVEIS
+from app.config import QDRANT_HOST, QDRANT_PORT, COLLECTION_NAME, EMBEDDING_MODEL, DEFAULT_CHAT_MODEL
 import logging
 import os
 
@@ -22,12 +23,12 @@ app = FastAPI(
 class MatchRequest(BaseModel):
     query: str
     template_id: str = "proposta_tecnica_completa"
-    model_name: str = "gemini/gemini-flash-latest"
+    model_name: str = DEFAULT_CHAT_MODEL
     history: Optional[List[dict]] = []
 
 class IngestRequest(BaseModel):
     dir_path: str = "/app/data/raw_documents"
-    embedding_model: str = "gemini/gemini-embedding-001"
+    embedding_model: str = EMBEDDING_MODEL
 
 # ---------------------------------------------------------------------------
 # Endpoints
@@ -49,11 +50,8 @@ def health_detailed():
 
     try:
         from qdrant_client import QdrantClient
-        from app.rag.ingestion import COLLECTION_NAME
 
-        qdrant_host = os.getenv("QDRANT_HOST", "localhost")
-        qdrant_port = int(os.getenv("QDRANT_PORT", 6333))
-        client = QdrantClient(host=qdrant_host, port=qdrant_port, timeout=5)
+        client = QdrantClient(host=QDRANT_HOST, port=QDRANT_PORT, timeout=5)
 
         collections = client.get_collections().collections
         qdrant_status = "online"

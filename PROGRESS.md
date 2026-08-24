@@ -5,6 +5,52 @@ Ver visão geral de fases em [CRONOGRAMA.md](CRONOGRAMA.md).
 
 ---
 
+## 2026-08-22 — Sessão 13: Fase 2 — teste do fluxo conversacional investigativo (resultado: gap encontrado)
+
+**Processo seguido:** leitura obrigatória de CRONOGRAMA.md e PROGRESS.md antes de qualquer alteração; fase atual identificada como Fase 2; primeiro item pendente com dependência satisfeita escolhido ("Testar fluxo conversacional investigativo"), após confirmar que o bloqueio documentado (máquina lenta) tinha melhorado o suficiente para tentar.
+
+**Checagem de dependência (não presumida, testada):**
+- Prompt trivial sem contexto: **18.9s** (era 278s na Sessão 9 — melhora grande, causa nunca identificada, aparentemente transitória)
+- Pergunta real com RAG + tools: **>150s** no primeiro teste — acima do timeout de 120s do frontend
+
+**Implementado (mínimo necessário para viabilizar o teste):** `frontend/app.py` — timeout de `requests.post` ampliado de 120s→240s (stream) e 90s→240s (síncrono). Rebuild do container frontend.
+
+**Teste executado:** pergunta vaga de propósito — "Quero um produto para assento de ônibus" (o exemplo literal citado no `AGENT_SYSTEM_PROMPT` como caso que DEVE gerar 2-4 perguntas de qualificação antes de recomendar). Modelo: `ollama/qwen2.5:3b`. Tempo: 103.8s (dentro do novo timeout).
+
+**Resultado: negativo.** O agente não fez nenhuma pergunta de qualificação — foi direto para uma recomendação final completa, com tabela de especificações inventadas (densidade 50 kg/m³, dureza 85 Shore A) que não correspondem a nenhuma fonte real recuperada. As `sources` retornadas (FISPQ de produtos não relacionados: VSB, F 210, CL 2097) não têm relação com assentos automotivos. O produto "recomendado" (`PU-SEAT-5000 FR`) veio da ferramenta MCP **simulada**, não da base real indexada.
+
+**Achado adicional (bug, não corrigido — fora do escopo desta tarefa):** o agente usa dados da ferramenta MCP simulada como se fossem reais, sem sinalizar ao usuário que aquilo não veio do catálogo/RAG real. Risco de o vendedor tratar um produto fictício como real.
+
+**Interpretação:** não está claro se é falha da arquitetura do agente (prompt/fluxo) ou limitação do modelo pequeno (3B) em seguir instruções complexas do system prompt — não testado ainda com modelo maior/de nuvem para isolar a causa.
+
+**Fase 2 no cronograma:** item marcado como `[x]` (a atividade de TESTAR foi completada e validada) mas com o resultado negativo documentado explicitamente — não é um "passou".
+
+**Testes/validações executados:**
+- Rebuild do container `frontend` — healthy
+- Chamada real via `/api/match` com timeout de 220s — completou em 103.8s, HTTP 200
+- Resposta inspecionada manualmente contra a especificação do `AGENT_SYSTEM_PROMPT`
+
+**Próximo item do cronograma (Fase 2, em ordem):** "Ajustar `AGENT_SYSTEM_PROMPT` com terminologia e critérios reais da empresa" — mas dado o achado desta sessão, pode fazer mais sentido primeiro investigar por que o comportamento investigativo não está sendo seguido (testar com modelo maior, revisar se as instruções estão claras o suficiente) antes de ajustar terminologia. Não decidido — fica para o usuário priorizar na próxima sessão.
+
+**Bloqueios/riscos para intervenção humana:**
+1. Comportamento investigativo do agente não funciona como especificado — precisa de decisão: investigar com modelo mais forte, ou reescrever o prompt, ou aceitar como limitação conhecida por enquanto?
+2. Bug do MCP simulado sendo tratado como dado real — risco de negócio (vendedor pode repassar produto fictício ao cliente) — vale corrigir antes de qualquer teste com usuário piloto real (Fase 7)
+3. Máquina segue instável em performance (melhora não explicada, pode regredir)
+
+---
+
+## 2026-08-22 — Sessão 12: Deepening — `config.py` como fonte única da verdade (fora do cronograma, a pedido do usuário)
+
+**Contexto:** não é um item do cronograma — usuário pediu uma análise de arquitetura (skill `codebase-design`) antes de seguir com desenvolvimento. A análise achou duplicação real de configuração espalhada por `main.py`, `engine.py`, `ingestion.py` e `cli.py` (`QDRANT_HOST`/`PORT`, `COLLECTION_NAME`, `EMBEDDING_MODEL`, `VECTOR_SIZE`, modelo de chat padrão — esse último hardcoded em 3 lugares diferentes), que já causou bugs reais de divergência nesta sessão (ex: `cli.py --model` ainda apontava pro OpenAI antigo, dessincronizado do resto).
+
+**Implementado:** `backend/app/config.py` (novo) como única fonte da verdade para essas constantes. `main.py`, `engine.py`, `ingestion.py`, `cli.py` atualizados para importar de lá em vez de redefinir. `/api/health` (main.py) e `cmd_health` (cli.py) também deduplicados — ambos reimplementavam a mesma checagem de conectividade com o Qdrant.
+
+**Validado:** rebuild do container backend, `/api/health` retornando `points_count: 11273` corretamente (dado da Fase 1 intacto), `python -m app.cli health` funcionando dentro do container. Nenhuma regressão.
+
+**Arquivos alterados:** `backend/app/config.py` (novo), `backend/app/main.py`, `backend/app/rag/engine.py`, `backend/app/rag/ingestion.py`, `backend/app/cli.py`.
+
+---
+
 ## 2026-08-22 — Sessão 11: `--full` concluído — Fase 1 fechada
 
 **Resultado final da ingestão completa** (`ingest_network.py --full`, rodando desde a Sessão 10):

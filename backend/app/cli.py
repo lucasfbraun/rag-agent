@@ -4,7 +4,7 @@ CLI de ingestão do PU Matcher.
 Uso:
     python -m app.cli ingest
     python -m app.cli ingest --dir /app/data/raw_documents
-    python -m app.cli ingest --dir /app/data/raw_documents --model text-embedding-3-small
+    python -m app.cli ingest --dir /app/data/raw_documents --model ollama/nomic-embed-text
 
     python -m app.cli health
 """
@@ -27,18 +27,14 @@ def cmd_ingest(args):
 
 def cmd_health(args):
     """Verifica conectividade com o Qdrant e status da coleção."""
-    import os
     from qdrant_client import QdrantClient
-    from app.rag.ingestion import COLLECTION_NAME
-
-    qdrant_host = os.getenv("QDRANT_HOST", "localhost")
-    qdrant_port = int(os.getenv("QDRANT_PORT", 6333))
+    from app.config import QDRANT_HOST, QDRANT_PORT, COLLECTION_NAME
 
     try:
-        client = QdrantClient(host=qdrant_host, port=qdrant_port, timeout=5)
+        client = QdrantClient(host=QDRANT_HOST, port=QDRANT_PORT, timeout=5)
         collections = client.get_collections().collections
         col_names = [c.name for c in collections]
-        print(f"✅ Qdrant online em {qdrant_host}:{qdrant_port}")
+        print(f"✅ Qdrant online em {QDRANT_HOST}:{QDRANT_PORT}")
 
         if COLLECTION_NAME in col_names:
             col_info = client.get_collection(COLLECTION_NAME)
@@ -64,10 +60,11 @@ def main():
         default="/app/data/raw_documents",
         help="Caminho do diretório com PDFs, DOCXs e TXTs (default: /app/data/raw_documents)"
     )
+    from app.config import EMBEDDING_MODEL
     p_ingest.add_argument(
         "--model",
-        default="text-embedding-3-small",
-        help="Modelo de embedding a usar (default: text-embedding-3-small)"
+        default=EMBEDDING_MODEL,
+        help=f"Modelo de embedding a usar (default: {EMBEDDING_MODEL})"
     )
     p_ingest.set_defaults(func=cmd_ingest)
 

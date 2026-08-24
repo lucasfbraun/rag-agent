@@ -55,9 +55,9 @@ Legenda de status: ⬜ Não iniciado · 🟨 Em andamento · ✅ Concluído · �
 ---
 
 ## Fase 2 — Motor RAG & Agente Investigativo
-**Status:** 🟨 Em andamento (retrieval validado; teste de conversa pausado por lentidão da máquina)
+**Status:** 🟨 Em andamento (retrieval validado; teste de conversa executado — achou gap real de comportamento)
 
-- [ ] Testar fluxo conversacional investigativo (perguntas antes da recomendação)
+- [x] Testar fluxo conversacional investigativo (perguntas antes da recomendação) — **testado 2026-08-22, resultado negativo**: pergunta vaga de propósito ("Quero um produto para assento de ônibus", o próprio exemplo citado no `AGENT_SYSTEM_PROMPT`) não gerou perguntas de qualificação — o agente foi direto para uma recomendação final, inventando especificações (densidade, dureza) que não batem com nenhuma fonte real recuperada, e citou o produto simulado do MCP (`PU-SEAT-5000 FR`) em vez de reconhecer que faltam dados. Testado com `ollama/qwen2.5:3b`; não avaliado ainda com modelo maior/de nuvem — possível causa seja o modelo pequeno não seguir instruções complexas do system prompt, não a arquitetura do agente.
 - [x] Validar qualidade do retrieval — bom para perguntas próximas do código do produto (ex: "FLEXX AG 2047", "FLEXX ADT 41200", top resultado correto); fraco para perguntas ambíguas/naturais de venda (ver item de reranking abaixo)
 - [ ] Ajustar `AGENT_SYSTEM_PROMPT` com terminologia e critérios reais da empresa
 - [ ] Testar comportamento "opinativo" em casos de requisitos incompatíveis
@@ -65,7 +65,9 @@ Legenda de status: ⬜ Não iniciado · 🟨 Em andamento · ✅ Concluído · �
 
 **Dependências:** Fase 1 concluída (dados reais indexados).
 
-**🚫 Bloqueio atual:** teste de conversa (qualidade da resposta gerada, não do retrieval) pausado — máquina de dev está anormalmente lenta pra inferência local (ver PROGRESS.md Sessão 9: resposta trivial sem contexto levou 278s com modelo de 3B). Retoma quando a máquina normalizar ou quando Gemini/OpenAI tiverem crédito de novo.
+**⚠️ Novo bug encontrado:** o agente recomenda produtos usando dados da ferramenta MCP **simulada** (`PU-SEAT-5000 FR`, fake) mesmo quando a base real (RAG) não tem nada relevante, sem deixar claro pro usuário que a recomendação não veio do catálogo real. Risco de o vendedor achar que é um produto real da empresa. Não corrigido ainda — fora do escopo desta tarefa (era testar o fluxo, não corrigi-lo).
+
+**Bloqueio de máquina lenta (Sessão 9) — parcialmente resolvido:** prompt trivial sem contexto caiu de 278s para 18.9s nesta sessão (causa da lentidão nunca identificada, aparentemente transitória). Porém pergunta real com RAG+tools ainda levou 103.8s — por isso o timeout do frontend (`frontend/app.py`) foi ampliado de 120s/90s para **240s** em ambas as rotas (stream e síncrona) nesta sessão, pra viabilizar o teste.
 
 ---
 

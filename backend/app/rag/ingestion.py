@@ -7,13 +7,7 @@ import docx
 from qdrant_client import QdrantClient
 from qdrant_client.http import models as qmodels
 from app.rag.embeddings import get_embedding
-
-QDRANT_HOST = os.getenv("QDRANT_HOST", "localhost")
-QDRANT_PORT = int(os.getenv("QDRANT_PORT", 6333))
-COLLECTION_NAME = "pu_products_catalog"
-# gemini-embedding-001 (Google/Gemini, substituiu o descontinuado text-embedding-004) = 3072 dims
-VECTOR_SIZE = int(os.getenv("VECTOR_SIZE", "3072"))
-EMBEDDING_MODEL = os.getenv("EMBEDDING_MODEL", "gemini/gemini-embedding-001")
+from app.config import QDRANT_HOST, QDRANT_PORT, COLLECTION_NAME, EMBEDDING_MODEL, VECTOR_SIZE
 
 def get_qdrant_client() -> QdrantClient:
     """Cria e retorna um cliente Qdrant (lazy, evita falha no import-time)."""

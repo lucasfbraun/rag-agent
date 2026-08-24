@@ -149,7 +149,7 @@ if prompt := st.chat_input("Digite a demanda ou responda às perguntas do agente
                 """Consome o stream NDJSON e yield apenas os tokens de texto."""
                 try:
                     with requests.post(
-                        API_URL, json=payload, stream=True, timeout=120
+                        API_URL, json=payload, stream=True, timeout=240
                     ) as resp:
                         resp.raise_for_status()
                         for raw_line in resp.iter_lines():
@@ -198,7 +198,7 @@ if prompt := st.chat_input("Digite a demanda ou responda às perguntas do agente
             # Modo síncrono (fallback sem streaming)
             with st.spinner("Analisando requisitos técnicos e cruzando catálogo de produtos..."):
                 try:
-                    response = requests.post(API_URL_SYNC, json=payload, timeout=90)
+                    response = requests.post(API_URL_SYNC, json=payload, timeout=240)
                     if response.status_code == 200:
                         data = response.json()
                         st.markdown(data["answer"])

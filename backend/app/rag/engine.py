@@ -1,4 +1,3 @@
-import os
 import json
 import logging
 from typing import List, Dict, Any, Optional
@@ -6,14 +5,9 @@ import litellm
 from app.templates import obter_instrucao_template
 from app.mcp.pu_mcp_server import MCP_TOOLS_DEFINITIONS, execute_mcp_tool
 from app.rag.embeddings import get_embedding
+from app.config import QDRANT_HOST, QDRANT_PORT, COLLECTION_NAME, EMBEDDING_MODEL, DEFAULT_CHAT_MODEL
 
 logger = logging.getLogger(__name__)
-
-QDRANT_HOST = os.getenv("QDRANT_HOST", "localhost")
-QDRANT_PORT = int(os.getenv("QDRANT_PORT", 6333))
-COLLECTION_NAME = "pu_products_catalog"
-# Deve ser o mesmo modelo usado na ingestão
-EMBEDDING_MODEL = os.getenv("EMBEDDING_MODEL", "gemini/gemini-embedding-001")
 
 AGENT_SYSTEM_PROMPT = """Você é o PU Matcher, um Consultor Técnico Sênior e Especialista em Vendas Técnicas e Aplicações de Poliuretanos (PU).
 
@@ -71,7 +65,7 @@ def retrieve_products_context(query: str, top_k: int = 6) -> List[Dict[str, Any]
 def run_pu_matcher_agent(
     query: str,
     template_id: str = "proposta_tecnica_completa",
-    model_name: str = "gemini/gemini-flash-latest",
+    model_name: str = DEFAULT_CHAT_MODEL,
     history: Optional[List[Dict[str, str]]] = None
 ) -> Dict[str, Any]:
     """Executa o agente investigativo com suporte a RAG, MCP e Templates Padronizados."""
@@ -143,7 +137,7 @@ MENSAGEM / DEMANDA DO VENDEDOR OU CLIENTE:
 def stream_pu_matcher_agent(
     query: str,
     template_id: str = "proposta_tecnica_completa",
-    model_name: str = "gemini/gemini-flash-latest",
+    model_name: str = DEFAULT_CHAT_MODEL,
     history: Optional[List[Dict[str, str]]] = None
 ):
     """
