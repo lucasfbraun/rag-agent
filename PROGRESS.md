@@ -5,6 +5,33 @@ Ver visão geral de fases em [CRONOGRAMA.md](CRONOGRAMA.md).
 
 ---
 
+## 2026-08-24 — Sessão 15: Validação formal da Sessão 14 (commit `65125c0`)
+
+**Contexto:** usuário pediu validação rigorosa e com evidência da última tarefa (ajuste de terminologia no `AGENT_SYSTEM_PROMPT`), não só a palavra de que "está tudo certo".
+
+**Confirmado com evidência:**
+- Diff isolado a 1 arquivo de código (`backend/app/rag/engine.py`, +10/-3) + docs — sem scope creep
+- Container em execução tem o prompt atualizado carregado (verificado via `assert` dentro do container, não só no arquivo do host)
+- Reexecução ao vivo da validação funcional: densidade "1,04 ± 0,01 g/cm³" reproduzida corretamente (33.5s desta vez); resposta de EPIs variou entre as duas execuções (uma admitiu a lacuna, outra deu orientação genérica de segurança) — sem alucinar dado específico falso nas duas
+
+**Achado honesto:** este projeto **não tem nenhuma suíte de testes automatizados** (sem `pytest`, sem `test_*.py`, sem config de lint/typecheck). Validação desta tarefa foi funcional (chamada real à API), não por testes unitários — registrado como débito técnico do projeto, não desta tarefa especificamente.
+
+**Code review (skill `code-review`, 2 eixos em paralelo, ponto fixo `d7b4565`):**
+- **Standards** (sem `CODING_STANDARDS.md` no repo, usada baseline de smells do Fowler): 2 achados, ambos julgamento — duplicação de narrativa entre CRONOGRAMA.md/PROGRESS.md (convenção intencional do projeto, não é bug) e "Primitive Obsession" (taxonomia de tipo de documento como prosa no prompt em vez de dado estruturado — já é item futuro documentado, fora do escopo)
+- **Spec** (CRONOGRAMA.md linha 62 como fonte): sem scope creep confirmado; lacuna de "critérios" já divulgada; 1 achado acionável — a categoria "Certificado"/"ANALISE" citada no prompt nunca tinha sido verificada com amostra real (diferente de Boletim/FISPQ, auditados nas Sessões 7/10)
+- **Correção aplicada:** amostrei um `Certificado FLEXX® RGT 2437 49623.pdf` e um `FLEXX PI 2102 ANALISE.docx` reais no Qdrant — confirmam exatamente a caracterização do prompt ("laudo de lote específico", com número de lote, validade, situação aprovado/reprovado). Texto do prompt mantido como está, só a lacuna de evidência foi fechada.
+
+**Testes/validações executados:** `py_compile` no arquivo alterado (sintaxe válida); busca confirmando ausência de suíte de testes e de config de lint/typecheck; chamada real `/api/match` reexecutada ao vivo; amostragem de 2 documentos reais no Qdrant pra fechar o achado do code review.
+
+**Nenhuma alteração de código nesta sessão** — foi puramente validação/auditoria da Sessão 14.
+
+**Riscos/débitos técnicos confirmados (não novos, mas reafirmados com evidência):**
+1. Ausência total de suíte de testes automatizados no projeto
+2. Taxonomia de tipo de documento vive só como texto no prompt, não como metadado estruturado na ingestão
+3. Resposta do modelo pequeno tem variância entre execuções (mesma pergunta, respostas diferentes em qualidade de transparência sobre lacunas)
+
+---
+
 ## 2026-08-22 — Sessão 14: Fase 2 — `AGENT_SYSTEM_PROMPT` ajustado com terminologia real (escopo limitado)
 
 **Processo seguido:** commit da Sessão 13 feito primeiro (`d7b4565`). Próximo item pendente da Fase 2 em ordem: "Ajustar `AGENT_SYSTEM_PROMPT` com terminologia e critérios reais da empresa".
@@ -31,7 +58,7 @@ Ver visão geral de fases em [CRONOGRAMA.md](CRONOGRAMA.md).
 
 **Próximo item do cronograma (Fase 2, em ordem):** "Testar comportamento opinativo em casos de requisitos incompatíveis"
 
-**Commit desta sessão:** pendente (a fazer após esta entrada, seguindo o padrão da Sessão 13).
+**Commit desta sessão:** `65125c0`.
 
 ---
 
