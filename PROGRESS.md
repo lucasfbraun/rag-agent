@@ -5,6 +5,40 @@ Ver visão geral de fases em [CRONOGRAMA.md](CRONOGRAMA.md).
 
 ---
 
+## 2026-08-24 — Sessão 18: Fase 5 (RBAC) — tarefa 3, autenticação (login + token)
+
+**Tarefa implementada:** login manual com token de sessão (JWT), seguindo o mesmo processo das tarefas 1-2.
+
+- `backend/app/config.py`: `SECRET_KEY` (reaproveitado — já existia no `.env` sem uso desde a Fase 0) e `ACCESS_TOKEN_EXPIRE_MINUTES` (default 480min/8h). Mesmo padrão de falha alto se não definido.
+- `backend/app/auth/token.py` (novo): `create_access_token`/`decode_access_token`, JWT HS256. Algoritmo fixo no decode (`algorithms=["HS256"]`) — não confia no campo `alg` do token, proteção contra ataque de confusão de algoritmo.
+- `backend/app/auth/user_service.py`: `authenticate(session, username, password)` — credenciais erradas e usuário inexistente levantam a mesma exceção com a mesma mensagem (evita enumeração de usuário); usuário inativo levanta exceção própria, verificada *depois* da senha (não antes) para não revelar que a conta existe antes de confirmar a senha.
+- `backend/app/auth/router.py` (novo): `POST /api/auth/login` e `GET /api/auth/me` + dependency `get_current_user`. Decisão: incluir `/me`/`get_current_user` nesta tarefa (não só o login) porque autenticação sem uma forma de *verificar* o token não é autenticação completa — mas nada foi aplicado aos endpoints de negócio existentes (isso é a tarefa 5), confirmado limpo pelo code review.
+- `.env`/`.env.example`: `SECRET_KEY` real gerada (`secrets.token_urlsafe`), `ACCESS_TOKEN_EXPIRE_MINUTES`
+- `requirements.txt`: `pyjwt`, `httpx` (necessário pro `TestClient` do FastAPI nos testes)
+
+**Testes:** `backend/tests/test_auth.py`, 15 novos testes — round-trip de token, token expirado/adulterado/malformado rejeitados, `authenticate()` nos 4 cenários (certo/senha errada/não existe/inativo), e os endpoints HTTP via `TestClient` (login certo, senha errada, inativo, `/me` sem token, com token inválido, com token válido confirmando ausência de `password_hash` na resposta, e token de usuário desativado *depois* do login parando de funcionar). **36/36 no total.** Testado também ao vivo contra o servidor real rodando (não só `TestClient` em processo): criei um usuário manualmente, fiz login via `curl`, confirmei `/me` retornando dados corretos sem senha, e 401 sem token — limpo depois.
+
+**Nota técnica:** os testes deste arquivo precisam `commit()` (o `TestClient` faz requisição HTTP de verdade, usando uma sessão separada da do teste) — diferente das tarefas 1-2, que só usavam `flush()+rollback()`. Por isso a limpeza aqui é por `DELETE` explícito no teardown de uma fixture (`created_user_ids`), não por rollback.
+
+**Code review (skill `code-review`, 2 eixos, sem isolamento de worktree):**
+- **Standards:** confirmou explicitamente algoritmo JWT fixo (proteção contra confusão de algoritmo), comparação de senha timing-safe (`bcrypt.checkpw`), expiração checada no decode, `SECRET_KEY` falhando alto. 1 achado real corrigido: o endpoint de login retornava **401 pra senha errada mas 403 pra conta desativada** — isso permite um atacante descobrir que um username existe e está desativado, mesmo sem saber a senha (enumeração de usuário). Corrigido: agora sempre 401 genérico pros dois casos; a distinção entre os dois continua existindo internamente (exceções diferentes no service), só não é exposta na resposta HTTP. 1 achado documentado sem correção: **login sem rate limiting** — corrigir exigiria uma lib própria (ex: `slowapi`) ou infraestrutura de contador, escopo maior que esta tarefa; registrado como débito de segurança explícito no `CRONOGRAMA.md`.
+- **Spec:** confirmado sem scope creep (nada em `rag/`, `main.py` só ganhou 2 linhas pra montar o router, nenhuma lógica de perfil/permissão da tarefa 4); a decisão de incluir `/me` nesta tarefa foi avaliada e considerada justificada, não scope creep; todas as constraints de segurança satisfeitas com evidência checada linha a linha no diff.
+
+**Validações executadas:** `py_compile` em todos os arquivos; 36/36 testes passando (2 rodadas — antes e depois da correção de enumeração); `SELECT count(*) FROM users` = 0 depois de cada rodada; teste manual ao vivo via `curl` contra o servidor real; `/api/health` confirmando 11.273 pontos intactos (sem regressão no RAG).
+
+**Decisões técnicas importantes:**
+1. Token JWT (stateless), não sessão em tabela própria — mais simples, sem precisar de tabela de sessões nem job de limpeza de sessão expirada; trade-off: não dá pra revogar um token individual antes de expirar (aceitável pra escopo atual, web de administração de sessões ativas não foi pedida)
+2. `/me` incluído na tarefa (não só `/login`) — autenticação sem verificação não é completa; validado pelo code review como decisão correta, não scope creep
+3. 401 genérico sempre no login, mesmo pra conta desativada — prioriza não vazar enumeração de usuário sobre dar uma mensagem mais específica pro usuário legítimo desativado (que pode descobrir o motivo por outro canal, ex: contatando o Admin TI diretamente)
+
+**Pendências (fora do escopo desta tarefa):** autorização centralizada (tarefa 4), proteção dos endpoints de negócio existentes (tarefa 5), campos sensíveis (tarefa 6), administração (tarefa 7), testes adicionais (tarefa 8), documentação final (tarefa 9). Rate limiting do login fica como débito de segurança registrado, não uma tarefa numerada do plano original.
+
+**Riscos:** login funciona mas **nenhum endpoint de negócio exige autenticação ainda** — `/api/match`, `/api/ingest` etc. continuam 100% abertos. Ter login funcionando não significa que o sistema está protegido.
+
+**Próximo item do cronograma:** tarefa 4 — Camada centralizada de autorização (`Permission`, `ROLE_PERMISSIONS`, `require_permission`).
+
+---
+
 ## 2026-08-24 — Sessão 17: Fase 5 (RBAC) — tarefa 2, repository/service de usuários
 
 **Tarefa implementada:** repository/service de usuários com hash de senha, seguindo o mesmo processo da tarefa 1 (implementar → testar → revisar → validar → documentar).

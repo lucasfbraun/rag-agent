@@ -13,7 +13,7 @@ from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
-from app.auth.security import hash_password
+from app.auth.security import hash_password, verify_password
 from app.models import Role, User, UserOrigin, UserStatus
 
 
@@ -23,6 +23,14 @@ class UsuarioJaExisteError(ValueError):
 
 class UsuarioNaoEncontradoError(ValueError):
     """Nenhum usuário com o id/username informado."""
+
+
+class AutenticacaoInvalidaError(ValueError):
+    """username ou senha incorretos. Mensagem sempre genérica — não revela qual dos dois errou."""
+
+
+class UsuarioInativoError(ValueError):
+    """Credenciais corretas, mas a conta está desativada."""
 
 
 def _get_user_or_raise(session: Session, user_id) -> User:
@@ -97,4 +105,16 @@ def deactivate_user(session: Session, user_id) -> User:
     user = _get_user_or_raise(session, user_id)
     user.status = UserStatus.INATIVO
     session.flush()
+    return user
+
+
+def authenticate(session: Session, username: str, password: str) -> User:
+    """Confere username+senha. Levanta AutenticacaoInvalidaError (credencial errada
+    ou usuário inexistente — mesma mensagem pros dois casos, para não revelar quais
+    usernames existem) ou UsuarioInativoError (credenciais certas, conta desativada)."""
+    user = get_user_by_username(session, username)
+    if user is None or user.password_hash is None or not verify_password(password, user.password_hash):
+        raise AutenticacaoInvalidaError("Usuário ou senha incorretos.")
+    if user.status != UserStatus.ATIVO:
+        raise UsuarioInativoError("Esta conta está desativada. Contate o administrador.")
     return user

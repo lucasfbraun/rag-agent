@@ -5,6 +5,7 @@ from typing import List, Optional
 from app.rag.engine import run_pu_matcher_agent, stream_pu_matcher_agent
 from app.templates import TEMPLATES_DISPONIVEIS
 from app.config import QDRANT_HOST, QDRANT_PORT, COLLECTION_NAME, EMBEDDING_MODEL, DEFAULT_CHAT_MODEL
+from app.auth.router import router as auth_router
 import logging
 import os
 
@@ -15,6 +16,7 @@ app = FastAPI(
     version="2.1.0",
     description="Agente investigativo RAG para match de produtos de poliuretano"
 )
+app.include_router(auth_router)
 
 # ---------------------------------------------------------------------------
 # Schemas

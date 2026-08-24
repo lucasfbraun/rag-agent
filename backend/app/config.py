@@ -34,3 +34,13 @@ DATABASE_URL = (
     f"postgresql+psycopg2://{POSTGRES_USER}:{POSTGRES_PASSWORD}"
     f"@{POSTGRES_HOST}:{POSTGRES_PORT}/{POSTGRES_DB}"
 )
+
+# Autenticação (Fase 5, tarefa 3). Assina o token de sessão — mesmo SECRET_KEY que já
+# existia no .env sem uso; reaproveitado em vez de criar um segundo segredo.
+SECRET_KEY = os.getenv("SECRET_KEY")
+if not SECRET_KEY:
+    raise RuntimeError(
+        "SECRET_KEY não definida — configure no .env antes de iniciar a aplicação "
+        "(sem isso os tokens de sessão seriam assinados com uma chave previsível)."
+    )
+ACCESS_TOKEN_EXPIRE_MINUTES = int(os.getenv("ACCESS_TOKEN_EXPIRE_MINUTES", 480))  # 8h, um turno
