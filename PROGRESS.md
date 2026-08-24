@@ -5,6 +5,33 @@ Ver visão geral de fases em [CRONOGRAMA.md](CRONOGRAMA.md).
 
 ---
 
+## 2026-08-24 — Sessão 19: Fase 5 (RBAC) — tarefa 4, camada centralizada de autorização
+
+**Tarefa implementada:** `Permission`/`ROLE_PERMISSIONS`/`require_permission`, seguindo o mesmo processo das tarefas 1-3.
+
+- `backend/app/auth/permissions.py` (novo): enum `Permission` (8 permissões, uma por ação+recurso: `VIEW_CATALOG`, `VIEW_HOMOLOGATION_SUMMARY`/`FULL`, `SELECT_TEMPLATE`, `EDIT_TEMPLATE`, `DELETE_TEMPLATE`, `VIEW_COSTS`, `MANAGE_USERS`); `ROLE_PERMISSIONS` (dict `Role -> set[Permission]`) transcrito célula por célula da matriz em `docs/spec_rbac.md` — nenhuma permissão inventada; `has_permission()`; `require_permission()` (factory de dependency FastAPI, `Depends(require_permission(Permission.X))`).
+- **Decisão de deny-by-default:** nas 3 pendências que a spec já tinha documentado sem decisão de negócio (custos pro Técnico, excluir template pra Gestor/Químico-PD, gerenciar usuários pra Gestor), a permissão foi **negada**, não concedida — comentário explícito no código aponta a política.
+- `backend/app/auth/dependencies.py` (novo): `get_current_user` extraído de `router.py`. Motivo: `permissions.py` precisa dessa dependency, e não fazia sentido um módulo "mais core" (autorização) depender do módulo de rotas HTTP (`router.py`) — ajuste de direção de dependência, não mudança de comportamento.
+- `backend/app/auth/router.py`: atualizado só pra importar de `dependencies.py` em vez de definir `get_current_user` inline — sem mudança de comportamento, `/login` e `/me` continuam idênticos.
+
+**Testes:** `backend/tests/test_permissions.py`, 9 novos testes (45/45 no total) — todos os 5 perfis mapeados na matriz (nenhum cai no fallback silencioso), Admin TI tem todas as permissões, Vendedor não vê laudo completo/custos, Técnico vê laudo completo mas não custos (pendência negada), Gestor/Químico-PD editam template mas não excluem, só Admin TI gerencia usuários, e o comportamento do `require_permission()` como dependency (deixa passar quem tem a permissão, barra com 403 quem não tem). Não precisa de Postgres — `User` é só objeto Python nesses testes, não é persistido.
+
+**Code review (skill `code-review`, 2 eixos):** **primeira vez nesta fase que os dois eixos não encontraram nada pra corrigir.** Standards confirmou deny-by-default, ausência de bypass (grep em todo o diff não achou nenhum `if user.perfil ==` ad-hoc fora de `permissions.py`), e composição correta da dependency do FastAPI. Spec confirmou a matriz batendo célula por célula com `docs/spec_rbac.md` (incluindo as 3 pendências corretamente negadas) e zero scope creep (nenhum arquivo de `main.py`/`rag/`/endpoints de negócio no diff).
+
+**Validações executadas:** `py_compile` em todos os arquivos; 45/45 testes passando; confirmado que o usuário real `lucas.braun` (Admin TI, criado na sessão anterior) segue intacto no banco, sem lixo de teste.
+
+**Decisões técnicas importantes:**
+1. `get_current_user` movido pra módulo próprio — a primeira vez nesta fase que uma tarefa exigiu um ajuste de arquitetura (não só código novo) pra manter a direção de dependência correta
+2. Deny-by-default é a política formal agora, não só uma escolha pontual — qualquer pendência futura da matriz (e há several documentadas) deve ser tratada assim até virar decisão de negócio confirmada
+
+**Pendências (fora do escopo desta tarefa):** proteção dos endpoints existentes (tarefa 5 — `require_permission` existe mas não está `Depends()` em nenhum lugar ainda), restrição de campos sensíveis (tarefa 6), administração (tarefa 7), testes adicionais (tarefa 8), documentação final (tarefa 9).
+
+**Riscos:** a camada de autorização existe e está testada, mas **não protege nada ainda** — nenhum endpoint chama `require_permission()`. `/api/match` continua aberto pra qualquer perfil (ou nenhum).
+
+**Próximo item do cronograma:** tarefa 5 — Proteção dos endpoints existentes (`main.py`). É aqui que a autorização passa a valer na prática.
+
+---
+
 ## 2026-08-24 — Sessão 18: Fase 5 (RBAC) — tarefa 3, autenticação (login + token)
 
 **Tarefa implementada:** login manual com token de sessão (JWT), seguindo o mesmo processo das tarefas 1-2.

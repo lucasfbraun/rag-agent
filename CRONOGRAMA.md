@@ -95,7 +95,7 @@ Legenda de status: ⬜ Não iniciado · 🟨 Em andamento · ✅ Concluído · �
 ---
 
 ## Fase 5 — RBAC & Governança
-**Status:** 🟨 Em andamento (tarefas 1-3/9 do plano incremental concluídas — schema base + repository/service + autenticação)
+**Status:** 🟨 Em andamento (tarefas 1-4/9 do plano incremental concluídas — schema base + repository/service + autenticação + autorização centralizada)
 
 **Decisão de provisionamento (2026-08-24):** manual agora, desenho pronto para AD/LDAP depois. Ver `docs/spec_rbac.md` para a comparação completa das 3 estratégias e a justificativa.
 
@@ -105,7 +105,7 @@ Legenda de status: ⬜ Não iniciado · 🟨 Em andamento · ✅ Concluído · �
 1. [x] Schema base: model `User` (SQLAlchemy) + enums `Role`/`UserStatus`/`UserOrigin` + serviço `postgres` no `docker-compose.yml` + migration inicial (Alembic) — **concluído 2026-08-24**, validado com 6 testes automatizados (primeira suíte de testes do projeto) rodando contra Postgres real
 2. [x] Repository/service de usuários (CRUD, hash de senha) — **concluído 2026-08-24**: `backend/app/auth/security.py` (hash bcrypt, mín. 8 caracteres) + `backend/app/auth/user_service.py` (create/get/list/update/set_password/deactivate — "excluir" implementado como desativação, não apaga a linha, por auditoria). 15 novos testes (21/21 no total) contra Postgres real.
 3. [x] Autenticação (login manual → token de sessão) — **concluído 2026-08-24**: `backend/app/auth/token.py` (JWT HS256 assinado com `SECRET_KEY`, algoritmo fixo — não confia em `alg` do token), `authenticate()` em `user_service.py`, `POST /api/auth/login` + `GET /api/auth/me` + dependency `get_current_user` (`backend/app/auth/router.py`). Token de usuário desativado depois do login para de funcionar no próximo request (checa status no banco, não só o token). 15 novos testes (36/36 no total), incluindo teste end-to-end ao vivo contra o servidor real. **Ainda não aplicada** a nenhum endpoint de negócio existente (`/api/match` etc.) — isso é a tarefa 5.
-4. [ ] Camada centralizada de autorização (`Permission`, `ROLE_PERMISSIONS`, `require_permission`)
+4. [x] Camada centralizada de autorização (`Permission`, `ROLE_PERMISSIONS`, `require_permission`) — **concluído 2026-08-24**: `backend/app/auth/permissions.py` — matriz `ROLE_PERMISSIONS` transcrita célula por célula de `docs/spec_rbac.md` (confirmado sem desvio pelo code review), deny-by-default nas 3 pendências (custos pro Técnico, excluir template pra Gestor/Químico-PD, gerenciar usuários pra Gestor). `get_current_user` extraído de `router.py` para `dependencies.py` (ajuste de direção de dependência — `permissions.py` não deveria depender do módulo de rotas HTTP). 9 novos testes (45/45 no total). **Ainda não aplicada a nenhum endpoint** — isso é a tarefa 5.
 5. [ ] Proteção dos endpoints existentes (`main.py`)
 6. [ ] Restrição de campos sensíveis — **pendência técnica real identificada:** hoje não existe campo de custo/fórmula estruturado em lugar nenhum do código (só texto livre em RAG); proteção de backend real só é possível para dados estruturados futuros (Fase 4/ERP), não para o conteúdo RAG atual sem mudança na ingestão
 7. [ ] Administração/provisionamento (Admin TI cria/edita usuário)
