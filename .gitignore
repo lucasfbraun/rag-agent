@@ -7,5 +7,7 @@ data/raw_documents/*
 !data/raw_documents/.gitkeep
 data/qdrant_storage/*
 !data/qdrant_storage/.gitkeep
+data/postgres_storage/*
+!data/postgres_storage/.gitkeep
 .DS_Store
 .agents/

@@ -18,3 +18,19 @@ VECTOR_SIZE = int(os.getenv("VECTOR_SIZE", "3072"))
 
 # Alias sempre-atual do Gemini — resistente a descontinuações de versão pontuais
 DEFAULT_CHAT_MODEL = "gemini/gemini-flash-latest"
+
+# Banco relacional (Fase 5 — RBAC & Governança). Usuários/perfis, separado do Qdrant (vetorial).
+POSTGRES_HOST = os.getenv("POSTGRES_HOST", "localhost")
+POSTGRES_PORT = int(os.getenv("POSTGRES_PORT", 5432))
+POSTGRES_DB = os.getenv("POSTGRES_DB", "pu_matcher")
+POSTGRES_USER = os.getenv("POSTGRES_USER", "pu_matcher")
+POSTGRES_PASSWORD = os.getenv("POSTGRES_PASSWORD")
+if not POSTGRES_PASSWORD:
+    raise RuntimeError(
+        "POSTGRES_PASSWORD não definida — configure no .env antes de iniciar a aplicação "
+        "(sem isso a conexão com o banco de usuários seria feita com senha em branco)."
+    )
+DATABASE_URL = (
+    f"postgresql+psycopg2://{POSTGRES_USER}:{POSTGRES_PASSWORD}"
+    f"@{POSTGRES_HOST}:{POSTGRES_PORT}/{POSTGRES_DB}"
+)

@@ -18,7 +18,31 @@ services:
       retries: 8
       start_period: 30s
 
-  # 2. Backend FastAPI + Agente Investigativo
+  # 2. Banco Relacional — usuários/perfis (Fase 5, RBAC & Governança)
+  postgres:
+    image: postgres:16-alpine
+    container_name: pu_matcher_postgres
+    restart: always
+    env_file: .env
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-pu_matcher}
+      POSTGRES_USER: ${POSTGRES_USER:-pu_matcher}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      # Subpasta: o volume bind-mount tem .gitkeep, e o postgres recusa inicializar
+      # diretamente num diretório com arquivo oculto ("not empty").
+      PGDATA: /var/lib/postgresql/data/pgdata
+    ports:
+      - "5432:5432"
+    volumes:
+      - ./data/postgres_storage:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-pu_matcher} -d ${POSTGRES_DB:-pu_matcher}"]
+      interval: 15s
+      timeout: 10s
+      retries: 8
+      start_period: 20s
+
+  # 3. Backend FastAPI + Agente Investigativo
   backend:
     build:
       context: .
@@ -31,6 +55,8 @@ services:
     depends_on:
       qdrant:
         condition: service_healthy
+      postgres:
+        condition: service_healthy
     volumes:
       - ./data/raw_documents:/app/data/raw_documents
     healthcheck:
@@ -41,7 +67,7 @@ services:
       retries: 5
       start_period: 20s
 
-  # 3. Frontend Web Streamlit (Campo & Vendas Técnicas)
+  # 4. Frontend Web Streamlit (Campo & Vendas Técnicas)
   frontend:
     build:
       context: .

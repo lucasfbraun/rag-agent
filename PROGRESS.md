@@ -5,6 +5,51 @@ Ver visão geral de fases em [CRONOGRAMA.md](CRONOGRAMA.md).
 
 ---
 
+## 2026-08-24 — Sessão 16: Fase 5 (RBAC) iniciada — Etapa 1 análise + Etapa 2 decisão de provisionamento + tarefa 1 (schema base)
+
+**Processo seguido:** análise de arquitetura (skill `codebase-design`) antes de qualquer alteração; decisão de provisionamento explicitamente levantada e confirmada pelo usuário antes de implementar (não escolhida silenciosamente); especificação escrita (`docs/spec_rbac.md`, já que a skill `to-spec` está bloqueada para invocação pelo modelo — usuário tentou `/to-spec` e não funcionou no ambiente dele); plano incremental de 9 tarefas; implementada só a tarefa 1.
+
+**Etapa 1 — Análise (nenhum arquivo alterado):** confirmado que não existe nenhuma autenticação, nenhum conceito de usuário, nenhum PostgreSQL, e nenhuma proteção nos endpoints hoje (busca exaustiva no código, zero hits reais). Achada a matriz de perfis já definida em `docs/proposta_do_projeto_similaridade.md` (seção 5) — usada como fonte real da matriz de acesso, não inventada. Achada lacuna arquitetural real: "custos industriais/fórmulas" (campos sensíveis citados no cronograma) não existem como dado estruturado hoje — vivem em texto livre de RAG, o que torna "restringir campo sensível no backend" tecnicamente mais complexo do que um filtro simples de dict.
+
+**Etapa 2 — Decisão de provisionamento:** comparadas as 3 estratégias (manual / AD-LDAP puro / híbrido) nos critérios pedidos (complexidade, segurança, manutenção, dependência de infra, comportamento se AD cair, facilidade de dev/teste, impacto arquitetural). Recomendação apresentada e **confirmada pelo usuário**: manual agora, com a Interface de autenticação desenhada para aceitar um Adapter LDAP depois sem reescrever autorização. Motivo: nenhuma confirmação de que a empresa tem AD/LDAP disponível, nem credenciais, nem contato de TI.
+
+**Tarefa 1 implementada — Schema base:**
+- `backend/app/db.py` (novo): engine/sessão SQLAlchemy, `Base` declarativa, `get_session()` — única Seam de conexão com o Postgres
+- `backend/app/models.py` (novo): model `User` + enums `Role` (5 perfis), `UserStatus`, `UserOrigin`, todos conforme `docs/spec_rbac.md`
+- `backend/app/config.py`: estendido (não duplicado) com `POSTGRES_*`/`DATABASE_URL` — falha alto (`RuntimeError`) se `POSTGRES_PASSWORD` não estiver definida, em vez de conectar silenciosamente com senha em branco (corrigido no code review, ver abaixo)
+- `docker-compose.yml`: novo serviço `postgres` (postgres:16-alpine), com `PGDATA` numa subpasta (senão o Postgres recusa inicializar por causa do `.gitkeep` no volume — bug real encontrado e corrigido)
+- `backend/alembic/`: migrations configuradas para usar `app.config.DATABASE_URL` e `Base.metadata` (não duplica config); migration inicial `a089248d3b0d` criando a tabela `users`, aplicada e validada contra o Postgres real
+- `.env`/`.env.example`: variáveis `POSTGRES_*` (senha real gerada com `secrets.token_urlsafe`, não commitada)
+- `docs/spec_rbac.md` (novo): especificação completa da Fase 5
+
+**Testes (primeira suíte automatizada do projeto):** `backend/tests/test_models.py`, 6 testes de integração contra Postgres real — persistência com defaults corretos, os 5 perfis, username/email duplicado rejeitado, usuário inativo, usuário de origem LDAP sem senha. **6/6 passaram**, sem dado de teste deixado no banco (fixture com rollback).
+
+**Code review (skill `code-review`, 2 eixos):**
+- **Bloqueio técnico encontrado e contornado:** o primeiro sub-agent de Standards rodou isolado num git worktree próprio, que não enxerga mudanças só *staged* (não commitadas) no checkout principal — retornou "acesso bloqueado" honestamente em vez de inventar um resultado. Refeito sem isolamento de worktree, direto no checkout principal — funcionou.
+- **Spec:** sem scope creep (nada em `main.py`/`engine.py`); todas as 5 restrições de segurança do pedido satisfeitas com evidência (sem senha em texto puro, sem senha de AD persistida, secrets via env, nada sensível logado, reaproveita `config.py` existente); achado 1 desvio não documentado (`external_id` com `unique=True` não estava na spec original) — **corrigido: justificativa adicionada à spec**, não ao código (a constraint em si estava certa)
+- **Standards:** 2 achados reais corrigidos — (1) `POSTGRES_PASSWORD` com fallback silencioso para string vazia, trocado por falha explícita; (2) `lambda: datetime.now(timezone.utc)` triplicado em `models.py`, extraído para `_utcnow()`. Também removido import não utilizado (`Boolean`).
+- Após as correções: rebuild, containers saudáveis, 6/6 testes passando de novo, e testado manualmente que o `RuntimeError` da senha realmente dispara quando `POSTGRES_PASSWORD` está vazia.
+
+**Validações executadas:** `py_compile` em todos os arquivos novos/alterados; `alembic current` confirma migration no head; `SELECT count(*) FROM users` confirma 0 linhas (sem sujeira de teste); 6/6 testes pytest passando contra Postgres real, duas vezes (antes e depois das correções do review).
+
+**Nenhum lint/typecheck configurado no projeto** (confirmado, mesmo achado da Sessão 15) — `py_compile` foi o mais próximo disponível.
+
+**Decisões técnicas importantes:**
+1. Enum Python fixo para `Role`, não tabela dinâmica — sem evidência de que o negócio precise criar/editar perfis via UI
+2. `config.py` existente foi estendido, não duplicado — reaproveitando a Seam já criada na Sessão 12
+3. Testes contra Postgres real (integração), não mocks — não havia padrão de teste no projeto pra seguir, e é o banco que já sobe via docker-compose no dev
+
+**Pendências (não implementadas nesta tarefa, fora do escopo):**
+1. Repository/service de usuários, autenticação, autorização centralizada, proteção de endpoints, restrição de campos sensíveis, administração, testes adicionais — tarefas 2–9 do plano
+2. Matriz de acesso tem 3 pendências funcionais reais não resolvidas pela proposta original (documentadas em `docs/spec_rbac.md`): significado de "Opcional" pra Técnico ver custos; regra de acesso a "fórmulas" separada de custos; se Gestor Comercial gerencia usuários (assumido que não, só Admin TI, por ser a leitura mais segura)
+3. Proteção de campos sensíveis no conteúdo RAG (não estruturado) — pendência técnica, não de negócio
+
+**Riscos:** nenhuma lógica de autenticação/autorização existe ainda — o schema por si só não protege nada. Não confundir "tabela criada" com "sistema seguro".
+
+**Próximo item do cronograma:** tarefa 2 — Repository/service de usuários (CRUD + hash de senha).
+
+---
+
 ## 2026-08-24 — Sessão 15: Validação formal da Sessão 14 (commit `65125c0`)
 
 **Contexto:** usuário pediu validação rigorosa e com evidência da última tarefa (ajuste de terminologia no `AGENT_SYSTEM_PROMPT`), não só a palavra de que "está tudo certo".

@@ -95,14 +95,24 @@ Legenda de status: ⬜ Não iniciado · 🟨 Em andamento · ✅ Concluído · �
 ---
 
 ## Fase 5 — RBAC & Governança
-**Status:** ⬜ Não iniciado
+**Status:** 🟨 Em andamento (tarefa 1/9 do plano incremental concluída — schema base)
 
-- [ ] Modelar perfis de usuário (Vendedor, Técnico de Aplicação, Gestor Comercial, Químico/P&D, Admin TI) conforme matriz da proposta
-- [ ] Implementar autenticação (login) e controle de acesso por perfil
-- [ ] Restringir campos sensíveis (custos industriais, fórmulas) por perfil
-- [ ] Persistir usuários/perfis em PostgreSQL (hoje ainda não implementado no código base)
+**Decisão de provisionamento (2026-08-24):** manual agora, desenho pronto para AD/LDAP depois. Ver `docs/spec_rbac.md` para a comparação completa das 3 estratégias e a justificativa.
 
-**Dependências:** definição de como os usuários serão provisionados (AD/LDAP corporativo vs. cadastro manual).
+**Especificação completa:** `docs/spec_rbac.md` — modelo de usuário, perfis, estratégia de autorização centralizada, campos sensíveis, matriz de acesso (fonte: `docs/proposta_do_projeto_similaridade.md`, seção 5) e pendências funcionais.
+
+**Plano incremental (9 tarefas):**
+1. [x] Schema base: model `User` (SQLAlchemy) + enums `Role`/`UserStatus`/`UserOrigin` + serviço `postgres` no `docker-compose.yml` + migration inicial (Alembic) — **concluído 2026-08-24**, validado com 6 testes automatizados (primeira suíte de testes do projeto) rodando contra Postgres real
+2. [ ] Repository/service de usuários (CRUD, hash de senha)
+3. [ ] Autenticação (login manual → token de sessão)
+4. [ ] Camada centralizada de autorização (`Permission`, `ROLE_PERMISSIONS`, `require_permission`)
+5. [ ] Proteção dos endpoints existentes (`main.py`)
+6. [ ] Restrição de campos sensíveis — **pendência técnica real identificada:** hoje não existe campo de custo/fórmula estruturado em lugar nenhum do código (só texto livre em RAG); proteção de backend real só é possível para dados estruturados futuros (Fase 4/ERP), não para o conteúdo RAG atual sem mudança na ingestão
+7. [ ] Administração/provisionamento (Admin TI cria/edita usuário)
+8. [ ] Testes adicionais (auth, autorização, campos sensíveis)
+9. [ ] Documentação final da fase
+
+**Dependências:** ~~definição de como os usuários serão provisionados~~ — **resolvida** (manual agora, híbrido-pronto).
 
 ---
 
