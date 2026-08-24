@@ -5,6 +5,30 @@ Ver visão geral de fases em [CRONOGRAMA.md](CRONOGRAMA.md).
 
 ---
 
+## 2026-08-24 — Sessão 25: Fase 5 (RBAC) — tarefa 9, documentação final da fase (Fase 5 concluída)
+
+**Escopo:** última das 9 tarefas do plano — só documentação, nenhum código de produção mudou. Objetivo: alguém chegando no projeto do zero devia conseguir descobrir que login existe, como criar o primeiro usuário, e o que cada endpoint exige, sem precisar ler as 24 sessões anteriores de `PROGRESS.md`.
+
+**`README.md`:**
+- Nova seção "Autenticação & Perfis (RBAC)": explica que toda funcionalidade de negócio exige login desde a Fase 5, lista os 5 perfis, e documenta o script de bootstrap do primeiro Admin TI (**testado ao vivo contra o backend real antes de documentar** — criei um usuário de teste `readme_bootstrap_test` com o script exatamente como aparece no README, confirmei que funcionou, depois apaguei; não documentei de memória).
+- Tabela de "APIs disponíveis" reescrita com uma coluna de permissão exigida por rota, incluindo as 6 rotas novas de `/api/auth/users*` da tarefa 7 (que não estavam documentadas em lugar nenhum fora do código).
+- Árvore de estrutura do projeto atualizada (`backend/app/auth/`, `backend/app/db.py`/`models.py`, `backend/alembic/`).
+- A seção "Status", que ainda dizia **"Fase 0 (Setup) concluída... Aguardando chaves de API e documentos reais para Fase 1"** — desatualizada desde a Sessão 5/6 (a Fase 1 já tinha sido concluída há muitas sessões) — corrigida pra refletir o estado real (Fases 0, 1 e 5 concluídas; Fase 2 em andamento).
+
+**`docs/spec_rbac.md`:** seção "Pendências" revisada — item 3 (Gestor Comercial gerenciar usuários) marcado como "implementado como negado" pela tarefa 7, com a ressalva explícita de que isso não é confirmação do negócio, só a mesma leitura conservadora de antes agora com código real; item 4 (RAG não estruturado) reconfirmado como não resolvido; novo item 5 registrando que não existe comando de bootstrap dedicado (só o script manual do README).
+
+**`CRONOGRAMA.md`:** tarefa 9 marcada `[x]`; status da Fase 5 mudou de "🟨 Em andamento" para "✅ Concluída" — mas "concluída" aqui significa que o plano de 9 tarefas terminou, não que não há débitos: a linha de status lista explicitamente as 4 pendências abertas em `docs/spec_rbac.md` e o débito de rate limiting do login, sem esconder nenhum.
+
+**Revisão de precisão (não é o `code-review` de 2 eixos padrão — não há "Standards" de código pra Markdown; rodei uma verificação factual em vez disso, fazendo o papel do eixo Spec: cada afirmação concreta do diff bate com o código real?):** 1 achado real, corrigido — o rascunho inicial da linha de status dizia "3 pendências funcionais em aberto", mas a própria seção "Pendências" atualizada no mesmo diff tem 4 itens abertos (1, 2, 4 e 5 — só o 3 foi resolvido); a contagem não tinha sido atualizada depois de eu adicionar o item 5. Corrigido para "4". Todo o resto verificado como preciso: as 12 linhas da tabela de API batendo com o código real linha por linha, a assinatura do script de bootstrap batendo exatamente com `create_user()`, a árvore de diretórios batendo com o filesystem real, e as 3 pendências antigas (rate limiting, RAG, item 4) confirmadas como não apagadas silenciosamente.
+
+**Testes:** nenhum novo (tarefa documentação-only); os 87 da tarefa 8 continuam válidos, nada de código foi tocado.
+
+**Fase 5 — RBAC & Governança: concluída.** As 9 tarefas numeradas mais o frontend (fora da numeração) estão implementadas, testadas (87 testes automatizados) e revisadas (code review em 2 eixos em cada uma das tarefas com código; revisão de precisão nesta). Débitos conhecidos e explicitamente registrados, não escondidos: rate limiting do login (Sessão 18), 2 pendências de regra de negócio não confirmadas (custos pro Técnico, fórmulas), proteção de campos sensíveis no RAG não estruturado (exige re-ingestão), e ausência de um comando de bootstrap dedicado pro primeiro Admin TI.
+
+**Próximo item do cronograma:** Fase 5 encerrada. Próxima decisão é do usuário — Fase 2 (motor RAG, já tem gaps de comportamento identificados nas Sessões 12-14) segue em andamento e é a fase mais madura ainda não fechada; ou alguma das fases não iniciadas (3, 4, 6, 7, 8), ou resolver um dos débitos desta fase.
+
+---
+
 ## 2026-08-24 — Sessão 24: Fase 5 (RBAC) — tarefa 8, testes adicionais
 
 **Abordagem:** em vez de escrever testes novos por escrever, li a suíte inteira já acumulada (81 testes das tarefas 1-7, espalhados por 6 arquivos) e procurei lacunas reais — cenários que o checklist original da fase pede (autenticado/não autenticado, permitido/negado por perfil, campo sensível visível/oculto, edição não autorizada, usuário inativo, perfil inválido, persistência em Postgres) mas que ainda não tinham teste em nenhuma camada.
