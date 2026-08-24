@@ -5,6 +5,54 @@ Ver visão geral de fases em [CRONOGRAMA.md](CRONOGRAMA.md).
 
 ---
 
+## 2026-08-22 — Sessão 11: `--full` concluído — Fase 1 fechada
+
+**Resultado final da ingestão completa** (`ingest_network.py --full`, rodando desde a Sessão 10):
+
+- **11.273 trechos indexados de 8.377 arquivos** (confirmado batendo com `points_count` real no Qdrant)
+- **3.933 arquivos ignorados** — majoritariamente `.doc` legado (adiado por decisão do usuário, ver Sessão 10), mais alguns arquivos temporários de bloqueio do Word (`~$*.docx`, gerados quando um documento está aberto — comportamento correto ignorá-los, não são documentos reais) e 1 PDF genuinamente vazio ("Ponto de Fulgor lembrete.pdf")
+- Rodou inteiramente com motor local/gratuito (Ollama `nomic-embed-text`), sem custo de API
+
+**Fase 1 marcada como ✅ Concluído** no cronograma — acervo real completo indexado e buscável. Itens não-bloqueantes que seguem em aberto: ajuste fino de `chunk_size`/`overlap` (avaliar com uso real) e suporte a `.doc` legado (adiado).
+
+**Estado atual:** base vetorial completa e pronta para uso. Próxima fronteira é a Fase 2 (qualidade de conversa) — segue bloqueada pela lentidão anormal da máquina para inferência local de chat (ver Sessão 9) e pela falta de crédito em Gemini/OpenAI (ver Sessão 6).
+
+**Próximos passos:**
+1. Retomar teste de qualidade de chat quando a máquina normalizar ou houver crédito de nuvem
+2. Implementar a recomendação da Sessão 10 (priorizar Boletim sobre FISPQ na busca) — requer um novo campo de metadado na ingestão; como o acervo completo já foi indexado, isso pode ser feito como um ajuste incremental (reingestão é idempotente) quando fizer sentido
+3. `.doc` legado permanece pendente até decisão sobre instalar LibreOffice
+
+**Bloqueios:** mesmos da Sessão 9 (máquina lenta pra chat local, sem crédito de nuvem) — não afetam mais a Fase 1, que está concluída.
+
+---
+
+## 2026-08-21 — Sessão 10: `--full` retomado + auditoria de qualidade de extração + `.env.example`/README atualizados
+
+**Contexto:** retomada do `--full` (tinha parado em 252 pontos após a Sessão 9). Enquanto roda em background, seguido o cronograma com trabalho que não compete por Ollama/CPU com a ingestão.
+
+**Documentação corrigida:** `.env.example` não tinha nenhuma menção a `OLLAMA_API_BASE`/`EMBEDDING_MODEL`/`VECTOR_SIZE` (só existiam no `.env` real, não versionado) — adicionado com comentários explicando `host.docker.internal` (containers) vs. `localhost` (scripts no host). `README.md` também não citava Ollama na lista de provedores — corrigido.
+
+**Falso alarme investigado:** usuário reportou ver conteúdo "corrompido" (acentos e `®` virando `�`) e um arquivo (`FISPQ FLEXX® CL 2034.pdf`) aparentemente indexado com "só duas linhas". Investigação:
+- A corrupção de caracteres era **só exibição no terminal** (Windows console não rendendo UTF-8) — o dado real salvo no Qdrant está com acentuação perfeita, confirmado escrevendo em arquivo e relendo.
+- O arquivo da FISPQ está **completo**: 3 chunks (4820 + 4218 + 94 caracteres) cobrindo as 16 seções inteiras do documento. O que pareceu "duas linhas" foi só um chunk pequeno (o rodapé final) visto isoladamente, sem perceber os outros dois chunks maiores.
+
+**Auditoria de qualidade de extração (Fase 1, item validado):** amostrados 6 boletins técnicos de produtos diferentes (adesivos, catalisadores, pré-polímeros). Especificações técnicas (viscosidade, NCO%, densidade, faixas com ±) saem legíveis, rótulo+unidade+valor adjacentes, tanto em PDF (texto corrido) quanto DOCX (células separadas por `|`). Conclusão: extração é funcionalmente boa o suficiente para o LLM responder perguntas técnicas — mesmo sem preservar estrutura de tabela.
+
+**Decisão sobre `.doc` legado:** avaliadas as opções (instalar LibreOffice no Windows do usuário vs. só no container vs. adiar). Usuário optou por **adiar** — LibreOffice não está instalado em nenhum dos dois ambientes, e instalar no host é uma mudança fora do escopo do projeto que exige confirmação explícita.
+
+**Nota sobre commits:** usuário commitou via VS Code (`3680f79 indexação de itens`, `ed5a467 ajustado .env`) capturando todas as correções das Sessões 6–10 — Claude não commitou nada diretamente nesta sessão.
+
+**Estado atual:** `--full` em andamento (passou de 252 → 1152+ pontos durante esta sessão). Fase 1 com extração de texto e retrieval validados; faltam `--full` terminar, `.doc` legado (adiado) e ajuste de `chunk_size`/`overlap`.
+
+**Próximos passos:**
+1. Acompanhar `--full` até terminar (ou até decidir interromper)
+2. Retomar teste de qualidade de chat quando a máquina normalizar ou houver crédito de nuvem
+3. `.doc` legado fica pendente até o usuário decidir instalar LibreOffice
+
+**Bloqueios:** nenhum novo — mesmos da Sessão 9 (máquina lenta pra chat local, sem crédito de nuvem).
+
+---
+
 ## 2026-08-21 — Sessão 9: Docker caiu e voltou sozinho + Ollama local anormalmente lento nesta máquina
 
 **Contexto:** entre sessões, Docker Desktop parou de rodar (provável reinício/hibernação da máquina) e derrubou o `--full` no meio. Ao reabrir o Docker, os containers subiram sozinhos (`restart: always`) e os dados sobreviveram — coleção Qdrant foi de 52 para **252 pontos** antes de parar, nada foi perdido (persistido em `data/qdrant_storage/`, 67MB em disco).

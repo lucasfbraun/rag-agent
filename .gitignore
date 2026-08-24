@@ -8,3 +8,4 @@ data/raw_documents/*
 data/qdrant_storage/*
 !data/qdrant_storage/.gitkeep
 .DS_Store
+.agents/

@@ -35,16 +35,17 @@ Legenda de status: ⬜ Não iniciado · 🟨 Em andamento · ✅ Concluído · �
 ---
 
 ## Fase 1 — Ingestão de Dados Reais
-**Status:** 🟨 Em andamento (primeira ingestão real feita e validada — falta o acervo completo)
+**Status:** ✅ Concluído (acervo completo indexado; `.doc` legado adiado por decisão do usuário — não bloqueia)
 
 - [x] Levantar acervo real de TDS, catálogos e laudos de homologação — pasta de rede identificada: `\\10.1.1.205\flexivel\GRUPOS\Qualidade\Documentação de Produto` (~37 famílias de produto, ex. FLEXX® AG, BT, CAT, HR, RIM etc., PDF+DOC)
 - [x] Script `ingest_network.py` criado para apontar a ingestão à pasta de rede (`--test` = 1 família de produto / `--full` = acervo completo, ~12k arquivos)
 - [x] Definir volume inicial de teste — subconjunto `FLEXX® AG` (71 arquivos PDF/DOC) escolhido como piloto via `--test`
 - [x] Rodar `ingest_catalog_directory()` sobre os documentos reais — **feito 2026-08-21**: 52 trechos indexados de 39 arquivos (só PDFs; motor 100% local/gratuito via Ollama)
 - [x] Validar qualidade do retrieval — pergunta de teste sobre "FLEXX AG 2047" retornou o boletim correto como top resultado (score 0.86)
-- [ ] Rodar `--full` sobre o acervo completo (~12k arquivos) — ainda não feito, avaliar tempo antes de comprometer horas rodando em CPU local
-- [ ] Ajustar `chunk_size`/`overlap` conforme padrão dos documentos da empresa
-- [ ] Resolver `.doc` legado — `python-docx` só lê `.docx`; confirmado por assinatura de arquivo (OLE2) que são Word 97-2003 binário real, não corrupção. 30 dos 69 arquivos testados foram pulados por isso
+- [x] Validar qualidade da extração de texto/tabelas técnicas em PDF — auditoria de 6 boletins técnicos de produtos diferentes: especificações (viscosidade, NCO%, densidade) saem legíveis com rótulo+unidade+valor juntos, mesmo sem estrutura de tabela preservada (PDFs viram texto corrido; DOCX preserva células separadas por `|`). Suficiente para um LLM interpretar corretamente.
+- [x] Rodar `--full` sobre o acervo completo — **concluído 2026-08-22**: **11.273 trechos indexados de 8.377 arquivos** (3.933 arquivos ignorados, majoritariamente `.doc` legado + alguns temporários do Word `~$*.docx`)
+- [ ] Ajustar `chunk_size`/`overlap` conforme padrão dos documentos da empresa — não bloqueante, avaliar com uso real
+- [ ] Resolver `.doc` legado — `python-docx` só lê `.docx`; confirmado por assinatura de arquivo (OLE2) que são Word 97-2003 binário real, não corrupção. **Decisão do usuário: adiado** (solução exigiria LibreOffice, não instalado nem no host nem no container)
 - [ ] Confirmar billing/quota da `GEMINI_API_KEY`/OpenAI antes de usar esses provedores em volume (hoje sem crédito nos dois — ver Fase 0)
 
 **Dependências:** Fase 0 concluída ✅; acesso aos documentos técnicos da empresa — ✅ pasta de rede acessível a partir desta máquina (`\\10.1.1.205\flexivel`, testado 2026-08-21).
@@ -57,10 +58,10 @@ Legenda de status: ⬜ Não iniciado · 🟨 Em andamento · ✅ Concluído · �
 **Status:** 🟨 Em andamento (retrieval validado; teste de conversa pausado por lentidão da máquina)
 
 - [ ] Testar fluxo conversacional investigativo (perguntas antes da recomendação)
-- [x] Validar qualidade do retrieval — testado com múltiplas perguntas reais (ex: "FLEXX AG 2047", "FLEXX ADT 41200"), retornou os documentos corretos como top resultado em todos os casos
+- [x] Validar qualidade do retrieval — bom para perguntas próximas do código do produto (ex: "FLEXX AG 2047", "FLEXX ADT 41200", top resultado correto); fraco para perguntas ambíguas/naturais de venda (ver item de reranking abaixo)
 - [ ] Ajustar `AGENT_SYSTEM_PROMPT` com terminologia e critérios reais da empresa
 - [ ] Testar comportamento "opinativo" em casos de requisitos incompatíveis
-- [ ] Avaliar necessidade de reranking ou filtros por metadados (família química, norma)
+- [x] Avaliar necessidade de reranking ou filtros por metadados — **necessidade confirmada com evidência**: pergunta ambígua ("produto para colagem de espuma aglomerada") retornou só FISPQ de famílias erradas no top 6 (`top_k` real do sistema); o Boletim correto (FLEXX AG 20106, que literalmente descreve "agente de colagem... espuma aglomerada") ficou na posição 42. Causa provável: FISPQ tem texto legal/genérico repetitivo entre produtos, diluindo a busca; Boletins têm seção de aplicação específica por produto, mais discriminativa. **Recomendação:** filtrar/priorizar Boletim sobre FISPQ na busca principal (campo de tipo de documento a ser adicionado no payload da ingestão — ainda não implementado para não interromper o `--full` em andamento)
 
 **Dependências:** Fase 1 concluída (dados reais indexados).
 
