@@ -7,6 +7,10 @@ Fonte da matriz de perfis: `docs/proposta_do_projeto_similaridade.md`, seção 5
 
 **Manual agora, desenho pronto para AD/LDAP depois.** Motivo: não há confirmação de que a empresa tem AD/LDAP disponível, nem credenciais, nem contato de TI envolvido — travar nisso paralisaria a Fase 5 indefinidamente. A autenticação é desenhada como uma peça substituível (ver "Estratégia de autenticação" abaixo), separada da autorização, para que um Adapter LDAP possa ser adicionado depois sem reescrever perfis/permissões/matriz.
 
+## Política de senha (2026-08-24, tarefa 2)
+
+Mínimo de 8 caracteres (`SenhaFracaError` em `backend/app/auth/security.py`), hash via `bcrypt`. Não há requisito de negócio documentado para regras adicionais (maiúscula/número/símbolo) — o mínimo de 8 é só uma defesa básica contra senha vazia/trivial, não uma política de segurança completa. Se o time de TI tiver uma política corporativa de senha, é pendência a levantar e ajustar aqui.
+
 ## Modelo de usuário
 
 | Campo | Tipo | Justificativa |

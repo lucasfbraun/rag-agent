@@ -95,7 +95,7 @@ Legenda de status: ⬜ Não iniciado · 🟨 Em andamento · ✅ Concluído · �
 ---
 
 ## Fase 5 — RBAC & Governança
-**Status:** 🟨 Em andamento (tarefa 1/9 do plano incremental concluída — schema base)
+**Status:** 🟨 Em andamento (tarefas 1-2/9 do plano incremental concluídas — schema base + repository/service)
 
 **Decisão de provisionamento (2026-08-24):** manual agora, desenho pronto para AD/LDAP depois. Ver `docs/spec_rbac.md` para a comparação completa das 3 estratégias e a justificativa.
 
@@ -103,7 +103,7 @@ Legenda de status: ⬜ Não iniciado · 🟨 Em andamento · ✅ Concluído · �
 
 **Plano incremental (9 tarefas):**
 1. [x] Schema base: model `User` (SQLAlchemy) + enums `Role`/`UserStatus`/`UserOrigin` + serviço `postgres` no `docker-compose.yml` + migration inicial (Alembic) — **concluído 2026-08-24**, validado com 6 testes automatizados (primeira suíte de testes do projeto) rodando contra Postgres real
-2. [ ] Repository/service de usuários (CRUD, hash de senha)
+2. [x] Repository/service de usuários (CRUD, hash de senha) — **concluído 2026-08-24**: `backend/app/auth/security.py` (hash bcrypt, mín. 8 caracteres) + `backend/app/auth/user_service.py` (create/get/list/update/set_password/deactivate — "excluir" implementado como desativação, não apaga a linha, por auditoria). 15 novos testes (21/21 no total) contra Postgres real.
 3. [ ] Autenticação (login manual → token de sessão)
 4. [ ] Camada centralizada de autorização (`Permission`, `ROLE_PERMISSIONS`, `require_permission`)
 5. [ ] Proteção dos endpoints existentes (`main.py`)

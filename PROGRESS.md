@@ -5,6 +5,36 @@ Ver visão geral de fases em [CRONOGRAMA.md](CRONOGRAMA.md).
 
 ---
 
+## 2026-08-24 — Sessão 17: Fase 5 (RBAC) — tarefa 2, repository/service de usuários
+
+**Tarefa implementada:** repository/service de usuários com hash de senha, seguindo o mesmo processo da tarefa 1 (implementar → testar → revisar → validar → documentar).
+
+- `backend/app/auth/security.py` (novo): `hash_password`/`verify_password` via `bcrypt`, mínimo de 8 caracteres (`SenhaFracaError`). Único lugar do código que chama `bcrypt` diretamente.
+- `backend/app/auth/user_service.py` (novo): `create_user`, `get_user_by_id`, `get_user_by_username`, `list_users`, `update_user`, `set_password`, `deactivate_user`. "Excluir" foi implementado como desativação (`status=INATIVO`), não remoção da linha — decisão justificada no próprio código (auditoria: perder histórico de quem fez o quê não é aceitável). Erros de duplicidade do banco (`IntegrityError`) são traduzidos em exceção de domínio (`UsuarioJaExisteError`) — quem chama o service nunca vê exceção do SQLAlchemy vazando.
+- `requirements.txt`: `bcrypt>=4.1.0`
+- `docs/spec_rbac.md`: documentada a política de senha (mínimo 8 caracteres — não é política de segurança completa, é só defesa contra senha vazia/trivial; falta requisito de negócio se a empresa tiver política própria)
+
+**Testes:** `backend/tests/test_user_service.py`, 15 novos testes (hash/verify de senha, criação com duplicidade rejeitada, busca por username, listagem, update, troca de senha, desativação, e os casos de "não encontrado" de cada operação). **21/21 no total** (6 da tarefa 1 + 15 novos), rodados 3 vezes ao longo da sessão (antes e depois do code review, e na imagem final reconstruída) — sempre passando, sem dado de teste sobrando no banco.
+
+**Code review (skill `code-review`, 2 eixos, direto no checkout principal — sem isolamento de worktree, que bloqueou a tarefa 1):**
+- **Standards:** verificou explicitamente ausência de senha em texto puro/log, comparação de senha via `bcrypt.checkpw` (timing-safe), zero SQL cru. 2 achados reais de duplicação corrigidos: bloco "busca usuário ou lança erro" repetido 3x → extraído `_get_user_or_raise()`; bloco "flush ou traduz erro de duplicidade" repetido 2x → extraído `_flush_or_raise_duplicate()`. Um achado sem ação (Primitive Obsession leve nos parâmetros de `create_user` — aceitável com um único call site hoje).
+- **Spec:** confirmado sem scope creep (nada em `main.py`/`engine.py`, nenhuma lógica de autenticação/autorização de tarefas futuras); todas as constraints de segurança satisfeitas com evidência; achado 1 lacuna de documentação (política de mínimo de senha não estava na spec) — **corrigido, documentado em `docs/spec_rbac.md`**.
+
+**Validações executadas:** `py_compile` em todos os arquivos novos/alterados; 21/21 testes passando (3 rodadas); `SELECT count(*) FROM users` = 0 (sem sujeira); rebuild oficial do container e reconfirmação contra a imagem final, não só a cópia ao vivo usada pra iteração rápida.
+
+**Decisões técnicas importantes:**
+1. "Excluir" usuário = desativar, nunca DELETE — decisão de auditoria, documentada no código e aqui
+2. `update_user` não permite trocar `username`/`origem`/`external_id` — só `nome`/`email`/`perfil`; troca de senha tem função própria (`set_password`), separada por ser operação sensível
+3. Exceções de domínio (`UsuarioJaExisteError`, `UsuarioNaoEncontradoError`) escondem o SQLAlchemy do resto da aplicação — quem chama o service não precisa saber que existe um Postgres por trás
+
+**Pendências (fora do escopo desta tarefa):** autenticação/login (tarefa 3), autorização centralizada (tarefa 4), proteção de endpoints (tarefa 5), campos sensíveis (tarefa 6, com a pendência técnica já registrada na Sessão 16), administração (tarefa 7), testes de integração ponta a ponta via API (tarefa 8), documentação final (tarefa 9).
+
+**Riscos:** ainda não existe login nem verificação de perfil em endpoint nenhum — o service de usuários por si só não protege nada, só permite criar/gerenciar a conta. Não confundir "dá pra criar usuário" com "sistema está protegido".
+
+**Próximo item do cronograma:** tarefa 3 — Autenticação (login manual → token de sessão).
+
+---
+
 ## 2026-08-24 — Sessão 16: Fase 5 (RBAC) iniciada — Etapa 1 análise + Etapa 2 decisão de provisionamento + tarefa 1 (schema base)
 
 **Processo seguido:** análise de arquitetura (skill `codebase-design`) antes de qualquer alteração; decisão de provisionamento explicitamente levantada e confirmada pelo usuário antes de implementar (não escolhida silenciosamente); especificação escrita (`docs/spec_rbac.md`, já que a skill `to-spec` está bloqueada para invocação pelo modelo — usuário tentou `/to-spec` e não funcionou no ambiente dele); plano incremental de 9 tarefas; implementada só a tarefa 1.
