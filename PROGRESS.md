@@ -5,6 +5,42 @@ Ver visão geral de fases em [CRONOGRAMA.md](CRONOGRAMA.md).
 
 ---
 
+## 2026-08-24 — Sessão 21: Fase 5 (RBAC) — frontend, tela de login (fora da numeração das 9 tarefas)
+
+**Contexto:** a Sessão 20 (tarefa 5) deixou o frontend Streamlit quebrado — `frontend/app.py` nunca enviava `Authorization` header, então toda pergunta pela tela passou a falhar com 401 assim que a proteção dos endpoints entrou em vigor. Perguntado se preferia seguir pra tarefa 6 (campos sensíveis) ou corrigir o frontend primeiro, o usuário escolheu explicitamente **"Login no frontend primeiro"**.
+
+**Implementado em `frontend/app.py`:**
+- Constantes `LOGIN_URL`/`ME_URL`; estado de sessão `access_token`/`current_user`.
+- Portão de login: `if not st.session_state.access_token: <form> st.stop()` — nada da aplicação roda sem token válido em sessão.
+- `POST /api/auth/login` → guarda token → `GET /api/auth/me` → guarda dados do usuário exibido na sidebar, com botão "Sair".
+- `_auth_headers()`/`_bearer()` centralizam a montagem do header `Authorization: Bearer <token>`, usado em toda chamada de negócio (`/api/match`, `/api/match/stream`) — `/api/health` e `/api/auth/login` continuam sem header, corretamente.
+- `_fazer_logout()` como único ponto que limpa `access_token`/`current_user`/`messages` — chamado tanto pelo botão "Sair" quanto por qualquer 401 recebido de um endpoint de negócio (sessão expirada/token inválido), que também dispara `st.rerun()` de volta pro portão de login.
+
+**Code review (skill `code-review`, só eixo Standards — não é uma das 9 tarefas especificadas, sem spec formal dedicada):** 3 achados reais, todos corrigidos.
+1. Os dois pontos de tratamento de 401 (streaming e síncrono) duplicavam as duas primeiras linhas de `_fazer_logout()` na mão em vez de chamar a função, e **nenhum dos dois limpava `messages`** — sessão ficava inconsistente após expirar. Corrigido: os dois agora chamam `_fazer_logout()`.
+2. Construção do header `Bearer` duplicada — `_auth_headers()` centralizava, mas a chamada a `/api/auth/me` logo após o login remontava o dict na mão. Corrigido com helper `_bearer(token)`, usado nos dois lugares.
+3. No caminho de streaming, um 401 setava `access_token = None` mas o generator continuava normalmente até o fim, e o código sempre anexava `_stream_state["answer"]` como nova mensagem do assistente — resultando numa mensagem de assistente com **conteúdo vazio** presa no histórico, nunca limpa (drift do achado 1). Corrigido: o generator agora só marca uma flag `_stream_state["expired"] = True` e retorna; **depois** que `st.write_stream(...)` termina, o código checa a flag e, se verdadeira, chama `_fazer_logout()` + `st.rerun()` em vez do fluxo normal de exibir fontes/modelo e anexar ao histórico.
+
+Checks de segurança do mesmo review, todos **passaram sem achado**: campo de senha mascarado e nunca logado; token vive só em `st.session_state` (server-side, nunca em cookie/localStorage/URL); toda chamada de negócio carrega o header de auth corretamente.
+
+**Validação executada (sem navegador — `chromium-cli` indisponível neste ambiente, confirmado via tentativa de uso da skill `run`; validação por HTTP direto + inspeção de log em vez de screenshot):**
+- `py_compile frontend/app.py` — OK.
+- Rebuild completo (`docker-compose build frontend` + `docker-compose up -d frontend`) — os 4 containers voltaram saudáveis; dado do usuário admin real (`lucas.braun`, Admin TI, Ativo) confirmado intacto no Postgres após o recreate.
+- Simulação HTTP da sequência exata que o Streamlit executa: `POST /api/auth/login` → 200; `GET /api/auth/me` com o token → 200 com os dados esperados; `POST /api/match` e `POST /api/match/stream` sem token → 401; com token inválido → 401 nos dois. (Chamada de negócio com token *válido* não foi cronometrada até completar — o modelo Ollama local demorou mais que 60s pra responder, não é um problema de autenticação: a rejeição/aceitação do token já acontece antes da chamada ao LLM, e isso já está coberto pelos 56 testes automatizados da Sessão 20.)
+- `docker logs pu_matcher_frontend` desde o restart — sem tracebacks.
+
+**Limitação explícita:** esta validação não é equivalente a testar visualmente no navegador (preenchimento de formulário, clique real, renderização). Fica registrado como lacuna de teste, não escondido.
+
+**Decisões técnicas:**
+1. Erro 401 no caminho síncrono chama `st.rerun()` logo após `_fazer_logout()` (revisado durante a implementação — inicialmente cogitei não chamar `st.rerun()` aí para não "esconder" a mensagem de erro antes do usuário ver, mas por consistência com o caminho de streaming e para o portão de login reaparecer imediatamente, os dois caminhos agora se comportam igual).
+2. Esta correção não é uma das 9 tarefas numeradas da Fase 5 — foi tratada como unidade de trabalho própria por ser um bloqueio de uso real e urgente, mas o plano de 9 tarefas continua o mesmo, sem renumeração.
+
+**Pendências não tocadas nesta sessão:** tarefa 6 (campos sensíveis — lacuna técnica conhecida, dados de custo/fórmula não estruturados), tarefas 7-9, rate limiting do login (Sessão 18), 3 pendências funcionais em `docs/spec_rbac.md`.
+
+**Próximo item do cronograma:** tarefa 6 — Restrição de campos sensíveis. Decisão de seguir ou não fica para o usuário confirmar.
+
+---
+
 ## 2026-08-24 — Sessão 20: Fase 5 (RBAC) — tarefa 5, proteção dos endpoints existentes
 
 **Tarefa implementada:** `require_permission()` (pronto desde a tarefa 4) finalmente aplicado nos endpoints de negócio reais.

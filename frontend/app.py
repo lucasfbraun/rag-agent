@@ -1,17 +1,18 @@
 import streamlit as st
 import requests
 import json
-
-API_URL = "http://backend:8000/api/match/stream"
-API_URL_SYNC = "http://backend:8000/api/match"
-HEALTH_URL = "http://backend:8000/api/health"
-
-# Modo local: se rodar fora do Docker, usa localhost
 import os
+
+API_BASE = "http://backend:8000"
+# Modo local: se rodar fora do Docker, usa localhost
 if os.getenv("LOCAL_DEV", "false").lower() == "true":
-    API_URL = "http://localhost:8000/api/match/stream"
-    API_URL_SYNC = "http://localhost:8000/api/match"
-    HEALTH_URL = "http://localhost:8000/api/health"
+    API_BASE = "http://localhost:8000"
+
+API_URL = f"{API_BASE}/api/match/stream"
+API_URL_SYNC = f"{API_BASE}/api/match"
+HEALTH_URL = f"{API_BASE}/api/health"
+LOGIN_URL = f"{API_BASE}/api/auth/login"
+ME_URL = f"{API_BASE}/api/auth/me"
 
 st.set_page_config(
     page_title="PU Matcher - Consultor Técnico de Produtos",
@@ -26,6 +27,61 @@ if "messages" not in st.session_state:
     st.session_state.messages = []
 if "template_id" not in st.session_state:
     st.session_state.template_id = "proposta_tecnica_completa"
+if "access_token" not in st.session_state:
+    st.session_state.access_token = None
+if "current_user" not in st.session_state:
+    st.session_state.current_user = None
+
+
+def _bearer(token: str) -> dict:
+    return {"Authorization": f"Bearer {token}"}
+
+
+def _auth_headers() -> dict:
+    return _bearer(st.session_state.access_token)
+
+
+def _fazer_logout():
+    """Único lugar que limpa a sessão — todo 401 deve chamar isto, não
+    reimplementar os mesmos três `session_state = None/[]` na mão."""
+    st.session_state.access_token = None
+    st.session_state.current_user = None
+    st.session_state.messages = []
+
+
+# ---------------------------------------------------------------------------
+# Portão de login — nada abaixo deste bloco roda sem token válido em sessão.
+# Backend (Fase 5, tarefa 5) passou a exigir autenticação em /api/match e
+# companhia; sem isto o frontend simplesmente parou de funcionar.
+# ---------------------------------------------------------------------------
+if not st.session_state.access_token:
+    st.markdown("### 🎯 PU Matcher")
+    st.caption("Consultor Técnico de Vendas & Match de Produtos de Poliuretano — faça login para continuar.")
+    with st.form("login_form"):
+        username = st.text_input("Usuário")
+        password = st.text_input("Senha", type="password")
+        submitted = st.form_submit_button("Entrar", use_container_width=True)
+        if submitted:
+            try:
+                login_resp = requests.post(
+                    LOGIN_URL, json={"username": username, "password": password}, timeout=10
+                )
+                if login_resp.status_code == 200:
+                    token = login_resp.json()["access_token"]
+                    me_resp = requests.get(ME_URL, headers=_bearer(token), timeout=10)
+                    st.session_state.access_token = token
+                    st.session_state.current_user = me_resp.json() if me_resp.status_code == 200 else None
+                    st.rerun()
+                else:
+                    st.error("Usuário ou senha incorretos.")
+            except requests.exceptions.ConnectionError:
+                st.error(
+                    "❌ Não foi possível conectar ao backend. "
+                    "Verifique se os containers estão rodando com `docker-compose up -d`."
+                )
+            except Exception as e:
+                st.error(f"Erro inesperado: {e}")
+    st.stop()
 
 # ---------------------------------------------------------------------------
 # Sidebar
@@ -34,6 +90,15 @@ with st.sidebar:
     st.image("https://cdn-icons-png.flaticon.com/512/3081/3081559.png", width=60)
     st.title("PU Matcher")
     st.caption("Agente Investigativo para Match de Produtos de Poliuretano")
+
+    # --- Usuário logado ---
+    user = st.session_state.current_user
+    if user:
+        st.caption(f"👤 **{user['nome']}** · {user['perfil'].replace('_', ' ').title()}")
+    if st.button("🚪 Sair", use_container_width=True):
+        _fazer_logout()
+        st.rerun()
+
     st.divider()
 
     # --- Status do backend ---
@@ -143,14 +208,19 @@ if prompt := st.chat_input("Digite a demanda ou responda às perguntas do agente
                 "sources": [],
                 "model": selected_model,
                 "answer": "",
+                "expired": False,
             }
 
             def _token_generator():
                 """Consome o stream NDJSON e yield apenas os tokens de texto."""
                 try:
                     with requests.post(
-                        API_URL, json=payload, stream=True, timeout=240
+                        API_URL, json=payload, headers=_auth_headers(), stream=True, timeout=240
                     ) as resp:
+                        if resp.status_code == 401:
+                            _stream_state["expired"] = True
+                            yield "\n\n🔒 Sua sessão expirou. Recarregue a página e faça login de novo."
+                            return
                         resp.raise_for_status()
                         for raw_line in resp.iter_lines():
                             if not raw_line:
@@ -183,6 +253,10 @@ if prompt := st.chat_input("Digite a demanda ou responda às perguntas do agente
 
             st.write_stream(_token_generator())
 
+            if _stream_state["expired"]:
+                _fazer_logout()
+                st.rerun()
+
             if _stream_state["sources"]:
                 st.caption(f"📚 **Boletins Técnicos (TDS) Consultados:** {', '.join(_stream_state['sources'])}")
             st.caption(f"🤖 Modelo: `{_stream_state['model']}`")
@@ -198,8 +272,12 @@ if prompt := st.chat_input("Digite a demanda ou responda às perguntas do agente
             # Modo síncrono (fallback sem streaming)
             with st.spinner("Analisando requisitos técnicos e cruzando catálogo de produtos..."):
                 try:
-                    response = requests.post(API_URL_SYNC, json=payload, timeout=240)
-                    if response.status_code == 200:
+                    response = requests.post(API_URL_SYNC, json=payload, headers=_auth_headers(), timeout=240)
+                    if response.status_code == 401:
+                        _fazer_logout()
+                        st.error("🔒 Sua sessão expirou. Recarregue a página e faça login de novo.")
+                        st.rerun()
+                    elif response.status_code == 200:
                         data = response.json()
                         st.markdown(data["answer"])
                         if data.get("sources"):
