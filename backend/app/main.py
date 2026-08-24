@@ -6,7 +6,8 @@ from app.rag.engine import run_pu_matcher_agent, stream_pu_matcher_agent
 from app.templates import TEMPLATES_DISPONIVEIS
 from app.config import QDRANT_HOST, QDRANT_PORT, COLLECTION_NAME, EMBEDDING_MODEL, DEFAULT_CHAT_MODEL
 from app.auth.router import router as auth_router
-from app.auth.permissions import Permission, require_permission
+from app.auth.permissions import Permission, has_permission, require_permission
+from app.models import User
 import logging
 import os
 
@@ -95,15 +96,21 @@ def list_templates():
     return TEMPLATES_DISPONIVEIS
 
 
-@app.post("/api/match", dependencies=[Depends(require_permission(Permission.VIEW_CATALOG))])
-def match_product(req: MatchRequest):
-    """Executa o agente investigativo para match de produto."""
+@app.post("/api/match")
+def match_product(req: MatchRequest, current_user: User = Depends(require_permission(Permission.VIEW_CATALOG))):
+    """Executa o agente investigativo para match de produto.
+
+    Campos sensíveis (custos industriais, laudo de homologação completo) são
+    liberados às ferramentas MCP conforme a permissão do usuário logado — nunca
+    por instrução de prompt (docs/spec_rbac.md, "Campos sensíveis")."""
     try:
         res = run_pu_matcher_agent(
             query=req.query,
             template_id=req.template_id,
             model_name=req.model_name,
-            history=req.history
+            history=req.history,
+            ver_custos=has_permission(current_user, Permission.VIEW_COSTS),
+            ver_laudo_completo=has_permission(current_user, Permission.VIEW_HOMOLOGATION_FULL),
         )
         return res
     except Exception as e:
@@ -120,6 +127,12 @@ def match_product_stream(req: MatchRequest):
       - {"type": "delta", "content": "..."}
       - {"type": "done"}
       - {"type": "error", "message": "..."}
+
+    Não repassa ver_custos/ver_laudo_completo para stream_pu_matcher_agent porque
+    esta versão não chama ferramentas MCP hoje (tools= não é passado ao
+    litellm.completion aqui) — não há campo sensível de MCP em risco neste
+    caminho ainda. Se streaming ganhar tool-calling no futuro, replicar o mesmo
+    padrão de /api/match (ver has_permission() acima).
     """
     generator = stream_pu_matcher_agent(
         query=req.query,

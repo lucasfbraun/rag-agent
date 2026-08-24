@@ -4,14 +4,21 @@ e banco de dados de normas/homologações em tempo real.
 
 NOTA DE STATUS (Fase 4 do cronograma): as funções abaixo retornam dados SIMULADOS.
 Substituir por chamadas reais ao ERP/LIMS da empresa quando os conectores estiverem definidos.
+
+RESTRIÇÃO DE CAMPOS SENSÍVEIS (Fase 5, tarefa 6, docs/spec_rbac.md): `custo_industrial_kg`
+e o detalhe completo de laudo (`laudo_numero`/`laboratorio_emissor`) só entram no dict de
+retorno se o chamador passar `ver_custos`/`ver_laudo_completo=True` — a decisão de permissão
+em si (Permission.VIEW_COSTS / VIEW_HOMOLOGATION_FULL) é tomada na camada HTTP
+(app.main, via has_permission()) e chega até aqui só como booleano, para este módulo não
+precisar conhecer User/Role/Permission.
 """
 from typing import Dict, Any
 
 # Simulação de consulta ao ERP Corporativo (SAP / TOTVS / etc.)
-def consultar_catalogo_erp(termo_busca: str) -> Dict[str, Any]:
+def consultar_catalogo_erp(termo_busca: str, ver_custos: bool = False) -> Dict[str, Any]:
     """Consulta se o produto está ativo para faturamento, código ERP e embalagens."""
     # Exemplo simulado de retorno de ERP
-    return {
+    resultado = {
         "produto_encontrado": "PU-SEAT-5000 FR",
         "codigo_erp": "PRD-99841",
         "status_linha": "Ativo para Vendas",
@@ -19,17 +26,25 @@ def consultar_catalogo_erp(termo_busca: str) -> Dict[str, Any]:
         "prazo_fabricacao": "Em estoque / Pronta entrega",
         "familia": "Espuma Moldada a Frio (Cure MDI)"
     }
+    if ver_custos:
+        # Campo de exemplo — hoje não existe custo estruturado real em nenhum lugar do
+        # sistema (docs/spec_rbac.md, "Campos sensíveis"). Vira campo real quando o ERP
+        # real for integrado (Fase 4); o gate de permissão já fica pronto desde já.
+        resultado["custo_industrial_kg"] = "R$ 18,40"
+    return resultado
 
 # Simulação de consulta ao Banco de Homologações & Normas
-def consultar_normas_homologadas(norma_requerida: str) -> Dict[str, Any]:
+def consultar_normas_homologadas(norma_requerida: str, ver_laudo_completo: bool = False) -> Dict[str, Any]:
     """Verifica laudos oficiais de conformidade com normas regulatórias."""
-    return {
+    resultado = {
         "norma_pesquisada": norma_requerida,
         "produtos_certificados": ["PU-SEAT-5000 FR", "PU-FLEX-450-AUTO"],
-        "laudo_numero": "CERT-2025-NBR9178",
-        "laboratorio_emissor": "IPT / SENAI",
         "resultado": "Aprovado - Autoextinguível (Taxa de queima < 100 mm/min)"
     }
+    if ver_laudo_completo:
+        resultado["laudo_numero"] = "CERT-2025-NBR9178"
+        resultado["laboratorio_emissor"] = "IPT / SENAI"
+    return resultado
 
 # Definição de ferramentas no padrão MCP / LiteLLM
 MCP_TOOLS_DEFINITIONS = [
@@ -63,10 +78,19 @@ MCP_TOOLS_DEFINITIONS = [
     }
 ]
 
-def execute_mcp_tool(tool_name: str, arguments: dict) -> str:
-    """Executa a ferramenta MCP chamada pelo agente."""
+def execute_mcp_tool(
+    tool_name: str,
+    arguments: dict,
+    ver_custos: bool = False,
+    ver_laudo_completo: bool = False,
+) -> str:
+    """Executa a ferramenta MCP chamada pelo agente.
+
+    `ver_custos`/`ver_laudo_completo` vêm da camada de autorização (via engine.py,
+    a partir de app.main) — default False, então quem esquecer de passar o
+    parâmetro nunca vaza campo sensível por acidente (fail-closed)."""
     if tool_name == "consultar_catalogo_erp":
-        return str(consultar_catalogo_erp(arguments.get("termo_busca", "")))
+        return str(consultar_catalogo_erp(arguments.get("termo_busca", ""), ver_custos=ver_custos))
     elif tool_name == "consultar_normas_homologadas":
-        return str(consultar_normas_homologadas(arguments.get("norma_requerida", "")))
+        return str(consultar_normas_homologadas(arguments.get("norma_requerida", ""), ver_laudo_completo=ver_laudo_completo))
     return "Ferramenta não encontrada."

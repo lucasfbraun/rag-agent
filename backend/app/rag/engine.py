@@ -72,9 +72,16 @@ def run_pu_matcher_agent(
     query: str,
     template_id: str = "proposta_tecnica_completa",
     model_name: str = DEFAULT_CHAT_MODEL,
-    history: Optional[List[Dict[str, str]]] = None
+    history: Optional[List[Dict[str, str]]] = None,
+    ver_custos: bool = False,
+    ver_laudo_completo: bool = False,
 ) -> Dict[str, Any]:
-    """Executa o agente investigativo com suporte a RAG, MCP e Templates Padronizados."""
+    """Executa o agente investigativo com suporte a RAG, MCP e Templates Padronizados.
+
+    `ver_custos`/`ver_laudo_completo`: decisão de autorização já tomada por
+    app.main (via has_permission()) — chegam aqui como booleano puro, repassados
+    às ferramentas MCP (docs/spec_rbac.md, "Campos sensíveis"). engine.py não
+    decide permissão, só encaminha a decisão já tomada."""
     docs = retrieve_products_context(query)
 
     if docs:
@@ -123,7 +130,9 @@ MENSAGEM / DEMANDA DO VENDEDOR OU CLIENTE:
         for tool_call in choice.message.tool_calls:
             fn_name = tool_call.function.name
             fn_args = json.loads(tool_call.function.arguments)
-            tool_result = execute_mcp_tool(fn_name, fn_args)
+            tool_result = execute_mcp_tool(
+                fn_name, fn_args, ver_custos=ver_custos, ver_laudo_completo=ver_laudo_completo
+            )
             messages.append(choice.message)
             messages.append({
                 "role": "tool",

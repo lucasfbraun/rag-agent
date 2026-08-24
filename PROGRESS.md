@@ -5,6 +5,32 @@ Ver visão geral de fases em [CRONOGRAMA.md](CRONOGRAMA.md).
 
 ---
 
+## 2026-08-24 — Sessão 22: Fase 5 (RBAC) — tarefa 6, restrição de campos sensíveis
+
+**Contexto/escopo real:** a análise já registrada em `docs/spec_rbac.md` (Etapa 1) tinha achado que hoje não existe nenhum campo de custo/fórmula estruturado em lugar nenhum do sistema — só texto livre em RAG. A própria spec já apontava o caminho implementável: proteger um campo de exemplo na camada MCP simulada, deixando pronto o gate de permissão para quando o ERP real (Fase 4) trouxer o campo de verdade.
+
+**Implementado:**
+- `backend/app/mcp/pu_mcp_server.py`: `consultar_catalogo_erp` ganhou `custo_industrial_kg` (campo de exemplo, comentado como simulado) atrás de um parâmetro `ver_custos: bool = False`; `consultar_normas_homologadas` passou a incluir `laudo_numero`/`laboratorio_emissor` só com `ver_laudo_completo: bool = False` — sem esse flag, retorna só o "resumo" (`resultado`, `produtos_certificados`). `execute_mcp_tool()` repassa os dois flags para a ferramenta certa; default `False` nos dois lugares — quem esquecer de passar o parâmetro nunca vaza campo sensível por acidente (fail-closed).
+- `backend/app/rag/engine.py`: `run_pu_matcher_agent()` ganhou `ver_custos`/`ver_laudo_completo` como parâmetros e repassa para `execute_mcp_tool()`. Não decide a permissão — só encaminha uma decisão já tomada (mesmo princípio de `require_permission()`: a lógica de "quem pode o quê" mora num único lugar).
+- `backend/app/main.py`: `/api/match` passou a extrair o `User` logado (`current_user: User = Depends(require_permission(Permission.VIEW_CATALOG))`, que já retornava o `User` desde a tarefa 4 — só não estava sendo usado) e calcular `has_permission(current_user, Permission.VIEW_COSTS)`/`has_permission(current_user, Permission.VIEW_HOMOLOGATION_FULL)` para repassar ao agente. `/api/match/stream` **não** recebeu o mesmo tratamento — comentário no código explica por quê: essa rota nunca passa `tools=` para o LiteLLM, então não invoca nenhuma ferramenta MCP hoje, não há campo sensível de MCP em risco nesse caminho ainda.
+- `backend/tests/test_sensitive_fields.py` (novo, 11 testes): camada MCP pura (com/sem cada flag, default fail-closed para os dois), e a ponte permissão→booleano em `/api/match` com usuário real (Vendedor → ambos `False`; Gestor → ambos `True`; Técnico → `ver_laudo_completo=True` mas `ver_custos=False`, confirmando a pendência #1 da spec resolvida como negada por padrão).
+
+**Testes:** 67/67 no total (56 anteriores + 11 novos).
+
+**Code review (skill `code-review`, 2 eixos, rodado sobre o diff staged vs. `HEAD`):**
+- **Standards:** nenhum achado bloqueante. Um ponto real e corrigido: `test_sensitive_fields.py` criava um `TestClient(app)` extra dentro de `_token_for()` mesmo já recebendo o fixture `client` — corrigido, `_token_for()` passou a receber `client` como parâmetro e reusar a mesma instância. Demais pontos levantados foram julgamento documentado, não corrigidos: (1) `ver_custos`/`ver_laudo_completo` viajam juntos como dois booleanos por três assinaturas — Data Clump reconhecido no próprio comentário do código como troca deliberada (manter engine/MCP sem conhecer `Permission`); (2) pequena duplicação de forma entre as duas funções `consultar_*` (só 2 instâncias, não extraído ainda); (3) o campo `custo_industrial_kg` é Speculative Generality no sentido estrito — protege um campo que ainda não existe de verdade — mas é exatamente o caminho que a spec pediu para viabilizar teste hoje.
+- **Spec:** **zero achados.** Confirmado: permissões corretas (`VIEW_COSTS`/`VIEW_HOMOLOGATION_FULL`) checadas para os papéis certos batendo com `ROLE_PERMISSIONS`; defaults fail-closed em toda a cadeia; nenhuma tentativa de "resolver" a lacuna do RAG não estruturado via instrução de prompt (verificado: nenhum texto novo em `AGENT_SYSTEM_PROMPT`/prompts de `engine.py`); a interpretação de "Sumarizado" (quais campos ficam de fora) está documentada como decisão de implementação, não apresentada como se fosse literal da proposta.
+
+**Decisões técnicas importantes:**
+1. A permissão em si nunca é decidida fora de `app/main.py`/`has_permission()` — `engine.py` e `pu_mcp_server.py` só recebem o resultado já calculado, como booleano puro (mesmo padrão de centralização das tarefas 4-5, aplicado agora também aos parâmetros de dado, não só ao gate HTTP).
+2. `/api/match/stream` deliberadamente não protegido do mesmo jeito — não é lacuna escondida, é ausência real de superfície de risco hoje (a rota não chama ferramenta MCP nenhuma). Fica registrado: se streaming ganhar tool-calling no futuro, replicar o mesmo padrão.
+
+**Pendência que continua real, não resolvida por esta tarefa:** conteúdo RAG não estruturado (os 11.273 trechos já indexados no Qdrant) não tem metadado de "isto é custo/fórmula" — filtrar por perfil antes de montar o contexto do LLM exigiria um campo estruturado desde a ingestão, que não existe. Registrado em `docs/spec_rbac.md` desde a Etapa 1, reconfirmado aqui como não resolvido.
+
+**Próximo item do cronograma:** tarefa 7 — Administração/provisionamento (Admin TI cria/edita usuário via API, hoje só existe via script/CLI direto no banco).
+
+---
+
 ## 2026-08-24 — Sessão 21: Fase 5 (RBAC) — frontend, tela de login (fora da numeração das 9 tarefas)
 
 **Contexto:** a Sessão 20 (tarefa 5) deixou o frontend Streamlit quebrado — `frontend/app.py` nunca enviava `Authorization` header, então toda pergunta pela tela passou a falhar com 401 assim que a proteção dos endpoints entrou em vigor. Perguntado se preferia seguir pra tarefa 6 (campos sensíveis) ou corrigir o frontend primeiro, o usuário escolheu explicitamente **"Login no frontend primeiro"**.
