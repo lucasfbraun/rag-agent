@@ -10,9 +10,10 @@ from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
 from app.db import get_session
-from app.models import Role, User, UserStatus
+from app.models import User
 from app.auth.token import create_access_token
 from app.auth.dependencies import get_current_user
+from app.auth.schemas import UsuarioResponse
 from app.auth.user_service import (
     authenticate,
     AutenticacaoInvalidaError,
@@ -30,23 +31,6 @@ class LoginRequest(BaseModel):
 class LoginResponse(BaseModel):
     access_token: str
     token_type: str = "bearer"
-
-
-class UsuarioResponse(BaseModel):
-    """Nunca inclui password_hash — resposta explícita, não o model do banco cru."""
-    id: str
-    username: str
-    nome: str
-    email: str
-    perfil: Role
-    status: UserStatus
-
-    @classmethod
-    def from_user(cls, user: User) -> "UsuarioResponse":
-        return cls(
-            id=str(user.id), username=user.username, nome=user.nome,
-            email=user.email, perfil=user.perfil, status=user.status,
-        )
 
 
 @router.post("/login", response_model=LoginResponse)

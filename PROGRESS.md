@@ -5,6 +5,32 @@ Ver visão geral de fases em [CRONOGRAMA.md](CRONOGRAMA.md).
 
 ---
 
+## 2026-08-24 — Sessão 23: Fase 5 (RBAC) — tarefa 7, administração/provisionamento de usuários
+
+**Contexto:** até esta tarefa, a única forma de provisionar um usuário era um script/CLI batendo direto no banco (foi assim que o admin real, `lucas.braun`, foi criado — Sessão 16-19). `user_service.py` já tinha toda a lógica de negócio pronta desde a tarefa 2 (create/list/get/update/set_password/deactivate); faltava só expor via HTTP.
+
+**Implementado:**
+- `backend/app/auth/admin_router.py` (novo): 6 rotas em `/api/auth/users`, todas atrás de `Permission.MANAGE_USERS` (só Admin TI, conforme a matriz e a pendência #3 de `docs/spec_rbac.md` já resolvida como "só Admin TI, até segunda ordem"): `POST` (criar), `GET` (listar), `GET /{id}` (obter), `PATCH /{id}` (editar nome/email/perfil), `POST /{id}/password` (redefinir senha) e `POST /{id}/deactivate` ("excluir" = desativar, nunca apagar a linha — mesmo princípio de `user_service.deactivate_user` desde a tarefa 2). O router só traduz as exceções de domínio já existentes (`UsuarioJaExisteError`→409, `UsuarioNaoEncontradoError`→404, `SenhaFracaError`→400) para HTTP; toda a lógica de negócio continua em `user_service.py`, sem duplicação.
+- `backend/app/auth/schemas.py` (novo): `UsuarioResponse` extraído de `router.py` (onde já existia desde a tarefa 3, usado por `GET /me`) para um módulo compartilhado — tanto `/me` quanto os endpoints de admin precisam da mesma forma de resposta, que nunca inclui `password_hash`.
+- **Guarda extra, decisão de engenharia desta tarefa, não um requisito de negócio documentado:** ninguém pode desativar a própria conta via `POST /{id}/deactivate`. Hoje só existe um Admin TI real — sem essa guarda, um clique errado travaria a administração inteira do sistema sem caminho de recuperação a não ser acesso direto ao banco. Documentado explicitamente no código como decisão própria, não como algo pedido.
+- `backend/tests/test_admin_users.py` (novo, 14 testes): sem token (401), com token mas sem `MANAGE_USERS` — Vendedor (403), fluxo completo de Admin TI (criar→listar→obter→editar→redefinir senha→confirmar login com a senha nova→desativar→confirmar que login para de funcionar), usuário inexistente em obter/editar/desativar (404), username duplicado (409), senha fraca (400, e confirma que nada foi persistido), e a guarda de autodesativação (400).
+
+**Testes:** 81/81 no total (67 anteriores + 14 novos).
+
+**Code review (skill `code-review`, 2 eixos, rodado sobre o diff staged vs. `HEAD`):**
+- **Standards:** 2 achados reais, julgamento (não bloqueantes), ambos corrigidos por decisão própria após o review: (1) toda rota exceto a de desativação recebia `_current_user` como parâmetro só pelo gate de permissão, nunca usado — divergência do padrão já estabelecido em `main.py` (`dependencies=[Depends(require_permission(...))]` quando o usuário não é necessário), justificada no código como preparação para auditoria futura — Speculative Generality reconhecida pelo próprio review. Corrigido: as 5 rotas que não precisam do usuário voltaram para `dependencies=[...]`, só a de desativação (que precisa comparar `user_id == current_user.id`) mantém o parâmetro. (2) o mesmo bloco `try/commit/except/rollback` se repetia em 4 rotas — extraído `_commit_traduzindo_erros()` (context manager) como único lugar que traduz erro de domínio pra status HTTP, mesmo princípio de centralização já usado no resto da fase (`has_permission()`, `require_permission()`). **Achado técnico à parte, do meu próprio código durante a correção:** tentei inicialmente aplicar `dependencies=[Depends(require_permission(...))]` no nível do `APIRouter` inteiro E manter o parâmetro na rota de desativação — percebi que isso executaria `get_current_user()` duas vezes por request nessa rota (cada `Depends(require_permission(...))` é uma closure nova, o cache de dependency do FastAPI não deduplica por equivalência funcional). Corrigido antes de ir pro commit: permissão declarada por rota, não no router inteiro.
+- **Spec:** **zero achados.** Confirmado: nenhum "excluir" de verdade (`session.delete()`) em lugar nenhum — só `deactivate_user`; `MANAGE_USERS` só para Admin TI, batendo com `ROLE_PERMISSIONS`; `password_hash` nunca aparece em nenhuma resposta; os dois itens além do "cria/edita" literal (redefinir senha, guarda de autodesativação) são companheiros razoáveis de uma administração de verdade, e o código já rotula honestamente qual deles é decisão de engenharia própria, não requisito de negócio.
+
+**Decisões técnicas importantes:**
+1. `admin_router.py` só traduz exceção→HTTP e chama `session.commit()`/`session.rollback()` — nenhuma regra de negócio nova entra no router, tudo continua em `user_service.py` (mesmo princípio das tarefas anteriores: lógica de autorização/negócio centralizada, HTTP só traduz).
+2. Reativar um usuário desativado **não** foi implementado — não existe `activate_user()` em `user_service.py`, e a tarefa 7 pede literalmente "cria/edita", não reativação. Fica como possível pendência futura, não inventada aqui.
+
+**Pendência que continua real:** as mesmas de sessões anteriores — rate limiting do login, 2 pendências funcionais restantes em `docs/spec_rbac.md` (fórmulas, e o que "Opcional" significa pra Técnico ver custos), lacuna de campos sensíveis no RAG não estruturado.
+
+**Próximo item do cronograma:** tarefa 8 — Testes adicionais (auth, autorização, campos sensíveis). Boa parte já está coberta organicamente pelas 81 tests acumuladas ao longo das tarefas 1-7 — vale revisar com o usuário se ainda falta algo específico antes de tratar como concluída, ou se essa tarefa já está de fato coberta.
+
+---
+
 ## 2026-08-24 — Sessão 22: Fase 5 (RBAC) — tarefa 6, restrição de campos sensíveis
 
 **Contexto/escopo real:** a análise já registrada em `docs/spec_rbac.md` (Etapa 1) tinha achado que hoje não existe nenhum campo de custo/fórmula estruturado em lugar nenhum do sistema — só texto livre em RAG. A própria spec já apontava o caminho implementável: proteger um campo de exemplo na camada MCP simulada, deixando pronto o gate de permissão para quando o ERP real (Fase 4) trouxer o campo de verdade.
