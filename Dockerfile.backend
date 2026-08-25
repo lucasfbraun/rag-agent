@@ -14,4 +14,5 @@ COPY ./backend /app/backend
 # PYTHONPATH aponta para /app/backend para que "from app.xxx" funcione diretamente
 ENV PYTHONPATH=/app/backend
 
+ENTRYPOINT ["python", "-m", "app.startup"]
 CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000"]
