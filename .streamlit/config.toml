@@ -1,0 +1,16 @@
+# Tema aplicado a partir de IDENTIDADE_VISUAL.md (paleta FIDC/Grupo Flexível).
+# Streamlit não suporta Tailwind — isto é o equivalente nativo de
+# tailwind.config.ts para os widgets prontos (botões, inputs, sliders etc.).
+# O resto (cards, tipografia Roboto) é aplicado via CSS injetado em
+# frontend/app.py, porque o [theme] do Streamlit não cobre esses elementos.
+
+[server]
+# Habilita servir frontend/static/* em /app/static/* — usado pelo manifest.json
+# e pelo ícone do PWA (ver frontend/static/).
+enableStaticServing = true
+
+[theme]
+primaryColor = "#0F7C70"            # brand-teal — botões principais
+backgroundColor = "#F0F4F8"          # brand-gray — fundo do app
+secondaryBackgroundColor = "#FFFFFF" # fundo de widgets/sidebar
+textColor = "#2D3A4A"                # brand-text

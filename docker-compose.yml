@@ -75,8 +75,8 @@ services:
     container_name: pu_matcher_frontend
     restart: always
     env_file: .env
-    ports:
-      - "8501:8501"
+    # Sem "ports": só o proxy (serviço 5) fica exposto ao host agora — ver
+    # comentário lá embaixo sobre por que o Streamlit não pode ser a borda.
     depends_on:
       backend:
         condition: service_healthy
@@ -86,3 +86,25 @@ services:
       timeout: 10s
       retries: 5
       start_period: 30s
+
+  # 5. Proxy reverso (Caddy) — única borda exposta ao host na porta 8501.
+  # Existe só pelo Service Worker do PWA (precisa ser servido em "/", e o
+  # Streamlit só serve estático em "/app/static/*"). Ver proxy/Caddyfile.
+  proxy:
+    image: caddy:2-alpine
+    container_name: pu_matcher_proxy
+    restart: always
+    ports:
+      - "8501:80"
+    volumes:
+      - ./proxy/Caddyfile:/etc/caddy/Caddyfile:ro
+      - ./frontend/static:/srv/pwa:ro
+    depends_on:
+      frontend:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "wget", "--spider", "-q", "http://localhost:80/service-worker.js"]
+      interval: 20s
+      timeout: 10s
+      retries: 5
+      start_period: 15s

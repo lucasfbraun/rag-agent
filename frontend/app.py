@@ -1,7 +1,10 @@
 import streamlit as st
+import streamlit.components.v1 as components
 import requests
 import json
 import os
+
+STATIC_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "static")
 
 API_BASE = "http://backend:8000"
 # Modo local: se rodar fora do Docker, usa localhost
@@ -19,6 +22,206 @@ st.set_page_config(
     page_icon="🎯",
     layout="wide"
 )
+
+
+# ---------------------------------------------------------------------------
+# Identidade visual (docs/../IDENTIDADE_VISUAL.md — paleta FIDC/Grupo Flexível)
+#
+# Streamlit não é Tailwind: as cores dos widgets prontos (botões, inputs)
+# vêm do [theme] em .streamlit/config.toml (equivalente ao tailwind.config.ts
+# do projeto de origem); o que sobra — tipografia Roboto e o estilo de card
+# ("bg-white rounded-lg shadow-sm border" no guia) — não tem hook nativo no
+# Streamlit, por isso é CSS injetado aqui.
+# ---------------------------------------------------------------------------
+def _inject_brand_css():
+    st.markdown(
+        """
+        <style>
+        @import url('https://fonts.googleapis.com/css2?family=Roboto:wght@300;400;500;700&display=swap');
+
+        /* Só no .stApp, sem "*" e sem !important: font-family é herdado por
+        padrão, então isso já cobre todo texto comum via cascata. Um seletor
+        universal com !important sobrescreveria também as fontes de ícone
+        (olho da senha, menu hamburguer, setas) que o Streamlit/BaseWeb
+        aplicam via font-family própria — resultado: ícone vira texto cru
+        ("visibility", "menu") em vez do glifo. Manter simples aqui é o que
+        deixa os ícones intactos. */
+        .stApp {
+            font-family: 'Roboto', 'Segoe UI', Arial, sans-serif;
+        }
+        </style>
+        """,
+        unsafe_allow_html=True,
+    )
+
+
+_inject_brand_css()
+
+
+# ---------------------------------------------------------------------------
+# Card de instalação do PWA — só aparece na tela de login (ver bloco abaixo).
+#
+# Por que um componente HTML (iframe) e não st.markdown: precisamos rodar
+# JavaScript de verdade (manifest, Service Worker, evento beforeinstallprompt),
+# e st.markdown(unsafe_allow_html=True) não executa <script>. O iframe de
+# components.v1.html roda com acesso same-origin ao app pai (documentado na
+# própria API do Streamlit), então o script alcança window.parent para
+# registrar o Service Worker no escopo "/" da aplicação real — não do iframe.
+#
+# O Service Worker raiz só existe por trás do proxy Caddy (proxy/Caddyfile);
+# sem ele, o Chrome nunca dispara beforeinstallprompt e o botão fica
+# permanentemente desabilitado com uma dica em vez de travar mudo.
+# ---------------------------------------------------------------------------
+def _render_pwa_install_card():
+    components.html(
+        """
+        <div id="pu-install-card" class="pu-install-card">
+          <div class="pu-install-text">
+            <strong>📲 Instale o PU Matcher</strong>
+            <div id="pu-install-hint">Verificando disponibilidade neste navegador…</div>
+          </div>
+          <button id="pu-install-btn" disabled>Verificando…</button>
+        </div>
+        <style>
+          body { margin: 0; }
+          .pu-install-card {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            gap: 14px;
+            background: #FFFFFF;
+            border: 1px solid #DDE3EA;
+            border-radius: 10px;
+            box-shadow: 0 1px 2px rgba(45,58,74,0.06);
+            padding: 14px 18px;
+            font-family: 'Roboto','Segoe UI',Arial,sans-serif;
+            color: #2D3A4A;
+          }
+          .pu-install-text strong { font-size: 14px; }
+          #pu-install-hint { font-size: 12.5px; color: #7A8FA6; margin-top: 2px; }
+          #pu-install-btn {
+            font-family: inherit;
+            font-size: 13px;
+            font-weight: 500;
+            color: #FFFFFF;
+            background: #0F7C70;
+            border: none;
+            border-radius: 6px;
+            padding: 8px 14px;
+            cursor: pointer;
+            white-space: nowrap;
+          }
+          #pu-install-btn:hover:not(:disabled) { background: #14534D; }
+          #pu-install-btn:disabled { background: #B7C2CC; cursor: default; }
+        </style>
+        <script>
+        (function () {
+          var win = window.parent;
+          if (!win || !win.document) { return; }
+
+          // Estado compartilhado entre reruns do Streamlit — cada rerun recria
+          // este iframe do zero, mas o Service Worker/listener só deve ser
+          // registrado uma vez por carregamento real da página.
+          if (!win.__puInstallState) {
+            win.__puInstallState = { event: null, installed: false };
+          }
+
+          function notify() {
+            try { win.dispatchEvent(new Event("pu-install-state-changed")); }
+            catch (e) {}
+          }
+
+          if (!win.__puPwaInitialized) {
+            win.__puPwaInitialized = true;
+
+            try {
+              var head = win.document.head;
+              if (!win.document.getElementById("pu-manifest-link")) {
+                var link = win.document.createElement("link");
+                link.id = "pu-manifest-link";
+                link.rel = "manifest";
+                link.href = "/app/static/manifest.json";
+                head.appendChild(link);
+              }
+              if (!win.document.getElementById("pu-theme-color-meta")) {
+                var meta = win.document.createElement("meta");
+                meta.id = "pu-theme-color-meta";
+                meta.name = "theme-color";
+                meta.content = "#0C3B38";
+                head.appendChild(meta);
+              }
+            } catch (e) {}
+
+            try {
+              if (win.navigator.serviceWorker) {
+                win.navigator.serviceWorker
+                  .register("/service-worker.js", { scope: "/" })
+                  .catch(function () {});
+              }
+            } catch (e) {}
+
+            try {
+              win.addEventListener("beforeinstallprompt", function (e) {
+                e.preventDefault();
+                win.__puInstallState.event = e;
+                notify();
+              });
+              win.addEventListener("appinstalled", function () {
+                win.__puInstallState.installed = true;
+                win.__puInstallState.event = null;
+                notify();
+              });
+            } catch (e) {}
+          }
+
+          function render() {
+            var card = document.getElementById("pu-install-card");
+            var btn = document.getElementById("pu-install-btn");
+            var hint = document.getElementById("pu-install-hint");
+            if (!card || !btn || !hint) { return; }
+
+            var standalone = false;
+            try { standalone = win.matchMedia("(display-mode: standalone)").matches; }
+            catch (e) {}
+
+            var state = win.__puInstallState;
+            if (state.installed || standalone) {
+              card.style.display = "none";
+              return;
+            }
+            card.style.display = "flex";
+            if (state.event) {
+              btn.disabled = false;
+              btn.textContent = "Instalar aplicativo";
+              hint.textContent = "Acesso rápido direto da tela inicial, sem abrir o navegador.";
+            } else {
+              btn.disabled = true;
+              btn.textContent = "Instalação indisponível";
+              hint.textContent = "Disponível em Chrome/Edge (computador ou Android) quando o app atender aos critérios do navegador.";
+            }
+          }
+
+          var btnEl = document.getElementById("pu-install-btn");
+          if (btnEl) {
+            btnEl.addEventListener("click", function () {
+              var state = win.__puInstallState;
+              if (!state.event) { return; }
+              state.event.prompt();
+              state.event.userChoice.finally(function () {
+                state.event = null;
+                notify();
+              });
+            });
+          }
+
+          win.addEventListener("pu-install-state-changed", render);
+          render();
+        })();
+        </script>
+        """,
+        height=84,
+    )
+
 
 # ---------------------------------------------------------------------------
 # Estado da Sessão
@@ -55,39 +258,57 @@ def _fazer_logout():
 # companhia; sem isto o frontend simplesmente parou de funcionar.
 # ---------------------------------------------------------------------------
 if not st.session_state.access_token:
-    st.markdown("### 🎯 PU Matcher")
-    st.caption("Consultor Técnico de Vendas & Match de Produtos de Poliuretano — faça login para continuar.")
-    with st.form("login_form"):
-        username = st.text_input("Usuário")
-        password = st.text_input("Senha", type="password")
-        submitted = st.form_submit_button("Entrar", use_container_width=True)
-        if submitted:
-            try:
-                login_resp = requests.post(
-                    LOGIN_URL, json={"username": username, "password": password}, timeout=10
+    # Card centralizado com componentes nativos do Streamlit (st.container
+    # border=True + st.columns), não HTML/CSS solto: um <div> aberto via
+    # st.markdown não "abraça" os widgets que vêm depois — cada st.xxx é um
+    # elemento irmão, não filho, então não dava pra fazer um card de verdade
+    # dessa forma (essa lacuna, mais o !important genérico que quebrou os
+    # ícones do BaseWeb, foi o motivo da tela ter ficado feia na 1ª tentativa).
+    # st.columns colapsa para largura cheia em telas estreitas (comportamento
+    # nativo do grid do Streamlit) — é o que dá a responsividade no celular
+    # sem precisar de media query escrita à mão.
+    _, login_col, _ = st.columns([1, 1.3, 1])
+    with login_col:
+        with st.container(border=True):
+            st.image(os.path.join(STATIC_DIR, "icon.svg"), width=72)
+            st.markdown("## PU Matcher")
+            st.caption("Consultor Técnico de Vendas & Match de Produtos de Poliuretano")
+            _render_pwa_install_card()
+            with st.form("login_form", border=False):
+                username = st.text_input("Usuário")
+                password = st.text_input("Senha", type="password")
+                submitted = st.form_submit_button(
+                    "Entrar", type="primary", use_container_width=True
                 )
-                if login_resp.status_code == 200:
-                    token = login_resp.json()["access_token"]
-                    me_resp = requests.get(ME_URL, headers=_bearer(token), timeout=10)
-                    st.session_state.access_token = token
-                    st.session_state.current_user = me_resp.json() if me_resp.status_code == 200 else None
-                    st.rerun()
-                else:
-                    st.error("Usuário ou senha incorretos.")
-            except requests.exceptions.ConnectionError:
-                st.error(
-                    "❌ Não foi possível conectar ao backend. "
-                    "Verifique se os containers estão rodando com `docker-compose up -d`."
-                )
-            except Exception as e:
-                st.error(f"Erro inesperado: {e}")
+                if submitted:
+                    try:
+                        login_resp = requests.post(
+                            LOGIN_URL, json={"username": username, "password": password}, timeout=10
+                        )
+                        if login_resp.status_code == 200:
+                            token = login_resp.json()["access_token"]
+                            me_resp = requests.get(ME_URL, headers=_bearer(token), timeout=10)
+                            st.session_state.access_token = token
+                            st.session_state.current_user = me_resp.json() if me_resp.status_code == 200 else None
+                            st.rerun()
+                        else:
+                            st.error("Usuário ou senha incorretos.")
+                    except requests.exceptions.ConnectionError:
+                        st.error(
+                            "❌ Não foi possível conectar ao backend. "
+                            "Verifique se os containers estão rodando com `docker-compose up -d`."
+                        )
+                    except Exception as e:
+                        st.error(f"Erro inesperado: {e}")
     st.stop()
 
 # ---------------------------------------------------------------------------
 # Sidebar
 # ---------------------------------------------------------------------------
 with st.sidebar:
-    st.image("https://cdn-icons-png.flaticon.com/512/3081/3081559.png", width=60)
+    # Ícone placeholder na paleta da marca (verde-petróleo + monograma "PU"),
+    # até termos o logo.png real do Grupo Flexível — ver IDENTIDADE_VISUAL.md.
+    st.image(os.path.join(STATIC_DIR, "icon.svg"), width=60)
     st.title("PU Matcher")
     st.caption("Agente Investigativo para Match de Produtos de Poliuretano")
 

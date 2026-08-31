@@ -6,6 +6,10 @@ COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
 COPY ./frontend /app/frontend
+# Sem isto, [server] enableStaticServing (.streamlit/config.toml) nunca é
+# lido dentro do container — Streamlit resolve config relativo ao CWD onde
+# "streamlit run" foi chamado (/app), não à pasta do script.
+COPY ./.streamlit /app/.streamlit
 
 EXPOSE 8501
 

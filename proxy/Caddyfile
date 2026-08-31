@@ -1,0 +1,24 @@
+# Proxy reverso do PU Matcher.
+#
+# Existe só por causa do Service Worker do PWA: o Chrome exige que o SW seja
+# servido em "/" (raiz) pra assumir escopo "/" e controlar a página principal
+# — sem isso o navegador nunca considera o app instalável (beforeinstallprompt
+# não dispara). O Streamlit só serve estático em "/app/static/*", nunca em "/",
+# então precisa de algo na frente dele servindo esse um arquivo na raiz.
+#
+# Tudo o mais (a UI do Streamlit, WebSocket de _stcore/stream, /app/static/*)
+# passa direto pro container do frontend — nenhuma rota de negócio muda.
+:80 {
+	# Service Worker: precisa estar em "/" com o Content-Type certo.
+	handle /service-worker.js {
+		root * /srv/pwa
+		header Content-Type "application/javascript; charset=utf-8"
+		header Cache-Control "no-cache"
+		file_server
+	}
+
+	# Tudo o resto (UI, WebSocket, /app/static/*) vai pro Streamlit sem alteração.
+	handle {
+		reverse_proxy frontend:8501
+	}
+}

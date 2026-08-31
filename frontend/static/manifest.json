@@ -1,0 +1,15 @@
+{
+  "name": "PU Matcher — Consultor Técnico Grupo Flexível",
+  "short_name": "PU Matcher",
+  "description": "Consultor técnico de vendas e match de produtos de poliuretano — Grupo Flexível.",
+  "start_url": "/",
+  "scope": "/",
+  "display": "standalone",
+  "orientation": "any",
+  "background_color": "#F0F4F8",
+  "theme_color": "#0C3B38",
+  "icons": [
+    { "src": "/app/static/icon.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "any" },
+    { "src": "/app/static/icon.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "maskable" }
+  ]
+}
