@@ -13,11 +13,28 @@ sys.stdout.reconfigure(encoding="utf-8")
 from dotenv import load_dotenv
 load_dotenv(os.path.join(os.path.dirname(__file__), ".env"))
 
+# QDRANT_HOST no .env e "qdrant" (nome do serviço, só resolvível de DENTRO
+# da rede do Docker Compose, pelo container backend). Este script roda no
+# host (precisa alcançar a pasta de rede \\10.1.1.205\...), então precisa
+# do Qdrant pela porta publicada em localhost — sem isto, getaddrinfo falha
+# (achado ao investigar por que --full parou de funcionar do host, Sessão 30).
+os.environ["QDRANT_HOST"] = "localhost"
+
+# Mesmo problema com o Ollama: .env tem OLLAMA_API_BASE apontando pra
+# "host.docker.internal" (nome especial que só o Docker resolve, pra um
+# container alcançar o host) — rodando no host, o Ollama está em localhost.
+os.environ["OLLAMA_API_BASE"] = "http://localhost:11434"
+
 # Garante que o modulo app seja encontrado
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "backend"))
 
-ACERVO_BASE = r"\\10.1.1.205\flexivel\GRUPOS\Qualidade\Documentação de Produto"
-ACERVO_TESTE = r"\\10.1.1.205\flexivel\GRUPOS\Qualidade\Documentação de Produto\FLEXX® AG"
+# Barra normal, não invertida: `\\10.1.1.205\...` falha em `os.listdir`/`glob`
+# quando este script roda a partir de um shell estilo Git Bash/MSYS (a
+# tradução de path do MSYS mexe na string antes de chegar no Python) — achado
+# ao tentar recuperar o acervo na Sessão 30. Barra normal funciona igual nos
+# dois casos (Windows aceita as duas), sem esse problema.
+ACERVO_BASE = "//10.1.1.205/flexivel/GRUPOS/Qualidade/Documentação de Produto"
+ACERVO_TESTE = "//10.1.1.205/flexivel/GRUPOS/Qualidade/Documentação de Produto/FLEXX® AG"
 
 from app.rag.ingestion import ingest_catalog_directory
 

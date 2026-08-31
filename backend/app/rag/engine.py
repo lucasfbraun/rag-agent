@@ -33,40 +33,77 @@ COMPORTAMENTO INVESTIGATIVO E OPINATIVO (MUITO IMPORTANTE):
    - Seja opinativo: se o cliente pedir algo incompatível (ex: densidade baixíssima com ultra resiliência sem antichama), alerte e sugira a melhor prática de mercado.
 """
 
+class RetrievalIndisponivelError(Exception):
+    """Levantado quando o Qdrant/embedding falha de verdade (conexão, timeout,
+    erro na busca) — ver AUD-003 em docs/auditoria_2026-08-25.md.
+
+    Não confundir com coleção ainda não ingerida: esse é um estado normal do
+    sistema (ninguém rodou a ingestão ainda) e continua retornando lista
+    vazia. Só uma falha real levanta esta exceção, para que quem chama decida
+    explicitamente o que fazer (503 no endpoint, evento de erro no streaming)
+    em vez do agente responder de "conhecimento geral" achando que o catálogo
+    só está vazio.
+    """
+
+
 def _get_qdrant_client():
     """Instancia o QdrantClient de forma lazy (não falha no import-time)."""
     from qdrant_client import QdrantClient
     return QdrantClient(host=QDRANT_HOST, port=QDRANT_PORT, timeout=10)
 
-def retrieve_products_context(query: str, top_k: int = 6) -> List[Dict[str, Any]]:
+def retrieve_products_context(
+    query: str, top_k: int = 6, incluir_sensivel: bool = False
+) -> List[Dict[str, Any]]:
     """
     Busca trechos de TDS e catálogos no banco vetorial Qdrant.
-    Retorna lista vazia (com aviso) se a coleção não existir ou estiver vazia.
+
+    Retorna lista vazia se a coleção simplesmente ainda não foi ingerida
+    (estado normal). Levanta RetrievalIndisponivelError se o Qdrant ou o
+    embedding falharem de verdade — o chamador decide o que fazer, não é mais
+    engolido em silêncio aqui.
+
+    `incluir_sensivel` (AUD-002, ticket 6): default False, fail-closed — quem
+    esquecer de passar o parâmetro não vaza chunk classificado como sensível
+    (custo/fórmula) por acidente, mesma disciplina já usada no MCP estruturado
+    (tarefa 6 da Fase 5). Chunks sem o campo `sensivel` no payload (todo o
+    acervo indexado antes desta sessão) não são afetados pelo filtro — a
+    classificação só vale pra ingestão nova até uma reingestão do acervo real.
     """
     try:
         client = _get_qdrant_client()
-
         collections = client.get_collections().collections
-        if not any(c.name == COLLECTION_NAME for c in collections):
-            logger.warning(
-                "Coleção '%s' não encontrada no Qdrant. "
-                "Execute a ingestão de documentos antes de consultar.",
-                COLLECTION_NAME
-            )
-            return []
+    except Exception as e:
+        logger.error("Erro ao conectar no Qdrant: %s", e)
+        raise RetrievalIndisponivelError(str(e)) from e
 
+    if not any(c.name == COLLECTION_NAME for c in collections):
+        logger.warning(
+            "Coleção '%s' não encontrada no Qdrant. "
+            "Execute a ingestão de documentos antes de consultar.",
+            COLLECTION_NAME
+        )
+        return []
+
+    query_filter = None
+    if not incluir_sensivel:
+        from qdrant_client.http import models as qmodels
+        query_filter = qmodels.Filter(
+            must_not=[qmodels.FieldCondition(key="sensivel", match=qmodels.MatchValue(value=True))]
+        )
+
+    try:
         query_vector = get_embedding(query, EMBEDDING_MODEL)
-
         results = client.search(
             collection_name=COLLECTION_NAME,
             query_vector=query_vector,
-            limit=top_k
+            limit=top_k,
+            query_filter=query_filter
         )
-        return [hit.payload for hit in results]
-
     except Exception as e:
         logger.error("Erro ao buscar no Qdrant: %s", e)
-        return []
+        raise RetrievalIndisponivelError(str(e)) from e
+
+    return [hit.payload for hit in results]
 
 def run_pu_matcher_agent(
     query: str,
@@ -80,9 +117,11 @@ def run_pu_matcher_agent(
 
     `ver_custos`/`ver_laudo_completo`: decisão de autorização já tomada por
     app.main (via has_permission()) — chegam aqui como booleano puro, repassados
-    às ferramentas MCP (docs/spec_rbac.md, "Campos sensíveis"). engine.py não
+    às ferramentas MCP (docs/spec_rbac.md, "Campos sensíveis") e também ao RAG
+    (`incluir_sensivel`, AUD-002/ticket 6 — reaproveita VIEW_COSTS pra
+    custo/fórmula, ver docs/spec_rbac.md "Pendências" item 2). engine.py não
     decide permissão, só encaminha a decisão já tomada."""
-    docs = retrieve_products_context(query)
+    docs = retrieve_products_context(query, incluir_sensivel=ver_custos)
 
     if docs:
         context_str = "\n\n---\n\n".join([
@@ -127,13 +166,29 @@ MENSAGEM / DEMANDA DO VENDEDOR OU CLIENTE:
     choice = response.choices[0]
 
     if choice.message.tool_calls:
+        # A mensagem assistant (com TODAS as tool_calls) entra UMA vez, antes
+        # do loop — não uma vez por tool_call (AUD-006: isso intercalava a
+        # mesma mensagem assistant repetida entre as respostas das tools,
+        # sequência inválida pro protocolo de tool calling com 2+ chamadas).
+        messages.append(choice.message)
         for tool_call in choice.message.tool_calls:
             fn_name = tool_call.function.name
-            fn_args = json.loads(tool_call.function.arguments)
+            try:
+                fn_args = json.loads(tool_call.function.arguments)
+            except json.JSONDecodeError as e:
+                logger.warning(
+                    "Argumentos inválidos da tool_call %s (%s): %s", tool_call.id, fn_name, e
+                )
+                messages.append({
+                    "role": "tool",
+                    "tool_call_id": tool_call.id,
+                    "name": fn_name,
+                    "content": json.dumps({"erro": "argumentos JSON inválidos, tente novamente"}),
+                })
+                continue
             tool_result = execute_mcp_tool(
                 fn_name, fn_args, ver_custos=ver_custos, ver_laudo_completo=ver_laudo_completo
             )
-            messages.append(choice.message)
             messages.append({
                 "role": "tool",
                 "tool_call_id": tool_call.id,
@@ -153,15 +208,32 @@ def stream_pu_matcher_agent(
     query: str,
     template_id: str = "proposta_tecnica_completa",
     model_name: str = DEFAULT_CHAT_MODEL,
-    history: Optional[List[Dict[str, str]]] = None
+    history: Optional[List[Dict[str, str]]] = None,
+    ver_custos: bool = False,
 ):
     """
     Versão streaming do agente: gera chunks de texto à medida que o LLM responde.
     Usa Server-Sent Events (SSE) — cada chunk é um JSON com campo 'delta' ou 'done'.
+
+    `ver_custos` (AUD-002, ticket 6): esta versão não chama ferramentas MCP,
+    mas SEMPRE faz retrieval do RAG — precisa da permissão pra não vazar chunk
+    sensível (custo/fórmula) igual `run_pu_matcher_agent`. Default False,
+    fail-closed. Antes desta sessão o streaming não recebia nenhuma permissão
+    porque não fazia sentido pro MCP (não chamado aqui) — mas isso nunca
+    cobriu o RAG, que sempre rodou nesta função.
     """
     import json as _json
 
-    docs = retrieve_products_context(query)
+    try:
+        docs = retrieve_products_context(query, incluir_sensivel=ver_custos)
+    except RetrievalIndisponivelError:
+        logger.error("Catálogo indisponível — abortando stream sem chamar o LLM.")
+        yield _json.dumps({
+            "type": "error",
+            "message": "Catálogo de produtos indisponível no momento. Tente novamente em instantes.",
+        }) + "\n"
+        yield _json.dumps({"type": "done"}) + "\n"
+        return
 
     if docs:
         context_str = "\n\n---\n\n".join([
@@ -210,7 +282,12 @@ MENSAGEM / DEMANDA DO VENDEDOR OU CLIENTE:
             if delta:
                 yield _json.dumps({"type": "delta", "content": delta}) + "\n"
     except Exception as e:
+        # Texto bruto da exceção fica só no log (AUD-011, ticket 10) — o
+        # cliente recebe uma mensagem genérica, nunca o detalhe interno.
         logger.error("Erro no streaming do agente: %s", e)
-        yield _json.dumps({"type": "error", "message": str(e)}) + "\n"
+        yield _json.dumps({
+            "type": "error",
+            "message": "Erro ao gerar a resposta. Tente novamente em instantes.",
+        }) + "\n"
     finally:
         yield _json.dumps({"type": "done"}) + "\n"

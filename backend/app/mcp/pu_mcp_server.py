@@ -12,6 +12,7 @@ em si (Permission.VIEW_COSTS / VIEW_HOMOLOGATION_FULL) é tomada na camada HTTP
 (app.main, via has_permission()) e chega até aqui só como booleano, para este módulo não
 precisar conhecer User/Role/Permission.
 """
+import json
 from typing import Dict, Any
 
 # Simulação de consulta ao ERP Corporativo (SAP / TOTVS / etc.)
@@ -88,9 +89,13 @@ def execute_mcp_tool(
 
     `ver_custos`/`ver_laudo_completo` vêm da camada de autorização (via engine.py,
     a partir de app.main) — default False, então quem esquecer de passar o
-    parâmetro nunca vaza campo sensível por acidente (fail-closed)."""
+    parâmetro nunca vaza campo sensível por acidente (fail-closed).
+
+    Retorna JSON válido (não `str(dict)`/repr Python — aspas simples,
+    `True`/`None` em vez de `true`/`null` — que é o que ia pro LLM antes,
+    fora do contrato usual de mensagem `role: tool`; ver AUD-006, ticket 5)."""
     if tool_name == "consultar_catalogo_erp":
-        return str(consultar_catalogo_erp(arguments.get("termo_busca", ""), ver_custos=ver_custos))
+        return json.dumps(consultar_catalogo_erp(arguments.get("termo_busca", ""), ver_custos=ver_custos))
     elif tool_name == "consultar_normas_homologadas":
-        return str(consultar_normas_homologadas(arguments.get("norma_requerida", ""), ver_laudo_completo=ver_laudo_completo))
-    return "Ferramenta não encontrada."
+        return json.dumps(consultar_normas_homologadas(arguments.get("norma_requerida", ""), ver_laudo_completo=ver_laudo_completo))
+    return json.dumps({"erro": "Ferramenta não encontrada."})
