@@ -19,6 +19,26 @@ VECTOR_SIZE = int(os.getenv("VECTOR_SIZE", "3072"))
 # Alias sempre-atual do Gemini — resistente a descontinuações de versão pontuais
 DEFAULT_CHAT_MODEL = "gemini/gemini-flash-latest"
 
+# Allowlist de modelos aceitos em MatchRequest.model_name (AUD-005, ticket 4
+# do plano de correção) — sem isso, o cliente podia mandar qualquer string de
+# modelo/provedor pro litellm.completion(), sem controle de custo/quota.
+# Espelha as opções do selectbox em frontend/app.py; duplicação conhecida,
+# mesma categoria de risco que já causou bugs de divergência neste projeto
+# (ver docstring do módulo) — não unificado agora porque o frontend roda num
+# processo Python separado, sem import de app.config.
+ALLOWED_CHAT_MODELS = frozenset({
+    "ollama/qwen2.5:3b",
+    "ollama/qwen2.5:7b",
+    "gemini/gemini-flash-latest",
+    "gemini/gemini-3.6-flash",
+    "gemini/gemini-pro-latest",
+    "gpt-4o",
+    "gpt-4o-mini",
+    "claude-sonnet-5",
+    "claude-haiku-4-5-20251001",
+    "groq/llama-3.3-70b-versatile",
+})
+
 # Banco relacional (Fase 5 — RBAC & Governança). Usuários/perfis, separado do Qdrant (vetorial).
 POSTGRES_HOST = os.getenv("POSTGRES_HOST", "localhost")
 POSTGRES_PORT = int(os.getenv("POSTGRES_PORT", 5432))

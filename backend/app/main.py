@@ -1,10 +1,13 @@
 from fastapi import Depends, FastAPI, HTTPException, BackgroundTasks
 from fastapi.responses import StreamingResponse
-from pydantic import BaseModel
-from typing import List, Optional
-from app.rag.engine import run_pu_matcher_agent, stream_pu_matcher_agent
+from pydantic import BaseModel, ConfigDict, Field, field_validator
+from typing import List, Literal, Optional
+from app.rag.engine import run_pu_matcher_agent, stream_pu_matcher_agent, RetrievalIndisponivelError
 from app.templates import TEMPLATES_DISPONIVEIS
-from app.config import QDRANT_HOST, QDRANT_PORT, COLLECTION_NAME, EMBEDDING_MODEL, DEFAULT_CHAT_MODEL
+from app.config import (
+    QDRANT_HOST, QDRANT_PORT, COLLECTION_NAME, EMBEDDING_MODEL,
+    DEFAULT_CHAT_MODEL, ALLOWED_CHAT_MODELS,
+)
 from app.auth.router import router as auth_router
 from app.auth.admin_router import router as admin_router
 from app.auth.permissions import Permission, has_permission, require_permission
@@ -26,11 +29,32 @@ app.include_router(admin_router)
 # Schemas
 # ---------------------------------------------------------------------------
 
+class HistoryMessage(BaseModel):
+    """Mensagem de histórico aceita em MatchRequest.history (AUD-005, ticket
+    4). `extra="forbid"` rejeita qualquer campo fora de role/content — sem
+    isso um cliente podia anexar chaves arbitrárias (ex: `name`) que alguns
+    provedores de LLM interpretam de formas não previstas aqui."""
+    model_config = ConfigDict(extra="forbid")
+
+    role: Literal["user", "assistant"]
+    content: str = Field(min_length=1, max_length=8000)
+
+
 class MatchRequest(BaseModel):
-    query: str
+    query: str = Field(min_length=1, max_length=8000)
     template_id: str = "proposta_tecnica_completa"
     model_name: str = DEFAULT_CHAT_MODEL
-    history: Optional[List[dict]] = []
+    history: Optional[List[HistoryMessage]] = []
+
+    @field_validator("model_name")
+    @classmethod
+    def _modelo_precisa_estar_na_allowlist(cls, value: str) -> str:
+        if value not in ALLOWED_CHAT_MODELS:
+            raise ValueError(
+                f"Modelo '{value}' não está na lista de modelos aprovados. "
+                f"Modelos disponíveis: {sorted(ALLOWED_CHAT_MODELS)}"
+            )
+        return value
 
 class IngestRequest(BaseModel):
     dir_path: str = "/app/data/raw_documents"
@@ -82,7 +106,9 @@ def health_detailed():
             }
 
     except Exception as e:
-        qdrant_status = f"offline ({e})"
+        # /api/health é público (AUD-011, ticket 10) — texto bruto da exceção
+        # (host, porta, detalhe de config) fica só no log, nunca na resposta.
+        qdrant_status = "offline"
         logger.warning("Qdrant inacessível no health check: %s", e)
 
     return {
@@ -90,6 +116,13 @@ def health_detailed():
         "qdrant": qdrant_status,
         "collection": collection_info
     }
+
+
+def _history_as_dicts(req: MatchRequest) -> list[dict]:
+    """engine.py monta `messages` do litellm esperando dicts {"role", "content"}
+    — MatchRequest.history chega como List[HistoryMessage] (validado, ticket 4),
+    então precisa virar dict de novo antes de entrar na conversa do LLM."""
+    return [m.model_dump() for m in (req.history or [])]
 
 
 @app.get("/api/templates", dependencies=[Depends(require_permission(Permission.SELECT_TEMPLATE))])
@@ -110,18 +143,31 @@ def match_product(req: MatchRequest, current_user: User = Depends(require_permis
             query=req.query,
             template_id=req.template_id,
             model_name=req.model_name,
-            history=req.history,
+            history=_history_as_dicts(req),
             ver_custos=has_permission(current_user, Permission.VIEW_COSTS),
             ver_laudo_completo=has_permission(current_user, Permission.VIEW_HOMOLOGATION_FULL),
         )
         return res
+    except RetrievalIndisponivelError as e:
+        logger.error("Catálogo indisponível em /api/match: %s", e)
+        raise HTTPException(
+            status_code=503,
+            detail="Catálogo de produtos indisponível no momento. Tente novamente em instantes.",
+        )
     except Exception as e:
+        # Texto bruto da exceção fica só no log (AUD-011, ticket 10) — pode
+        # conter detalhe interno (provedor, host, config) que não é pro cliente.
         logger.error("Erro no agente PU Matcher: %s", e, exc_info=True)
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(
+            status_code=500,
+            detail="Erro interno ao processar a solicitação. Tente novamente em instantes.",
+        )
 
 
-@app.post("/api/match/stream", dependencies=[Depends(require_permission(Permission.VIEW_CATALOG))])
-def match_product_stream(req: MatchRequest):
+@app.post("/api/match/stream")
+def match_product_stream(
+    req: MatchRequest, current_user: User = Depends(require_permission(Permission.VIEW_CATALOG))
+):
     """
     Versão streaming do agente (Server-Sent Events).
     Cada linha do response body é um objeto JSON com campos:
@@ -130,17 +176,19 @@ def match_product_stream(req: MatchRequest):
       - {"type": "done"}
       - {"type": "error", "message": "..."}
 
-    Não repassa ver_custos/ver_laudo_completo para stream_pu_matcher_agent porque
-    esta versão não chama ferramentas MCP hoje (tools= não é passado ao
-    litellm.completion aqui) — não há campo sensível de MCP em risco neste
-    caminho ainda. Se streaming ganhar tool-calling no futuro, replicar o mesmo
-    padrão de /api/match (ver has_permission() acima).
+    Repassa `ver_custos` pro RAG (AUD-002, ticket 6) — esta versão não chama
+    ferramentas MCP, mas SEMPRE faz retrieval do RAG, que também precisa de
+    permissão pra não vazar chunk classificado como sensível. Antes desta
+    sessão nada era repassado porque o motivo original (nenhum tool MCP
+    chamado aqui) nunca cobriu o RAG. Precisou trocar `dependencies=[...]`
+    por injeção real de `current_user`, igual `/api/match` já fazia.
     """
     generator = stream_pu_matcher_agent(
         query=req.query,
         template_id=req.template_id,
         model_name=req.model_name,
-        history=req.history
+        history=_history_as_dicts(req),
+        ver_custos=has_permission(current_user, Permission.VIEW_COSTS),
     )
     return StreamingResponse(
         generator,

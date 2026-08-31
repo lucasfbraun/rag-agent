@@ -28,3 +28,12 @@ def verify_password(plain_password: str, password_hash: str) -> bool:
     except ValueError:
         # Hash malformado/vazio (ex: usuário de origem LDAP sem password_hash) — sempre nega.
         return False
+
+
+# Hash fixo, gerado uma vez no import, sem senha real por trás. Usado por
+# authenticate() em user_service.py quando o username não existe, pra rodar
+# o mesmo custo de bcrypt (~100ms) que rodaria contra um hash de verdade —
+# sem isso, verify_password() só é chamado quando o username existe, e a
+# diferença de tempo de resposta vira um canal de enumeração de usuário
+# mesmo com a mensagem de erro sendo idêntica nos dois casos.
+DUMMY_PASSWORD_HASH = bcrypt.hashpw(b"pu-matcher-timing-safety-dummy", bcrypt.gensalt()).decode("utf-8")

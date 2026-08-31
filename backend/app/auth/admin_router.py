@@ -25,6 +25,7 @@ from app.auth.permissions import Permission, require_permission
 from app.auth.schemas import UsuarioResponse
 from app.auth.security import SenhaFracaError
 from app.auth.user_service import (
+    UltimoAdminError,
     UsuarioJaExisteError,
     UsuarioNaoEncontradoError,
     create_user,
@@ -52,6 +53,9 @@ def _commit_traduzindo_erros(session: Session):
         session.rollback()
         raise HTTPException(status.HTTP_404_NOT_FOUND, str(e))
     except UsuarioJaExisteError as e:
+        session.rollback()
+        raise HTTPException(status.HTTP_409_CONFLICT, str(e))
+    except UltimoAdminError as e:
         session.rollback()
         raise HTTPException(status.HTTP_409_CONFLICT, str(e))
     except SenhaFracaError as e:

@@ -13,6 +13,7 @@ from app.db import get_session
 from app.models import User
 from app.auth.token import create_access_token
 from app.auth.dependencies import get_current_user
+from app.auth.rate_limit import limite_excedido, limpar_tentativas, registrar_tentativa_falha
 from app.auth.schemas import UsuarioResponse
 from app.auth.user_service import (
     authenticate,
@@ -41,11 +42,22 @@ def login(req: LoginRequest, session: Session = Depends(get_session)):
     quais usernames são contas reais desativadas (achado do code review). A distinção
     entre AutenticacaoInvalidaError/UsuarioInativoError continua existindo no service,
     disponível pra log/auditoria futura — só não é exposta pra quem chama a API.
+
+    Rate limiting (AUD-010, ticket 10): conta falhas por username, existente ou
+    não (ver app.auth.rate_limit) — sem isso o bcrypt podia ser chamado sem
+    limite contra uma conta real.
     """
+    if limite_excedido(req.username):
+        raise HTTPException(
+            status.HTTP_429_TOO_MANY_REQUESTS,
+            "Muitas tentativas de login. Aguarde um minuto antes de tentar de novo.",
+        )
     try:
         user = authenticate(session, req.username, req.password)
     except (AutenticacaoInvalidaError, UsuarioInativoError):
+        registrar_tentativa_falha(req.username)
         raise HTTPException(status.HTTP_401_UNAUTHORIZED, "Usuário ou senha incorretos.")
+    limpar_tentativas(req.username)
     return LoginResponse(access_token=create_access_token(user.id))
 
 
