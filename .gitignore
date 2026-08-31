@@ -12,3 +12,4 @@ data/postgres_storage/*
 .DS_Store
 .agents/
 data/*.log
+data/backups/

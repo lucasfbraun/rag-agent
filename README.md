@@ -168,6 +168,18 @@ docker exec -it pu_matcher_backend python -m app.cli ingest
 docker exec -it pu_matcher_backend python -m app.cli ingest --dir /app/data/raw_documents
 ```
 
+## Backup (Qdrant + Postgres)
+
+```bash
+# do host (nao de dentro de um container), com a stack rodando via docker compose
+python backup.py                  # Qdrant + Postgres
+python backup.py --qdrant-only
+python backup.py --postgres-only
+python backup.py --manter 30      # retencao (default: 14 backups mais recentes de cada tipo)
+```
+
+Gera um snapshot da coleção do Qdrant (`data/backups/qdrant/`, via API HTTP do próprio Qdrant) e um `pg_dump` do Postgres (`data/backups/postgres/`, via `docker exec` no container — o binário `pg_dump` só existe lá). Nenhum dos dois é commitado (`data/backups/` no `.gitignore`). Instruções de restauração no docstring de `backup.py`. **Execução manual** — ainda não agendado automaticamente (Windows Task Scheduler, a configurar quando houver servidor de produção definido, ver `CRONOGRAMA.md` Fase 8). Motivação: `docs/incidente_2026-08-26_reingestao_apagou_colecao.md` — sem isso, o incidente que apagou a coleção real não tinha nenhum caminho de recuperação automática.
+
 ## Identidade visual & instalação como app (PWA)
 
 A paleta e a tipografia vêm de [IDENTIDADE_VISUAL.md](IDENTIDADE_VISUAL.md) (originalmente escrito pro projeto FIDC, em Next.js/Tailwind) — a seção final desse documento ("Aplicação no PU Matcher") explica onde cada cor vive aqui: `.streamlit/config.toml` para os widgets nativos, CSS injetado em `frontend/app.py` pro resto (tipografia Roboto, cards).
@@ -180,9 +192,9 @@ A paleta e a tipografia vêm de [IDENTIDADE_VISUAL.md](IDENTIDADE_VISUAL.md) (or
 
 ## Status
 
-🚨 **A coleção real do Qdrant está vazia (0 pontos), não os 11.273 documentados historicamente no cronograma.** Incidente de 2026-08-26 (Sessão 30) durante o desenvolvimento — detalhe completo em `docs/incidente_2026-08-26_reingestao_apagou_colecao.md`. Os documentos-fonte na pasta de rede não foram tocados, só o índice; recuperação exige rodar `python ingest_network.py --full` de novo (3-6h) — não disparado ainda, decisão do usuário. Até lá, `/api/match` funciona tecnicamente mas sem nenhum resultado do catálogo real.
+🟨 **Reingestão em andamento (recuperando do incidente de 2026-08-26).** A coleção real do Qdrant foi apagada durante o desenvolvimento (Sessão 30, detalhe completo em `docs/incidente_2026-08-26_reingestao_apagou_colecao.md`); os documentos-fonte na pasta de rede não foram tocados, só o índice. `python ingest_network.py --full` está rodando (disparado 2026-08-31, 3-6h esperadas) — validar a contagem final contra os 11.273 pontos históricos quando terminar. Backup configurado desde 2026-08-31 (ver seção acima) para que uma futura perda de índice tenha caminho de recuperação, o que não existia no incidente original.
 
-Fases 0 (Setup) e 5 (RBAC & Governança — 9/9 tarefas, autenticação/autorização/administração de usuários funcionando de ponta a ponta) concluídas. Fase 1 (Ingestão) bloqueada pelo incidente acima — o código de ingestão/reconciliação está pronto (ver auditoria abaixo), falta rodar de novo. Fase 2 (motor RAG/agente investigativo) em andamento, com gaps de comportamento já identificados (e sem dado real pra consultar até a reingestão). Fase 6 (Frontend/UX de Campo) iniciada — identidade visual da marca aplicada e card de instalação como PWA (ver seção acima), ainda sem validação em navegador real nem no logo definitivo. Fases 3, 4, 7 e 8 ainda não iniciadas. Ferramentas de ERP/normas ainda simuladas (Fase 4).
+Fases 0 (Setup) e 5 (RBAC & Governança — 9/9 tarefas, autenticação/autorização/administração de usuários funcionando de ponta a ponta) concluídas. Fase 1 (Ingestão) recuperando (ver acima) — o código de ingestão/reconciliação está pronto (ver auditoria abaixo). Fase 2 (motor RAG/agente investigativo) em andamento, com gaps de comportamento já identificados. Fase 6 (Frontend/UX de Campo) iniciada — identidade visual da marca aplicada e card de instalação como PWA (ver seção acima), ainda sem validação em navegador real nem no logo definitivo. Fase 8 com o item de backup adiantado (ver seção acima); os demais itens seguem não iniciados, assim como as Fases 3, 4 e 7. Ferramentas de ERP/normas ainda simuladas (Fase 4).
 
 Auditoria de qualidade de código em andamento desde 2026-08-25 — 9 de 12 bugs já corrigidos. Ver `docs/auditoria_2026-08-25.md`, `docs/verificacao_auditoria_2026-08-26.md` e `docs/plano_correcao_auditoria_2026-08-25.md` para bugs confirmados e plano de correção.
 

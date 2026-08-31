@@ -167,14 +167,16 @@ O checklist abaixo (`--full` concluído, 11.273 trechos) descreve o estado **his
 ---
 
 ## Fase 8 — Deploy On-Premise em Produção & Monitoramento
-**Status:** ⬜ Não iniciado
+**Status:** ⬜ Não iniciado (item de backup adiantado fora de ordem — ver nota abaixo)
 
 - [ ] Definir servidor de produção (specs mínimas: 8 cores, 16–32GB RAM, SSD 200GB+)
-- [ ] Configurar backup do Qdrant e PostgreSQL
+- [x] Configurar backup do Qdrant e PostgreSQL — **feito 2026-08-31**: `backup.py` (raiz do repo, roda do host) cria snapshot da coleção via API do Qdrant e baixa pro host (`data/backups/qdrant/`), e `pg_dump` via `docker exec` no container Postgres (`data/backups/postgres/`); retenção mantém os 14 backups mais recentes de cada tipo por padrão (`--manter N` ajusta). Validado ao vivo contra os containers reais (não só mockado): snapshot de ~156MB e dump de ~3.7KB gerados com sucesso, `pg_dump` confirmado como SQL válido. Instruções de restauração no docstring do script. **Não é agendamento automático** — continua manual (rodar `python backup.py` periodicamente) ou exige configurar uma tarefa agendada do Windows (`schtasks`) por fora do repositório; decisão de quando/com que frequência automatizar fica para quando houver servidor de produção definido (item acima).
 - [ ] Definir monitoramento (logs, uptime, custo de uso das APIs de LLM)
 - [ ] Rollout gradual por perfil de usuário
 
 **Dependências:** aprovação do piloto (Fase 7); infraestrutura de servidor on-premise disponível.
+
+**Nota:** o item de backup foi adiantado fora da ordem normal das fases (que dependeria da aprovação do piloto) porque a ausência de backup já causou perda de dados real — ver `docs/incidente_2026-08-26_reingestao_apagou_colecao.md`. Os demais itens da fase continuam bloqueados pelas dependências normais.
 
 ---
 
