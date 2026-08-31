@@ -11,3 +11,4 @@ data/postgres_storage/*
 !data/postgres_storage/.gitkeep
 .DS_Store
 .agents/
+data/*.log

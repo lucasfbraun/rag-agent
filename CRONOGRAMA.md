@@ -27,6 +27,9 @@ Legenda de status: ⬜ Não iniciado · 🟨 Em andamento · ✅ Concluído · �
 - [x] Preencher `.env` local com `GEMINI_API_KEY` real — **concluído** (OpenAI/Anthropic/Grok seguem em branco, não bloqueia)
 - [x] Validar `docker-compose up -d --build` rodando localmente — **concluído ✅ (3/3 containers Healthy)**
 - [x] Confirmar Qdrant acessível em `localhost:6333` — **concluído ✅ (`/api/health` retorna online)**
+- [x] Aplicar migrations do banco automaticamente no boot (**AUD-001, corrigido 2026-08-25**) — `backend/app/startup.py` roda `alembic upgrade head` via `ENTRYPOINT` antes de subir o servidor; stack nova via `docker-compose up` não fica mais com tabela `users` ausente. Ressalva: dev local sem Docker (`backend/run_local.py`) continua sem rodar migration — ver `docs/plano_correcao_auditoria_2026-08-25.md`, ticket 1.
+
+**Nota (2026-08-25/26):** este checklist ainda descreve "3 serviços" e o embedding antigo (`text-embedding-004`/768); a stack real tem 4 serviços (Postgres entrou na Fase 5) e usa `gemini-embedding-001`/3072 (ou Ollama local/768, conforme `.env`). Divergência já catalogada em `docs/auditoria_2026-08-25.md` ("Divergências documentais" #1/#2) — correção proposital adiada para o ticket 12 do plano de correção (alinhar documentação só depois dos bugs de código serem resolvidos), não é um esquecimento.
 
 **Dependências:** acesso às chaves de API dos provedores LLM escolhidos; Docker instalado no servidor.
 
@@ -35,7 +38,11 @@ Legenda de status: ⬜ Não iniciado · 🟨 Em andamento · ✅ Concluído · �
 ---
 
 ## Fase 1 — Ingestão de Dados Reais
-**Status:** ✅ Concluído (acervo completo indexado; `.doc` legado adiado por decisão do usuário — não bloqueia)
+**Status:** 🚫 **BLOQUEADA — coleção real do Qdrant está VAZIA (0 pontos), não os 11.273 documentados abaixo.** Incidente da Sessão 30 (2026-08-26): um bug na implementação do ticket 7 (reconciliação de índice) apagou os 11.273 pontos reais durante uma verificação. Sem backup/snapshot configurado (Fase 8 não iniciada) — sem caminho de recuperação automática. **Os documentos-fonte não foram tocados**, só o índice vetorial; recuperação exige rodar `python ingest_network.py --full` de novo (3-6h, aviso do próprio script). Não disparado nesta sessão — decisão de quando rodar é do usuário. Detalhe completo: `docs/incidente_2026-08-26_reingestao_apagou_colecao.md`.
+
+**✅ AUD-007 corrigido em 2026-08-26 (ticket 7), incluindo o próprio bug do incidente acima:** `ingest_catalog_directory()` agora reconcilia (remove chunk obsoleto de arquivo que encolheu/mudou/saiu do acervo) — mas a primeira versão dessa reconciliação tinha um bug de escopo (tratava qualquer arquivo fora do diretório escaneado nesta execução como "removido", não só os de dentro) que foi exatamente a causa do incidente. Corrigido com `_arquivo_esta_no_escopo()` — só reconcilia arquivos dentro da árvore escaneada; validado com teste de regressão reproduzindo o incidente e revalidado contra o Qdrant real. Corrigidos junto: falha de embedding no meio de um arquivo não grava mais chunks parciais; corrida na criação da coleção não é mais erro fatal. **AUD-008 (validar dimensão do vetor) segue aberto — ticket 8.**
+
+O checklist abaixo (`--full` concluído, 11.273 trechos) descreve o estado **histórico**, não o atual — mantido como registro do que já foi alcançado uma vez, não como afirmação de que os dados ainda estão lá.
 
 - [x] Levantar acervo real de TDS, catálogos e laudos de homologação — pasta de rede identificada: `\\10.1.1.205\flexivel\GRUPOS\Qualidade\Documentação de Produto` (~37 famílias de produto, ex. FLEXX® AG, BT, CAT, HR, RIM etc., PDF+DOC)
 - [x] Script `ingest_network.py` criado para apontar a ingestão à pasta de rede (`--test` = 1 família de produto / `--full` = acervo completo, ~12k arquivos)
@@ -55,7 +62,13 @@ Legenda de status: ⬜ Não iniciado · 🟨 Em andamento · ✅ Concluído · �
 ---
 
 ## Fase 2 — Motor RAG & Agente Investigativo
-**Status:** 🟨 Em andamento (retrieval validado; teste de conversa executado — achou gap real de comportamento)
+**Status:** 🟨 Em andamento (retrieval validado; teste de conversa executado — achou gap real de comportamento) — 🚨 **catálogo real vazio agora, ver Fase 1 (incidente da Sessão 30)** — nenhum teste de retrieval abaixo reflete o estado atual até a reingestão acontecer. Auditoria de 2026-08-25 encontrou bugs reais no motor; **AUD-002, AUD-003 e AUD-006 corrigidos em 2026-08-26** (tickets 6, 2 e 5). Ver `docs/plano_correcao_auditoria_2026-08-25.md`.
+
+**✅ AUD-003 corrigido (2026-08-26, ticket 2):** `retrieve_products_context()` agora levanta `RetrievalIndisponivelError` quando o Qdrant/embedding falha de verdade (não confundir com coleção ainda vazia, que continua retornando `[]` normalmente). `/api/match` responde 503; `/api/match/stream` emite evento `error` e para sem chamar o LLM — o agente não responde mais "de conhecimento geral" achando que é só catálogo vazio. 8 testes novos.
+
+**✅ AUD-006 corrigido (2026-08-26, ticket 5):** `run_pu_matcher_agent()` monta a mensagem `assistant` (com todas as tool_calls) uma vez só, antes do loop — não mais uma vez por tool_call — protocolo válido com 2+ ferramentas na mesma resposta do LLM. Junto: argumentos JSON inválidos numa tool_call não derrubam mais a request (vira resposta de erro pra tool, a conversa continua); `execute_mcp_tool()` devolve JSON de verdade (`json.dumps`) em vez de repr Python (`str(dict)`). 4 testes novos.
+
+**✅ AUD-002 corrigido como infraestrutura (2026-08-26, ticket 6) — mas ainda não protege dado real:** ingestão nova classifica cada chunk (`payload["sensivel"]`, heurística de palavra-chave deliberadamente estreita — `_e_conteudo_sensivel()`, `ingestion.py`) e `retrieve_products_context(..., incluir_sensivel=...)` filtra na busca, fail-closed por padrão. `run_pu_matcher_agent` e `stream_pu_matcher_agent` (que ganhou o parâmetro `ver_custos` pela primeira vez) repassam a permissão `VIEW_COSTS` — reaproveitada também pra "fórmulas" por decisão de engenharia registrada em `docs/spec_rbac.md` (pendência 2 segue formalmente sem decisão de negócio, mas agora tem um comportamento técnico definido em vez de nenhum). 14 testes novos. **Não resolve o problema pra dado já indexado:** a classificação só entra em chunks novos — e agora nem há chunks reais indexados (ver incidente acima), então a reingestão que vai ser necessária de qualquer forma é também a oportunidade de já nascer classificada.
 
 - [x] Testar fluxo conversacional investigativo (perguntas antes da recomendação) — **testado 2026-08-22, resultado negativo**: pergunta vaga de propósito ("Quero um produto para assento de ônibus", o próprio exemplo citado no `AGENT_SYSTEM_PROMPT`) não gerou perguntas de qualificação — o agente foi direto para uma recomendação final, inventando especificações (densidade, dureza) que não batem com nenhuma fonte real recuperada, e citou o produto simulado do MCP (`PU-SEAT-5000 FR`) em vez de reconhecer que faltam dados. Testado com `ollama/qwen2.5:3b`; não avaliado ainda com modelo maior/de nuvem — possível causa seja o modelo pequeno não seguir instruções complexas do system prompt, não a arquitetura do agente.
 - [x] Validar qualidade do retrieval — bom para perguntas próximas do código do produto (ex: "FLEXX AG 2047", "FLEXX ADT 41200", top resultado correto); fraco para perguntas ambíguas/naturais de venda (ver item de reranking abaixo)
@@ -95,7 +108,13 @@ Legenda de status: ⬜ Não iniciado · 🟨 Em andamento · ✅ Concluído · �
 ---
 
 ## Fase 5 — RBAC & Governança
-**Status:** ✅ Concluída — 9/9 tarefas do plano incremental, mais o frontend Streamlit (fora da numeração, priorizado pelo usuário). "Concluída" aqui significa a implementação planejada, não a ausência de débitos: 4 pendências seguem em aberto em `docs/spec_rbac.md` ("Pendências" — 1: regra de custos pro Técnico, 2: acesso a fórmulas, 4: campos sensíveis no RAG não estruturado, 5: sem CLI de bootstrap) e 1 débito de segurança registrado (rate limiting do login, ver abaixo) — nenhum foi escondido, todos ficam listados explicitamente até serem resolvidos ou formalmente aceitos pelo negócio.
+**Status:** ✅ Concluída (implementação) — auditoria de 2026-08-25 encontrou 5 bugs reais de governança nesta fase; **AUD-004, AUD-005 e AUD-010/AUD-011 corrigidos em 2026-08-26** (tickets 3, 4 e 10). Segue aberto: **AUD-009** (downgrade do Alembic deixa enums órfãos — ticket 11, sem bloqueio). 4 pendências funcionais seguem em aberto em `docs/spec_rbac.md` (custos/fórmulas/RAG sensível/CLI de bootstrap), não escondidas.
+
+**✅ AUD-004 corrigido (2026-08-26, ticket 3):** `user_service.py` (`update_user`/`deactivate_user`) agora recusa qualquer mudança que zeraria os Admin TI ativos — `UltimoAdminError` → 409. Cobre o caso mais amplo do que o registrado originalmente (rebaixar *outro* Admin TI, não só a si mesmo), porque a checagem vive no service layer. Achado novo corrigido junto: canal lateral de tempo em `authenticate()` (bcrypt só rodava quando o username existia) — agora roda sempre, contra um hash dummy quando não existe. 10 testes novos.
+
+**✅ AUD-005 corrigido (2026-08-26, ticket 4):** `MatchRequest.model_name` validado contra uma allowlist (`ALLOWED_CHAT_MODELS`, `app/config.py`); `.history` usa um schema estrito (`role` só `user`/`assistant`, `content` sempre string com limite de tamanho, sem campo extra) — cliente não injeta mais papel `system` arbitrário no histórico enviado ao LLM. 11 testes novos.
+
+**✅ AUD-010 e AUD-011 corrigidos (2026-08-26, ticket 10):** rate limiting em `POST /api/auth/login` (`backend/app/auth/rate_limit.py`, novo — 5 tentativas falhas/60s por username, conta pra username inexistente também para não virar mais um canal de enumeração; **débito documentado**: em memória, não sobrevive a mais de 1 réplica do backend). Exceções internas redigidas nos 3 pontos que a auditoria achou (`/api/health`, `/api/match`, evento `error` do streaming) — mensagem genérica pro cliente, texto completo só no log do servidor. 7 testes novos.
 
 **Decisão de provisionamento (2026-08-24):** manual agora, desenho pronto para AD/LDAP depois. Ver `docs/spec_rbac.md` para a comparação completa das 3 estratégias e a justificativa.
 
@@ -122,10 +141,13 @@ Legenda de status: ⬜ Não iniciado · 🟨 Em andamento · ✅ Concluído · �
 ---
 
 ## Fase 6 — Frontend / UX de Campo
-**Status:** ⬜ Não iniciado (protótipo funcional em Streamlit já existe)
+**Status:** 🟨 Em andamento (identidade visual aplicada e card de instalação como PWA — Sessão 27; sem validação em navegador real nem logo definitivo)
 
+- [x] Aplicar identidade visual da marca (paleta + tipografia) — **feito 2026-08-26**: `.streamlit/config.toml` (tema nativo: botões, inputs) + CSS injetado em `frontend/app.py` (Roboto, cards), a partir de `IDENTIDADE_VISUAL.md` (documento trazido de outro projeto — Next.js/Tailwind — e adaptado nesta sessão pro mecanismo do Streamlit). Ícone da sidebar trocado do placeholder genérico (flaticon externo) por um monograma "PU" na paleta da marca — **ainda não é o logo real**, nenhum arquivo foi fornecido; ver tabela de troca em `IDENTIDADE_VISUAL.md`.
+- [x] Instalação como app (PWA) — **feito 2026-08-26**: card "Instalar aplicativo" na tela de login (`frontend/app.py`, componente HTML com `manifest.json` + Service Worker + evento `beforeinstallprompt`). Exigiu um proxy reverso novo (Caddy, serviço `proxy` no `docker-compose.yml`) porque o Service Worker precisa ser servido em `/` pra controlar a página toda, e o Streamlit só serve estático em `/app/static/*` — sem o proxy, o Chrome nunca considera o app instalável. Verificado via `docker compose up` + `curl` (manifest/ícone/SW servidos com `Content-Type` e caminho corretos pelo proxy) e `frontend/tests/test_pwa_assets.py` (6 testes) + `frontend/tests/test_login_screen.py` (2 testes, `AppTest`) — **não verificado num navegador real** (sem Chrome/Chromium neste ambiente); o disparo de fato do prompt de instalação fica pendente de teste manual.
 - [ ] Testar usabilidade em tablet/mobile na intranet/VPN
-- [ ] Refinar identidade visual (hoje usa ícone genérico de placeholder)
+- [ ] Substituir o ícone placeholder pelo logo real do Grupo Flexível assim que o arquivo for fornecido
+- [ ] Validar em navegador real (Chrome/Edge) que o card de PWA de fato dispara o prompt de instalação
 - [ ] Avaliar se Streamlit atende ao produto final ou se migra para app web dedicado
 
 **Dependências:** Fases 2–3 estáveis; feedback de uso real em campo.

@@ -19,7 +19,7 @@ Acompanhamento do desenvolvimento:
 - **Backend:** FastAPI
 - **RAG / Vector DB:** Qdrant
 - **Multi-LLM:** LiteLLM (Gemini, OpenAI, Anthropic, Grok, ou Ollama local/gratuito — ver `.env.example`)
-- **Frontend:** Streamlit
+- **Frontend:** Streamlit, atrás de um proxy reverso (Caddy) — ver "Identidade visual & instalação como app (PWA)"
 - **Autenticação & RBAC:** PostgreSQL + JWT (Fase 5 — ver seção abaixo)
 - **Ferramentas vivas:** MCP (catálogo ERP e normas/homologações — atualmente simuladas, ver Fase 4 do cronograma)
 
@@ -49,6 +49,7 @@ Acompanhamento do desenvolvimento:
    ```
 5. Crie o primeiro usuário Admin TI (obrigatório — sem ele ninguém consegue logar; ver "Autenticação & Perfis (RBAC)" abaixo para o comando).
 6. Acesse a interface em `http://localhost:8501` e faça login com o usuário criado no passo anterior.
+   > Desde a Sessão 27, `8501` é servido por um proxy Caddy na frente do Streamlit (serviço `proxy` no Compose), não pelo container `frontend` diretamente — necessário pro Service Worker do PWA funcionar (ver seção abaixo). Pra quem debuga direto no container, o Streamlit em si continua ouvindo em `8501` só na rede interna do Compose (sem porta publicada no host).
 
 ## Como rodar localmente (sem Docker)
 
@@ -67,6 +68,7 @@ python frontend/run_local.py
 
 A interface estará em `http://localhost:8501` e o backend em `http://localhost:8000`.
 > **Qdrant:** Instale e rode localmente (`docker run -p 6333:6333 qdrant/qdrant`) ou aponte `QDRANT_HOST` para um servidor remoto.
+> **PWA:** rodando assim (sem o proxy Caddy do Docker Compose), o card "Instalar aplicativo" da tela de login fica sempre desabilitado — o Service Worker só é servido na raiz (`/`) através do proxy. Isso é o comportamento esperado em dev local, não um bug.
 
 ## Autenticação & Perfis (RBAC)
 
@@ -127,7 +129,11 @@ curl http://localhost:8000/api/match -H "Authorization: Bearer <access_token>" .
 │   ├── mcp/                 # Ferramentas MCP (catálogo ERP, normas)
 │   └── rag/                 # Ingestão e motor do agente investigativo
 ├── backend/alembic/        # Migrations do banco relacional (Fase 5)
-├── frontend/app.py          # Interface de chat Streamlit (com tela de login)
+├── frontend/app.py          # Interface de chat Streamlit (com tela de login + card de PWA)
+├── frontend/static/         # manifest.json, service-worker.js e ícone do PWA (Sessão 27)
+├── .streamlit/config.toml   # Tema (paleta da marca) + enableStaticServing
+├── proxy/Caddyfile          # Proxy reverso — serve o Service Worker em "/" (ver seção PWA)
+├── IDENTIDADE_VISUAL.md     # Guia de paleta/tipografia da marca (origem: projeto FIDC) + aplicação aqui
 ├── data/raw_documents/      # TDS, catálogos e homologações (não versionado)
 └── docs/                    # Documentos originais da proposta, guia técnico e spec_rbac.md
 ```
@@ -162,8 +168,22 @@ docker exec -it pu_matcher_backend python -m app.cli ingest
 docker exec -it pu_matcher_backend python -m app.cli ingest --dir /app/data/raw_documents
 ```
 
+## Identidade visual & instalação como app (PWA)
+
+A paleta e a tipografia vêm de [IDENTIDADE_VISUAL.md](IDENTIDADE_VISUAL.md) (originalmente escrito pro projeto FIDC, em Next.js/Tailwind) — a seção final desse documento ("Aplicação no PU Matcher") explica onde cada cor vive aqui: `.streamlit/config.toml` para os widgets nativos, CSS injetado em `frontend/app.py` pro resto (tipografia Roboto, cards).
+
+**Logo:** ainda não foi fornecido o arquivo real do Grupo Flexível. `frontend/static/icon.svg` é um monograma placeholder ("PU" em verde-petróleo) usado na sidebar e no ícone do manifest até o arquivo real chegar — troca é local, ver a tabela em `IDENTIDADE_VISUAL.md`.
+
+**Instalar como app (PWA):** a tela de login mostra um card "Instalar aplicativo" quando o navegador permite (Chrome/Edge desktop ou Android, critérios de instalabilidade atendidos). Isso exigiu um proxy reverso (Caddy, serviço `proxy` no Compose) na frente do Streamlit — o Service Worker precisa ser servido em `/` pra controlar a página inteira, e o Streamlit só serve estático em `/app/static/*`. Sem o proxy (ex: `frontend/run_local.py`), o card aparece desabilitado com uma dica em vez de simular sucesso.
+
+> **Não testado em navegador real** — este ambiente não tem Chrome/Chromium disponível pra automação. O que foi verificado: os 3 arquivos (`manifest.json`, `icon.svg`, `service-worker.js`) são servidos com o `Content-Type` e no caminho certos através do proxy (`docker compose up` + `curl`), e a suíte `frontend/tests/test_pwa_assets.py` trava se alguém quebrar essa forma no futuro. O comportamento de instalação em si (o Chrome de fato mostrar o prompt) precisa de verificação manual num navegador real antes de considerar a Fase 6 fechada.
+
 ## Status
 
-Fases 0 (Setup), 1 (Ingestão — 11.273 trechos de 8.377 arquivos reais indexados) e 5 (RBAC & Governança — 9/9 tarefas, autenticação/autorização/administração de usuários funcionando de ponta a ponta) concluídas. Fase 2 (motor RAG/agente investigativo) em andamento, com gaps de comportamento já identificados. Fases 3, 4, 6, 7 e 8 ainda não iniciadas. Ferramentas de ERP/normas ainda simuladas (Fase 4).
+🚨 **A coleção real do Qdrant está vazia (0 pontos), não os 11.273 documentados historicamente no cronograma.** Incidente de 2026-08-26 (Sessão 30) durante o desenvolvimento — detalhe completo em `docs/incidente_2026-08-26_reingestao_apagou_colecao.md`. Os documentos-fonte na pasta de rede não foram tocados, só o índice; recuperação exige rodar `python ingest_network.py --full` de novo (3-6h) — não disparado ainda, decisão do usuário. Até lá, `/api/match` funciona tecnicamente mas sem nenhum resultado do catálogo real.
+
+Fases 0 (Setup) e 5 (RBAC & Governança — 9/9 tarefas, autenticação/autorização/administração de usuários funcionando de ponta a ponta) concluídas. Fase 1 (Ingestão) bloqueada pelo incidente acima — o código de ingestão/reconciliação está pronto (ver auditoria abaixo), falta rodar de novo. Fase 2 (motor RAG/agente investigativo) em andamento, com gaps de comportamento já identificados (e sem dado real pra consultar até a reingestão). Fase 6 (Frontend/UX de Campo) iniciada — identidade visual da marca aplicada e card de instalação como PWA (ver seção acima), ainda sem validação em navegador real nem no logo definitivo. Fases 3, 4, 7 e 8 ainda não iniciadas. Ferramentas de ERP/normas ainda simuladas (Fase 4).
+
+Auditoria de qualidade de código em andamento desde 2026-08-25 — 9 de 12 bugs já corrigidos. Ver `docs/auditoria_2026-08-25.md`, `docs/verificacao_auditoria_2026-08-26.md` e `docs/plano_correcao_auditoria_2026-08-25.md` para bugs confirmados e plano de correção.
 
 Estado completo, sessão a sessão, em [PROGRESS.md](PROGRESS.md); visão geral por fase em [CRONOGRAMA.md](CRONOGRAMA.md).
