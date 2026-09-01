@@ -15,6 +15,9 @@ precisar conhecer User/Role/Permission.
 import json
 from typing import Dict, Any
 
+from app.rag.catalog_stats import obter_estatisticas_catalogo
+from app.rag.exceptions import RetrievalIndisponivelError
+
 # Simulação de consulta ao ERP Corporativo (SAP / TOTVS / etc.)
 def consultar_catalogo_erp(termo_busca: str, ver_custos: bool = False) -> Dict[str, Any]:
     """Consulta se o produto está ativo para faturamento, código ERP e embalagens."""
@@ -47,6 +50,18 @@ def consultar_normas_homologadas(norma_requerida: str, ver_laudo_completo: bool 
         resultado["laboratorio_emissor"] = "IPT / SENAI"
     return resultado
 
+# Diferente das duas funções acima: consulta dados REAIS do acervo já
+# indexado no Qdrant (app.rag.catalog_stats), não simulados — cobre perguntas
+# agregadas ("quantos produtos catalogados?") que a busca semântica de
+# retrieve_products_context() nunca consegue responder (ela só traz um
+# punhado de trechos por similaridade, não conta o total do acervo).
+def consultar_estatisticas_catalogo() -> Dict[str, Any]:
+    """Total de produtos distintos e documentos indexados no acervo real."""
+    try:
+        return obter_estatisticas_catalogo()
+    except RetrievalIndisponivelError as e:
+        return {"erro": f"Catálogo indisponível no momento: {e}"}
+
 # Definição de ferramentas no padrão MCP / LiteLLM
 MCP_TOOLS_DEFINITIONS = [
     {
@@ -76,6 +91,14 @@ MCP_TOOLS_DEFINITIONS = [
                 "required": ["norma_requerida"]
             }
         }
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "consultar_estatisticas_catalogo",
+            "description": "Consulta números agregados do acervo real de produtos indexado (quantos produtos catalogados, quantos documentos/TDS indexados no total). Use para perguntas como 'quantos produtos temos catalogados' — NÃO tente responder isso só com o contexto de busca, que só traz um punhado de trechos.",
+            "parameters": {"type": "object", "properties": {}}
+        }
     }
 ]
 
@@ -98,4 +121,6 @@ def execute_mcp_tool(
         return json.dumps(consultar_catalogo_erp(arguments.get("termo_busca", ""), ver_custos=ver_custos))
     elif tool_name == "consultar_normas_homologadas":
         return json.dumps(consultar_normas_homologadas(arguments.get("norma_requerida", ""), ver_laudo_completo=ver_laudo_completo))
+    elif tool_name == "consultar_estatisticas_catalogo":
+        return json.dumps(consultar_estatisticas_catalogo())
     return json.dumps({"erro": "Ferramenta não encontrada."})
