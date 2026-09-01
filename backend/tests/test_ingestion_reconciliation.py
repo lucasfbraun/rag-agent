@@ -207,3 +207,26 @@ def test_criacao_concorrente_da_colecao_nao_e_erro_fatal(fake_client):
     fake_client.create_collection.side_effect = Exception("já existe (corrida)")
 
     init_qdrant_collection(fake_client)  # não deve levantar
+
+
+def test_init_garante_indices_de_texto_em_filename_e_content_colecao_ja_existente(fake_client):
+    """Base da busca híbrida (app.rag.engine): código de produto exato usa
+    `filename`, palavra-chave de aplicação/uso usa `content` — sem esses
+    índices, o filtro MatchText faz correspondência de substring bruta em vez
+    de por palavra ("2032" bate em "203200", achado real, ver PROGRESS.md)."""
+    fake_client.get_collections.return_value = _colecao_existente()
+
+    init_qdrant_collection(fake_client)
+
+    assert fake_client.create_payload_index.call_count == 2
+    campos = {c.kwargs["field_name"] for c in fake_client.create_payload_index.call_args_list}
+    assert campos == {"filename", "content"}
+    for chamada in fake_client.create_payload_index.call_args_list:
+        assert chamada.kwargs["collection_name"] == "pu_products_catalog"
+
+
+def test_init_nao_levanta_se_indice_de_texto_falhar_ao_criar(fake_client):
+    fake_client.get_collections.return_value = _colecao_existente()
+    fake_client.create_payload_index.side_effect = Exception("índice indisponível")
+
+    init_qdrant_collection(fake_client)  # não deve levantar

@@ -14,11 +14,39 @@ def get_qdrant_client() -> QdrantClient:
     """Cria e retorna um cliente Qdrant (lazy, evita falha no import-time)."""
     return QdrantClient(host=QDRANT_HOST, port=QDRANT_PORT, timeout=10)
 
+def _garantir_indices_texto(client: QdrantClient) -> None:
+    """Índices de texto tokenizado (palavra, minúsculas) nos campos `filename`
+    e `content` — sem eles, o filtro MatchText usado na busca híbrida
+    (app.rag.engine._detectar_codigos_produto / _extrair_palavras_chave) faz
+    correspondência de substring bruta e case-sensitive (ex: buscar "2032"
+    também bate em "203200"), que foi exatamente a causa de uma busca por
+    código trazer produto errado. `content` cobre buscas por
+    aplicação/uso quando a pergunta não cita um código de produto (ex: "cola
+    para rolha de cortiça" não achava o FLEXX AG 2066 por embedding, mesmo o
+    boletim tendo essas palavras quase literalmente). Idempotente: recriar um
+    índice idêntico não é erro no Qdrant, seguro de chamar em toda ingestão."""
+    for campo, min_token_len in (("filename", 2), ("content", 3)):
+        try:
+            client.create_payload_index(
+                collection_name=COLLECTION_NAME,
+                field_name=campo,
+                field_schema=qmodels.TextIndexParams(
+                    type="text",
+                    tokenizer=qmodels.TokenizerType.WORD,
+                    min_token_len=min_token_len,
+                    lowercase=True,
+                ),
+            )
+        except Exception as e:
+            print(f"⚠️ Não foi possível garantir o índice de texto em '{campo}': {e}")
+
+
 def init_qdrant_collection(client: QdrantClient):
     """Garante que a coleção de produtos e TDS exista no Qdrant."""
     collections = client.get_collections().collections
     if any(c.name == COLLECTION_NAME for c in collections):
         print(f"ℹ️ Coleção '{COLLECTION_NAME}' já existe — ingestão incremental.")
+        _garantir_indices_texto(client)
         return
     try:
         client.create_collection(
@@ -36,9 +64,11 @@ def init_qdrant_collection(client: QdrantClient):
         colecoes_agora = client.get_collections().collections
         if any(c.name == COLLECTION_NAME for c in colecoes_agora):
             print(f"ℹ️ Coleção '{COLLECTION_NAME}' criada por outra ingestão concorrente.")
+            _garantir_indices_texto(client)
             return
         print(f"❌ Erro ao inicializar coleção Qdrant: {e}")
         raise
+    _garantir_indices_texto(client)
 
 def extract_text_from_file(filepath: str) -> str:
     """Extrai texto e tabelas técnicas de PDFs, DOCX e TXT de produtos."""
