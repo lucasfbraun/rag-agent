@@ -10,7 +10,12 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from app.rag.catalog_stats import obter_estatisticas_catalogo, _produto_do_filepath
+from app.rag.catalog_stats import (
+    obter_estatisticas_catalogo,
+    listar_produtos_por_aplicacao,
+    _produto_do_filepath,
+    _termo_para_busca,
+)
 from app.rag.engine import RetrievalIndisponivelError
 
 
@@ -79,3 +84,65 @@ def test_falha_no_qdrant_levanta_erro_tipado_em_vez_de_contagem_zerada():
     with patch("app.rag.catalog_stats.get_qdrant_client", return_value=fake_client):
         with pytest.raises(RetrievalIndisponivelError):
             obter_estatisticas_catalogo()
+
+
+# --- _termo_para_busca: stem simplificado pra cobrir plural/singular pt-br --
+
+def test_termo_para_busca_corta_2_chars_de_termo_longo():
+    assert _termo_para_busca("colchão") == "colch"
+
+
+def test_termo_para_busca_nao_corta_termo_curto():
+    assert _termo_para_busca("cola") == "cola"
+
+
+# --- listar_produtos_por_aplicacao: listagem/categoria, não recomendação única
+
+def _ponto_com_conteudo(filepath, content):
+    p = MagicMock()
+    p.payload = {"filepath": filepath, "content": content}
+    return p
+
+
+def test_lista_produtos_distintos_que_mencionam_o_termo_stemado():
+    """Achado real: "colchão" não é substring de "colchões" — o stem "colch"
+    precisa achar as duas formas."""
+    fake_client = MagicMock()
+    fake_client.scroll.return_value = (
+        [
+            _ponto_com_conteudo(r"...\FLEXX UC 2258\Boletim.pdf", "aplicação em colchões de espuma"),
+            _ponto_com_conteudo(r"...\FLEXX UC 2258\FISPQ.pdf", "ficha de segurança, sem relação"),  # mesmo produto
+            _ponto_com_conteudo(r"...\FLEXX ADT 428\Boletim.pdf", "usado na produção de colchão ortopédico"),
+            _ponto_com_conteudo(r"...\Adesivo Pisos\Boletim.pdf", "para pisos vinílicos, sem relação com o pedido"),
+        ],
+        None,
+    )
+    with patch("app.rag.catalog_stats.get_qdrant_client", return_value=fake_client):
+        resultado = listar_produtos_por_aplicacao("colchão")
+
+    assert resultado["total_produtos_encontrados"] == 2
+    assert set(resultado["produtos"]) == {"FLEXX UC 2258", "FLEXX ADT 428"}
+    assert resultado["truncado"] is False
+
+
+def test_lista_produtos_respeita_limite_e_sinaliza_truncamento():
+    fake_client = MagicMock()
+    pontos = [
+        _ponto_com_conteudo(f"...\\PRODUTO {i}\\Boletim.pdf", "menciona colchão")
+        for i in range(5)
+    ]
+    fake_client.scroll.return_value = (pontos, None)
+    with patch("app.rag.catalog_stats.get_qdrant_client", return_value=fake_client):
+        resultado = listar_produtos_por_aplicacao("colchão", limite=3)
+
+    assert resultado["total_produtos_encontrados"] == 5
+    assert len(resultado["produtos"]) == 3
+    assert resultado["truncado"] is True
+
+
+def test_falha_no_qdrant_ao_listar_levanta_erro_tipado():
+    fake_client = MagicMock()
+    fake_client.scroll.side_effect = Exception("qdrant fora do ar")
+    with patch("app.rag.catalog_stats.get_qdrant_client", return_value=fake_client):
+        with pytest.raises(RetrievalIndisponivelError):
+            listar_produtos_por_aplicacao("colchão")

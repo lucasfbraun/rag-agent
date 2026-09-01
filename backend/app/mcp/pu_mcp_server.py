@@ -15,7 +15,7 @@ precisar conhecer User/Role/Permission.
 import json
 from typing import Dict, Any
 
-from app.rag.catalog_stats import obter_estatisticas_catalogo
+from app.rag.catalog_stats import obter_estatisticas_catalogo, listar_produtos_por_aplicacao
 from app.rag.exceptions import RetrievalIndisponivelError
 
 # Simulação de consulta ao ERP Corporativo (SAP / TOTVS / etc.)
@@ -62,6 +62,18 @@ def consultar_estatisticas_catalogo() -> Dict[str, Any]:
     except RetrievalIndisponivelError as e:
         return {"erro": f"Catálogo indisponível no momento: {e}"}
 
+# Idem: dados reais (não simulados), mas devolve uma LISTA de produtos por
+# aplicação/uso em vez de um total agregado — cobre pedido de categoria
+# ("produtos para colchão"), que um top-k de poucos chunks do RAG nunca
+# representaria fielmente (achado real: "colchão" aparece em ~150
+# arquivos/dezenas de produtos distintos do acervo).
+def consultar_produtos_por_aplicacao(termo_busca: str) -> Dict[str, Any]:
+    """Lista produtos distintos do acervo cujo conteúdo menciona a aplicação/uso dado."""
+    try:
+        return listar_produtos_por_aplicacao(termo_busca)
+    except RetrievalIndisponivelError as e:
+        return {"erro": f"Catálogo indisponível no momento: {e}"}
+
 # Definição de ferramentas no padrão MCP / LiteLLM
 MCP_TOOLS_DEFINITIONS = [
     {
@@ -99,6 +111,20 @@ MCP_TOOLS_DEFINITIONS = [
             "description": "Consulta números agregados do acervo real de produtos indexado (quantos produtos catalogados, quantos documentos/TDS indexados no total). Use para perguntas como 'quantos produtos temos catalogados' — NÃO tente responder isso só com o contexto de busca, que só traz um punhado de trechos.",
             "parameters": {"type": "object", "properties": {}}
         }
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "consultar_produtos_por_aplicacao",
+            "description": "Lista TODOS os produtos distintos do acervo real cujo conteúdo menciona uma aplicação/uso (ex: 'colchão', 'cortiça', 'automotivo'). Use SEMPRE que o pedido for uma LISTAGEM/categoria de produtos ('produtos para colchão', 'quais produtos temos para X'), em vez de um produto específico ou uma recomendação única — o contexto de busca (RAG) só traz um punhado de trechos e NUNCA representa a categoria inteira (pode ter dezenas de produtos). Depois de listar, se o usuário pedir detalhe de um item específico, aí sim use o contexto normal de busca.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "termo_busca": {"type": "string", "description": "Aplicação/uso citado pelo cliente (ex: 'colchão', 'cortiça')"}
+                },
+                "required": ["termo_busca"]
+            }
+        }
     }
 ]
 
@@ -123,4 +149,6 @@ def execute_mcp_tool(
         return json.dumps(consultar_normas_homologadas(arguments.get("norma_requerida", ""), ver_laudo_completo=ver_laudo_completo))
     elif tool_name == "consultar_estatisticas_catalogo":
         return json.dumps(consultar_estatisticas_catalogo())
+    elif tool_name == "consultar_produtos_por_aplicacao":
+        return json.dumps(consultar_produtos_por_aplicacao(arguments.get("termo_busca", "")))
     return json.dumps({"erro": "Ferramenta não encontrada."})

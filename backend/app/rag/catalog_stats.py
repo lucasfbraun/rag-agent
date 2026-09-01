@@ -78,3 +78,62 @@ def obter_estatisticas_catalogo() -> Dict[str, Any]:
         "produtos_catalogados": len(produtos),
         "documentos_indexados": len(documentos),
     }
+
+
+def _termo_para_busca(termo: str) -> str:
+    """Stem simplificado: corta os 2 últimos caracteres de termos com 6+
+    letras. Por quê: plural/singular em português nem sempre compartilha
+    sufixo literal — "colchão" NÃO é substring de "colchões" (ã vs õ) — mas
+    "colch" é prefixo comum aos dois. Termos curtos (<6) ficam como estão:
+    cortar demais viraria ruído (ex: "cola" -> "col" bateria em "coluna",
+    "colar", que não têm nada a ver)."""
+    termo = termo.strip().lower()
+    return termo[:-2] if len(termo) >= 6 else termo
+
+
+def listar_produtos_por_aplicacao(termo_busca: str, limite: int = 30) -> Dict[str, Any]:
+    """Lista produtos distintos do acervo cujo conteúdo menciona o termo
+    dado (aplicação/uso, ex: "colchão", "cortiça").
+
+    Por quê existe separado de retrieve_products_context: um pedido de
+    LISTAGEM/categoria ("produtos para colchão") não é a mesma coisa que um
+    pedido de recomendação única — um top-k de poucos chunks (mesmo com a
+    busca híbrida) nunca representa fielmente uma categoria com dezenas de
+    produtos (achado real: "colchão" aparece em ~150 arquivos/dezenas de
+    produtos distintos do acervo; duas variações de pergunta traziam
+    conjuntos de top-6 sem nenhuma sobreposição). Isso varre a coleção
+    inteira e devolve os NOMES dos produtos, não os trechos de texto — quem
+    quiser detalhe de um item específico faz uma pergunta de acompanhamento,
+    que aí sim usa retrieve_products_context normalmente."""
+    try:
+        client = get_qdrant_client()
+        stem = _termo_para_busca(termo_busca)
+        produtos = set()
+        offset = None
+        while True:
+            pontos, offset = client.scroll(
+                collection_name=COLLECTION_NAME,
+                with_payload=["filepath", "content"],
+                with_vectors=False,
+                limit=1000,
+                offset=offset,
+            )
+            for ponto in pontos:
+                payload = ponto.payload or {}
+                content = (payload.get("content") or "").lower()
+                if stem and stem in content:
+                    produto = _produto_do_filepath(payload.get("filepath") or "")
+                    if produto:
+                        produtos.add(produto)
+            if offset is None:
+                break
+    except Exception as e:
+        raise RetrievalIndisponivelError(str(e)) from e
+
+    lista = sorted(produtos)
+    return {
+        "termo_buscado": termo_busca,
+        "total_produtos_encontrados": len(lista),
+        "produtos": lista[:limite],
+        "truncado": len(lista) > limite,
+    }

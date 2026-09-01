@@ -176,12 +176,11 @@ def match_product_stream(
       - {"type": "done"}
       - {"type": "error", "message": "..."}
 
-    Repassa `ver_custos` pro RAG (AUD-002, ticket 6) — esta versão não chama
-    ferramentas MCP, mas SEMPRE faz retrieval do RAG, que também precisa de
-    permissão pra não vazar chunk classificado como sensível. Antes desta
-    sessão nada era repassado porque o motivo original (nenhum tool MCP
-    chamado aqui) nunca cobriu o RAG. Precisou trocar `dependencies=[...]`
-    por injeção real de `current_user`, igual `/api/match` já fazia.
+    Repassa `ver_custos`/`ver_laudo_completo` pro RAG e pras ferramentas MCP
+    (esta versão agora também resolve tool calling antes de streamar a
+    resposta final, ver docstring de stream_pu_matcher_agent) — mesmo
+    contrato de `/api/match`. Precisou trocar `dependencies=[...]` por
+    injeção real de `current_user`, igual `/api/match` já fazia.
     """
     generator = stream_pu_matcher_agent(
         query=req.query,
@@ -189,6 +188,7 @@ def match_product_stream(
         model_name=req.model_name,
         history=_history_as_dicts(req),
         ver_custos=has_permission(current_user, Permission.VIEW_COSTS),
+        ver_laudo_completo=has_permission(current_user, Permission.VIEW_HOMOLOGATION_FULL),
     )
     return StreamingResponse(
         generator,

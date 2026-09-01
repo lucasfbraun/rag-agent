@@ -89,6 +89,13 @@ B) PEDIDO ABERTO DE RECOMENDAÇÃO (o usuário ainda não sabe qual produto quer
      b) Normas e Exigências: Necessidade de laudo antichama (ex: ABNT NBR 9178 / CONTRAN / FMVSS 302)?
      c) Processo do Cliente: Moldagem a frio (MDI), cura a quente (TDI), bloco contínuo ou injeção em molde fechado?
    - QUANDO VOCÊ TIVER DADOS SUFICIENTES (seja de cara, seja depois de perguntar): busque e cruze os dados com os documentos de produtos (TDS) e ferramentas MCP fornecidas, apresente a recomendação no FORMATO PADRÃO DO TEMPLATE CONFIGURADO, e seja opinativo — se o cliente pedir algo incompatível (ex: densidade baixíssima com ultra resiliência sem antichama), alerte e sugira a melhor prática de mercado.
+
+C) PEDIDO DE LISTAGEM/CATEGORIA (o usuário quer VER AS OPÇÕES, não uma recomendação única nem um dado de produto específico):
+   - Ex: "produtos para colchão", "quais produtos temos para automotivo", "o que vocês têm pra calçados".
+   - Reconheça pelo formato: "produtos para X" / "quais produtos" / "o que temos para" / "lista de produtos" — isso pede uma LISTA, não 1 recomendação nem uma investigação de requisitos.
+   - CHAME A FERRAMENTA `consultar_produtos_por_aplicacao` com o termo da aplicação (ex: "colchão"). O contexto de busca normal (RAG) só traz um punhado de trechos e NUNCA representa a categoria inteira — pode haver dezenas de produtos, e usar só o contexto faria você listar um subconjunto arbitrário como se fosse tudo.
+   - APRESENTE COMO LISTA CURTA (nome do produto, 1 linha cada — não abra os detalhes técnicos de cada um). Termine convidando o vendedor a pedir detalhe de um item específico ("me diga o nome de um deles que eu trago a ficha completa").
+   - Se a ferramenta indicar `truncado: true`, avise que a lista foi resumida e que há mais opções disponíveis.
 """
 
 def _get_qdrant_client():
@@ -375,17 +382,26 @@ def stream_pu_matcher_agent(
     model_name: str = DEFAULT_CHAT_MODEL,
     history: Optional[List[Dict[str, str]]] = None,
     ver_custos: bool = False,
+    ver_laudo_completo: bool = False,
 ):
     """
     Versão streaming do agente: gera chunks de texto à medida que o LLM responde.
     Usa Server-Sent Events (SSE) — cada chunk é um JSON com campo 'delta' ou 'done'.
 
-    `ver_custos` (AUD-002, ticket 6): esta versão não chama ferramentas MCP,
-    mas SEMPRE faz retrieval do RAG — precisa da permissão pra não vazar chunk
-    sensível (custo/fórmula) igual `run_pu_matcher_agent`. Default False,
-    fail-closed. Antes desta sessão o streaming não recebia nenhuma permissão
-    porque não fazia sentido pro MCP (não chamado aqui) — mas isso nunca
-    cobriu o RAG, que sempre rodou nesta função.
+    `ver_custos`/`ver_laudo_completo` (AUD-002, ticket 6 + tool calling em
+    streaming): repassados ao RAG (`incluir_sensivel`) e às ferramentas MCP,
+    mesmo contrato de `run_pu_matcher_agent`. Default False, fail-closed.
+
+    Tool calling: streaming e "decidir chamar uma ferramenta" não dá pra
+    fazer ao mesmo tempo (não dá pra streamar uma resposta que ainda depende
+    de uma tool_call não resolvida) — por isso o protocolo é: 1ª chamada ao
+    LLM SEM stream, só pra ver se ele quer chamar ferramenta; se quiser,
+    resolve e injeta o resultado nas mensagens; a resposta final aí sim é
+    streamada. Antes desta sessão o streaming simplesmente não suportava tool
+    calling (só o RAG rodava aqui) — gap real: o frontend só usa o endpoint
+    de streaming, então nenhuma ferramenta MCP (incluindo
+    `consultar_estatisticas_catalogo`, ver app.mcp.pu_mcp_server) era
+    alcançável de verdade pela tela que o usuário usa.
     """
     import json as _json
 
@@ -425,6 +441,45 @@ MENSAGEM / DEMANDA DO VENDEDOR OU CLIENTE:
     yield _json.dumps({"type": "meta", "sources": sources, "model_used": model_name}) + "\n"
 
     try:
+        resposta_inicial = litellm.completion(
+            model=model_name,
+            messages=messages,
+            tools=MCP_TOOLS_DEFINITIONS,
+            tool_choice="auto",
+            temperature=0.2,
+            num_retries=3,
+        )
+        choice = resposta_inicial.choices[0]
+
+        if choice.message.tool_calls:
+            # Mesma disciplina de run_pu_matcher_agent (AUD-006): 1 mensagem
+            # assistant com TODAS as tool_calls, seguida de N mensagens tool.
+            messages.append(choice.message)
+            for tool_call in choice.message.tool_calls:
+                fn_name = tool_call.function.name
+                try:
+                    fn_args = json.loads(tool_call.function.arguments)
+                except json.JSONDecodeError as e:
+                    logger.warning(
+                        "Argumentos inválidos da tool_call %s (%s): %s", tool_call.id, fn_name, e
+                    )
+                    messages.append({
+                        "role": "tool",
+                        "tool_call_id": tool_call.id,
+                        "name": fn_name,
+                        "content": json.dumps({"erro": "argumentos JSON inválidos, tente novamente"}),
+                    })
+                    continue
+                tool_result = execute_mcp_tool(
+                    fn_name, fn_args, ver_custos=ver_custos, ver_laudo_completo=ver_laudo_completo
+                )
+                messages.append({
+                    "role": "tool",
+                    "tool_call_id": tool_call.id,
+                    "name": fn_name,
+                    "content": tool_result,
+                })
+
         response = litellm.completion(
             model=model_name,
             messages=messages,

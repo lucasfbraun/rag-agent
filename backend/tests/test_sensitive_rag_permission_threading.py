@@ -48,7 +48,10 @@ def test_run_pu_matcher_agent_sem_ver_custos_nao_inclui_sensivel(mock_completion
 @patch("app.rag.engine.retrieve_products_context", return_value=[])
 @patch("app.rag.engine.litellm.completion")
 def test_stream_pu_matcher_agent_aceita_e_repassa_ver_custos(mock_completion, mock_retrieve):
-    mock_completion.return_value = iter([])  # stream vazio, só interessa a chamada de retrieve
+    # streaming agora resolve tool calling antes de streamar: 1ª chamada
+    # (sem stream) decide se há tool_call, 2ª chamada (stream=True) gera a
+    # resposta final — precisa mockar as duas etapas.
+    mock_completion.side_effect = [_final_completion("ok"), iter([])]
 
     list(stream_pu_matcher_agent(query="teste", ver_custos=True))
 
@@ -104,7 +107,7 @@ def _token_for(perfil: Role, created_user_ids) -> str:
     return resp.json()["access_token"]
 
 
-def test_match_stream_gestor_chama_stream_agent_com_ver_custos_true(client, created_user_ids):
+def test_match_stream_gestor_chama_stream_agent_com_ver_custos_e_laudo_true(client, created_user_ids):
     token = _token_for(Role.GESTOR, created_user_ids)
     with patch("app.main.stream_pu_matcher_agent") as mock_stream:
         mock_stream.return_value = iter(['{"type": "delta", "content": "mock"}\n'])
@@ -113,9 +116,10 @@ def test_match_stream_gestor_chama_stream_agent_com_ver_custos_true(client, crea
         )
     assert resp.status_code == 200
     assert mock_stream.call_args.kwargs["ver_custos"] is True
+    assert mock_stream.call_args.kwargs["ver_laudo_completo"] is True
 
 
-def test_match_stream_vendedor_chama_stream_agent_com_ver_custos_false(client, created_user_ids):
+def test_match_stream_vendedor_chama_stream_agent_com_ver_custos_e_laudo_false(client, created_user_ids):
     token = _token_for(Role.VENDEDOR, created_user_ids)
     with patch("app.main.stream_pu_matcher_agent") as mock_stream:
         mock_stream.return_value = iter(['{"type": "delta", "content": "mock"}\n'])
@@ -124,3 +128,16 @@ def test_match_stream_vendedor_chama_stream_agent_com_ver_custos_false(client, c
         )
     assert resp.status_code == 200
     assert mock_stream.call_args.kwargs["ver_custos"] is False
+    assert mock_stream.call_args.kwargs["ver_laudo_completo"] is False
+
+
+def test_match_stream_tecnico_ve_laudo_completo_mas_nao_custos(client, created_user_ids):
+    token = _token_for(Role.TECNICO, created_user_ids)
+    with patch("app.main.stream_pu_matcher_agent") as mock_stream:
+        mock_stream.return_value = iter(['{"type": "delta", "content": "mock"}\n'])
+        resp = client.post(
+            "/api/match/stream", json={"query": "teste"}, headers={"Authorization": f"Bearer {token}"}
+        )
+    assert resp.status_code == 200
+    assert mock_stream.call_args.kwargs["ver_custos"] is False
+    assert mock_stream.call_args.kwargs["ver_laudo_completo"] is True

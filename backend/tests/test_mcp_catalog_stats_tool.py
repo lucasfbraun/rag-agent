@@ -42,3 +42,33 @@ def test_falha_no_qdrant_vira_erro_no_payload_nao_excecao_estourada():
 
     dados = json.loads(resultado)
     assert "erro" in dados
+
+
+# --- consultar_produtos_por_aplicacao: listagem/categoria -------------------
+
+def test_ferramenta_de_listagem_esta_registrada_na_lista_do_agente():
+    nomes = [t["function"]["name"] for t in MCP_TOOLS_DEFINITIONS]
+    assert "consultar_produtos_por_aplicacao" in nomes
+
+
+def test_execute_mcp_tool_lista_repassa_termo_busca_e_devolve_json_valido():
+    with patch(
+        "app.mcp.pu_mcp_server.listar_produtos_por_aplicacao",
+        return_value={"termo_buscado": "colchão", "total_produtos_encontrados": 2, "produtos": ["A", "B"], "truncado": False},
+    ) as mock_listar:
+        resultado = execute_mcp_tool("consultar_produtos_por_aplicacao", {"termo_busca": "colchão"})
+
+    mock_listar.assert_called_once_with("colchão")
+    dados = json.loads(resultado)
+    assert dados["produtos"] == ["A", "B"]
+
+
+def test_falha_no_qdrant_ao_listar_vira_erro_no_payload():
+    with patch(
+        "app.mcp.pu_mcp_server.listar_produtos_por_aplicacao",
+        side_effect=RetrievalIndisponivelError("qdrant fora do ar"),
+    ):
+        resultado = execute_mcp_tool("consultar_produtos_por_aplicacao", {"termo_busca": "colchão"})
+
+    dados = json.loads(resultado)
+    assert "erro" in dados
