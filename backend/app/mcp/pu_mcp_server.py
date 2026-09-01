@@ -67,10 +67,13 @@ def consultar_estatisticas_catalogo() -> Dict[str, Any]:
 # ("produtos para colchão"), que um top-k de poucos chunks do RAG nunca
 # representaria fielmente (achado real: "colchão" aparece em ~150
 # arquivos/dezenas de produtos distintos do acervo).
-def consultar_produtos_por_aplicacao(termo_busca: str) -> Dict[str, Any]:
-    """Lista produtos distintos do acervo cujo conteúdo menciona a aplicação/uso dado."""
+def consultar_produtos_por_aplicacao(termo_busca: str, listar_todos: bool = False) -> Dict[str, Any]:
+    """Lista produtos distintos do acervo cujo conteúdo menciona a aplicação/uso dado.
+
+    `listar_todos` (pedido do usuário): por padrão devolve prévia de 10 + o
+    total real; quando True, devolve todos, sem limite nenhum."""
     try:
-        return listar_produtos_por_aplicacao(termo_busca)
+        return listar_produtos_por_aplicacao(termo_busca, listar_todos=listar_todos)
     except RetrievalIndisponivelError as e:
         return {"erro": f"Catálogo indisponível no momento: {e}"}
 
@@ -108,7 +111,7 @@ MCP_TOOLS_DEFINITIONS = [
         "type": "function",
         "function": {
             "name": "consultar_estatisticas_catalogo",
-            "description": "Consulta números agregados do acervo real de produtos indexado (quantos produtos catalogados, quantos documentos/TDS indexados no total). Use para perguntas como 'quantos produtos temos catalogados' — NÃO tente responder isso só com o contexto de busca, que só traz um punhado de trechos.",
+            "description": "Consulta números agregados do acervo INTEIRO (quantos produtos catalogados no total, sem filtro de categoria/aplicação). Use só para 'quantos produtos temos catalogados' no total. Se a pergunta filtrar por categoria/aplicação (ex: 'quantos produtos para automotivo'), use consultar_produtos_por_aplicacao em vez desta.",
             "parameters": {"type": "object", "properties": {}}
         }
     },
@@ -116,11 +119,12 @@ MCP_TOOLS_DEFINITIONS = [
         "type": "function",
         "function": {
             "name": "consultar_produtos_por_aplicacao",
-            "description": "Lista TODOS os produtos distintos do acervo real cujo conteúdo menciona uma aplicação/uso (ex: 'colchão', 'cortiça', 'automotivo'). Use SEMPRE que o pedido for uma LISTAGEM/categoria de produtos ('produtos para colchão', 'quais produtos temos para X'), em vez de um produto específico ou uma recomendação única — o contexto de busca (RAG) só traz um punhado de trechos e NUNCA representa a categoria inteira (pode ter dezenas de produtos). Depois de listar, se o usuário pedir detalhe de um item específico, aí sim use o contexto normal de busca.",
+            "description": "Lista/conta produtos distintos do acervo real cujo conteúdo menciona uma aplicação/uso (ex: 'colchão', 'cortiça', 'automotivo'). Use SEMPRE que o pedido for uma LISTAGEM ou uma CONTAGEM POR CATEGORIA ('produtos para colchão', 'quais produtos temos para X', 'quantos produtos para automotivo temos') — em vez de um produto específico ou uma recomendação única. NÃO confundir com consultar_estatisticas_catalogo, que é o total do acervo INTEIRO, sem filtro de categoria. Por padrão devolve só uma prévia (10 produtos) + o total real encontrado — pergunte ao usuário se ele quer a lista completa ou só essa prévia antes de decidir; se ele pedir 'todos'/'a lista completa', chame de novo com listar_todos=true.",
             "parameters": {
                 "type": "object",
                 "properties": {
-                    "termo_busca": {"type": "string", "description": "Aplicação/uso citado pelo cliente (ex: 'colchão', 'cortiça')"}
+                    "termo_busca": {"type": "string", "description": "Aplicação/uso citado pelo cliente (ex: 'colchão', 'cortiça')"},
+                    "listar_todos": {"type": "boolean", "description": "true para listar TODOS os produtos encontrados, sem limite nenhum (só use depois que o usuário confirmar que quer a lista completa); false (padrão) devolve uma prévia de até 10"}
                 },
                 "required": ["termo_busca"]
             }
@@ -150,5 +154,7 @@ def execute_mcp_tool(
     elif tool_name == "consultar_estatisticas_catalogo":
         return json.dumps(consultar_estatisticas_catalogo())
     elif tool_name == "consultar_produtos_por_aplicacao":
-        return json.dumps(consultar_produtos_por_aplicacao(arguments.get("termo_busca", "")))
+        return json.dumps(consultar_produtos_por_aplicacao(
+            arguments.get("termo_busca", ""), listar_todos=arguments.get("listar_todos", False)
+        ))
     return json.dumps({"erro": "Ferramenta não encontrada."})

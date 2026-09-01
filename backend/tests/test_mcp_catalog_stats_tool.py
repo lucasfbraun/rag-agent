@@ -58,9 +58,21 @@ def test_execute_mcp_tool_lista_repassa_termo_busca_e_devolve_json_valido():
     ) as mock_listar:
         resultado = execute_mcp_tool("consultar_produtos_por_aplicacao", {"termo_busca": "colchão"})
 
-    mock_listar.assert_called_once_with("colchão")
+    mock_listar.assert_called_once_with("colchão", listar_todos=False)
     dados = json.loads(resultado)
     assert dados["produtos"] == ["A", "B"]
+
+
+def test_execute_mcp_tool_lista_repassa_listar_todos_true():
+    """Pedido do usuário: quando ele escolhe "todos", a segunda chamada da
+    ferramenta precisa vir com listar_todos=True, não a prévia de novo."""
+    with patch(
+        "app.mcp.pu_mcp_server.listar_produtos_por_aplicacao",
+        return_value={"termo_buscado": "colchão", "total_produtos_encontrados": 37, "produtos": list(range(37)), "truncado": False},
+    ) as mock_listar:
+        execute_mcp_tool("consultar_produtos_por_aplicacao", {"termo_busca": "colchão", "listar_todos": True})
+
+    mock_listar.assert_called_once_with("colchão", listar_todos=True)
 
 
 def test_falha_no_qdrant_ao_listar_vira_erro_no_payload():

@@ -90,12 +90,13 @@ B) PEDIDO ABERTO DE RECOMENDAÇÃO (o usuário ainda não sabe qual produto quer
      c) Processo do Cliente: Moldagem a frio (MDI), cura a quente (TDI), bloco contínuo ou injeção em molde fechado?
    - QUANDO VOCÊ TIVER DADOS SUFICIENTES (seja de cara, seja depois de perguntar): busque e cruze os dados com os documentos de produtos (TDS) e ferramentas MCP fornecidas, apresente a recomendação no FORMATO PADRÃO DO TEMPLATE CONFIGURADO, e seja opinativo — se o cliente pedir algo incompatível (ex: densidade baixíssima com ultra resiliência sem antichama), alerte e sugira a melhor prática de mercado.
 
-C) PEDIDO DE LISTAGEM/CATEGORIA (o usuário quer VER AS OPÇÕES, não uma recomendação única nem um dado de produto específico):
-   - Ex: "produtos para colchão", "quais produtos temos para automotivo", "o que vocês têm pra calçados".
-   - Reconheça pelo formato: "produtos para X" / "quais produtos" / "o que temos para" / "lista de produtos" — isso pede uma LISTA, não 1 recomendação nem uma investigação de requisitos.
-   - CHAME A FERRAMENTA `consultar_produtos_por_aplicacao` com o termo da aplicação (ex: "colchão"). O contexto de busca normal (RAG) só traz um punhado de trechos e NUNCA representa a categoria inteira — pode haver dezenas de produtos, e usar só o contexto faria você listar um subconjunto arbitrário como se fosse tudo.
-   - APRESENTE COMO LISTA CURTA (nome do produto, 1 linha cada — não abra os detalhes técnicos de cada um). Termine convidando o vendedor a pedir detalhe de um item específico ("me diga o nome de um deles que eu trago a ficha completa").
-   - Se a ferramenta indicar `truncado: true`, avise que a lista foi resumida e que há mais opções disponíveis.
+C) PEDIDO DE LISTAGEM/CATEGORIA (o usuário quer VER AS OPÇÕES ou SABER QUANTOS PRODUTOS existem numa categoria — não uma recomendação única nem um dado de produto específico):
+   - Ex: "produtos para colchão", "quais produtos temos para automotivo", "o que vocês têm pra calçados", "quantos produtos para o ramo automotivo temos".
+   - Reconheça pelo formato: "produtos para X" / "quais produtos" / "o que temos para" / "lista de produtos" / "quantos produtos para X" — TODOS esses pedem a ferramenta de categoria, não 1 recomendação nem uma investigação de requisitos nem a ferramenta de total do acervo inteiro.
+   - CHAME A FERRAMENTA `consultar_produtos_por_aplicacao` com o termo da aplicação (ex: "colchão"), SEM `listar_todos` na primeira chamada (fica false por padrão — devolve o total real + uma prévia de até 10). O contexto de busca normal (RAG) só traz um punhado de trechos e NUNCA representa a categoria inteira — pode haver dezenas de produtos, e usar só o contexto faria você listar/contar um subconjunto arbitrário como se fosse tudo.
+   - RESPONDA COM O TOTAL REAL primeiro (ex: "Temos 45 produtos para automotivo.") e a prévia dos 10 primeiros como lista curta (nome do produto, 1 linha cada — não abra detalhes técnicos). DEPOIS PERGUNTE: "Quer que eu liste todos os 45 ou só esses 10 principais?" — NÃO decida sozinho, deixe o vendedor escolher.
+   - SE O VENDEDOR PEDIR "todos"/"a lista completa"/"todos os X": chame a ferramenta DE NOVO com `listar_todos=true` e liste TODOS os produtos devolvidos, independente de quantos sejam (10, 50, 100 — não resuma nem corte por conta própria).
+   - Depois de listar (prévia ou completa), convide o vendedor a pedir detalhe de um item específico ("me diga o nome de um deles que eu trago a ficha completa").
 """
 
 def _get_qdrant_client():

@@ -91,7 +91,7 @@ def _termo_para_busca(termo: str) -> str:
     return termo[:-2] if len(termo) >= 6 else termo
 
 
-def listar_produtos_por_aplicacao(termo_busca: str, limite: int = 30) -> Dict[str, Any]:
+def listar_produtos_por_aplicacao(termo_busca: str, listar_todos: bool = False) -> Dict[str, Any]:
     """Lista produtos distintos do acervo cujo conteúdo menciona o termo
     dado (aplicação/uso, ex: "colchão", "cortiça").
 
@@ -104,7 +104,13 @@ def listar_produtos_por_aplicacao(termo_busca: str, limite: int = 30) -> Dict[st
     conjuntos de top-6 sem nenhuma sobreposição). Isso varre a coleção
     inteira e devolve os NOMES dos produtos, não os trechos de texto — quem
     quiser detalhe de um item específico faz uma pergunta de acompanhamento,
-    que aí sim usa retrieve_products_context normalmente."""
+    que aí sim usa retrieve_products_context normalmente.
+
+    `listar_todos` (pedido do usuário): por padrão devolve só uma prévia
+    (10 produtos) + o total real encontrado, pra o agente perguntar se o
+    vendedor quer a lista completa antes de despejar dezenas de nomes.
+    Quando `listar_todos=True`, devolve TODOS sem nenhum limite, não importa
+    quantos sejam."""
     try:
         client = get_qdrant_client()
         stem = _termo_para_busca(termo_busca)
@@ -131,9 +137,10 @@ def listar_produtos_por_aplicacao(termo_busca: str, limite: int = 30) -> Dict[st
         raise RetrievalIndisponivelError(str(e)) from e
 
     lista = sorted(produtos)
+    limite = None if listar_todos else 10
     return {
         "termo_buscado": termo_busca,
         "total_produtos_encontrados": len(lista),
-        "produtos": lista[:limite],
-        "truncado": len(lista) > limite,
+        "produtos": lista if limite is None else lista[:limite],
+        "truncado": limite is not None and len(lista) > limite,
     }

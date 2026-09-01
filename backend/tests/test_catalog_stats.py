@@ -125,19 +125,36 @@ def test_lista_produtos_distintos_que_mencionam_o_termo_stemado():
     assert resultado["truncado"] is False
 
 
-def test_lista_produtos_respeita_limite_e_sinaliza_truncamento():
+def test_lista_produtos_por_padrao_traz_previa_de_10_e_sinaliza_truncamento():
     fake_client = MagicMock()
     pontos = [
         _ponto_com_conteudo(f"...\\PRODUTO {i}\\Boletim.pdf", "menciona colchão")
-        for i in range(5)
+        for i in range(15)
     ]
     fake_client.scroll.return_value = (pontos, None)
     with patch("app.rag.catalog_stats.get_qdrant_client", return_value=fake_client):
-        resultado = listar_produtos_por_aplicacao("colchão", limite=3)
+        resultado = listar_produtos_por_aplicacao("colchão")  # listar_todos=False (padrão)
 
-    assert resultado["total_produtos_encontrados"] == 5
-    assert len(resultado["produtos"]) == 3
+    assert resultado["total_produtos_encontrados"] == 15
+    assert len(resultado["produtos"]) == 10
     assert resultado["truncado"] is True
+
+
+def test_lista_produtos_com_listar_todos_devolve_tudo_sem_limite():
+    """Pedido do usuário: se ele escolher "todos", listar todos os produtos
+    encontrados, não importa quantos sejam."""
+    fake_client = MagicMock()
+    pontos = [
+        _ponto_com_conteudo(f"...\\PRODUTO {i}\\Boletim.pdf", "menciona colchão")
+        for i in range(37)
+    ]
+    fake_client.scroll.return_value = (pontos, None)
+    with patch("app.rag.catalog_stats.get_qdrant_client", return_value=fake_client):
+        resultado = listar_produtos_por_aplicacao("colchão", listar_todos=True)
+
+    assert resultado["total_produtos_encontrados"] == 37
+    assert len(resultado["produtos"]) == 37
+    assert resultado["truncado"] is False
 
 
 def test_falha_no_qdrant_ao_listar_levanta_erro_tipado():
