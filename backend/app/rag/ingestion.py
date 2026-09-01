@@ -1,8 +1,10 @@
 import os
+import re
 import uuid
 import glob
+import hashlib
 from collections import defaultdict
-from typing import Dict, List, Set
+from typing import Dict, List, Set, Tuple
 from pypdf import PdfReader
 import docx
 from qdrant_client import QdrantClient
@@ -130,6 +132,69 @@ def _e_conteudo_sensivel(texto: str) -> bool:
     return any(palavra in texto_lower for palavra in _PALAVRAS_CHAVE_SENSIVEIS)
 
 
+# Deduplicação de arquivos (achado real: auditoria da coleção real mostrou
+# ~4.900 chunks — quase metade do acervo — redundantes por dois padrões
+# distintos, nenhum filtrado até esta sessão).
+
+_EXTENSAO_PREFERENCIA = {".pdf": 0, ".docx": 1, ".doc": 2, ".txt": 3}
+
+# "DOCUMENTAÇÃO DE PRODUTO RESTAURADO 0906" é uma árvore de pastas restaurada
+# de um backup antigo que duplica, byte a byte, ~3.500 arquivos já existentes
+# na árvore "atual" do acervo. Quando dois arquivos têm o MESMO CONTEÚDO
+# (ver `_hash_conteudo`), o que estiver numa pasta com este marcador no
+# caminho perde a disputa — mantém-se a cópia da árvore "viva".
+_MARCADOR_PASTA_MENOS_PRIORITARIA = "restaurado"
+
+
+def _agrupar_por_nome_base(arquivos: List[str]) -> Dict[Tuple[str, str], List[str]]:
+    """Agrupa arquivos que ficam na MESMA pasta e têm o MESMO nome, só a
+    extensão muda — achado real: ~1.200 pares de PDF/DOCX do mesmo boletim ou
+    FISPQ indexados em dobro (a extração de texto difere um pouco entre
+    formatos — ~95% de similaridade, não hash idêntico — por isso a detecção
+    aqui é estrutural: mesma pasta, mesmo nome, não comparação de conteúdo)."""
+    grupos: Dict[Tuple[str, str], List[str]] = defaultdict(list)
+    for f in arquivos:
+        pasta = os.path.dirname(f)
+        base = os.path.splitext(os.path.basename(f))[0].strip().lower()
+        grupos[(pasta, base)].append(f)
+    return grupos
+
+
+def _escolher_arquivo_preferido(caminhos: List[str]) -> str:
+    """PDF > DOCX > DOC > TXT — PDF é o formato final/publicado mais comum
+    no acervo; formatos não listados (não deveria acontecer, `supported` já
+    filtra por extensão) ficam por último."""
+    return min(caminhos, key=lambda c: _EXTENSAO_PREFERENCIA.get(os.path.splitext(c)[1].lower(), 99))
+
+
+def _filtrar_duplicatas_de_formato(arquivos: List[str]) -> Tuple[List[str], List[str]]:
+    """Retorna (mantidos, descartados): pra cada grupo de mesmo nome/pasta,
+    mantém só 1 arquivo."""
+    grupos = _agrupar_por_nome_base(arquivos)
+    preferidos = {_escolher_arquivo_preferido(v) for v in grupos.values()}
+    mantidos = [f for f in arquivos if f in preferidos]
+    descartados = [f for f in arquivos if f not in preferidos]
+    return mantidos, descartados
+
+
+def _ordenar_por_prioridade(arquivos: List[str]) -> List[str]:
+    """Processa primeiro os arquivos fora de pastas "restauradas" — em caso
+    de empate de conteúdo idêntico (`_hash_conteudo`), o primeiro processado
+    é o que fica indexado, os demais são ignorados como duplicata."""
+    return sorted(arquivos, key=lambda c: (_MARCADOR_PASTA_MENOS_PRIORITARIA in c.lower(), c))
+
+
+def _normalizar_texto(texto: str) -> str:
+    return re.sub(r"\s+", " ", texto).strip().lower()
+
+
+def _hash_conteudo(texto: str) -> str:
+    """Hash do texto extraído, normalizado por espaço em branco — detecta
+    arquivos com conteúdo EXATAMENTE idêntico (mesmo texto, caminhos
+    diferentes), independente de nome de arquivo ou pasta."""
+    return hashlib.sha256(_normalizar_texto(texto).encode("utf-8", errors="ignore")).hexdigest()
+
+
 def chunk_text(text: str, chunk_size: int = 700, overlap: int = 120) -> List[str]:
     """Divide texto em chunks com overlap para preservar contexto entre trechos."""
     words = text.split()
@@ -217,12 +282,29 @@ def ingest_catalog_directory(dir_path: str, embedding_model: str = EMBEDDING_MOD
 
     files = glob.glob(os.path.join(dir_path, "**/*.*"), recursive=True)
     supported = [f for f in files if f.lower().endswith((".pdf", ".docx", ".doc", ".txt"))]
+
+    # Deduplicação (achado real: auditoria da coleção mostrou ~4.900 chunks
+    # redundantes — quase metade do acervo). Dois filtros ANTES de extrair
+    # texto/gerar embedding, pra nem gastar esse custo com cópia descartada:
+    # (1) mesmo nome+pasta, só a extensão muda — mantém 1 (_filtrar_duplicatas_de_formato);
+    # (2) processa fora de pastas "restauradas" primeiro, pra elas perderem o
+    # desempate de conteúdo idêntico (_ordenar_por_prioridade + hash abaixo).
+    supported, descartados_formato = _filtrar_duplicatas_de_formato(supported)
+    supported = _ordenar_por_prioridade(supported)
+
     print(f"🚀 Iniciando indexação de {len(supported)} arquivos de produtos (de {len(files)} total)...")
+    if descartados_formato:
+        print(
+            f"⏭️ {len(descartados_formato)} arquivo(s) ignorado(s) por serem outro formato "
+            "do mesmo documento já incluído (mesmo nome, mesma pasta)."
+        )
 
     points = []
     indexed_chunks = 0
     skipped_files = 0
     removed_chunks = 0
+    duplicados_de_conteudo = 0
+    hashes_processados: Set[str] = set()
 
     for file_path in supported:
         filename = os.path.basename(file_path)
@@ -238,6 +320,18 @@ def ingest_catalog_directory(dir_path: str, embedding_model: str = EMBEDDING_MOD
                 print(f"⚠️ Arquivo vazio ou sem texto extraível: {filename}")
                 skipped_files += 1
                 continue
+
+            hash_arquivo = _hash_conteudo(raw_text)
+            if hash_arquivo in hashes_processados:
+                # Não faz `existentes_por_arquivo.pop(file_path, ...)` de
+                # propósito — se este arquivo já tinha pontos indexados de
+                # uma execução anterior (antes deste filtro existir), eles
+                # ficam "órfãos" e são removidos no passo final, igual um
+                # arquivo removido do acervo.
+                print(f"⏭️ '{filename}' ignorado: conteúdo idêntico a outro arquivo já indexado nesta execução.")
+                duplicados_de_conteudo += 1
+                continue
+            hashes_processados.add(hash_arquivo)
 
             chunks = chunk_text(raw_text)
 
@@ -296,7 +390,9 @@ def ingest_catalog_directory(dir_path: str, embedding_model: str = EMBEDDING_MOD
 
     print(
         f"🎉 Indexação concluída! "
-        f"{indexed_chunks} trechos de {len(supported) - skipped_files} arquivos indexados. "
+        f"{indexed_chunks} trechos de {len(supported) - skipped_files - duplicados_de_conteudo} arquivos indexados. "
         f"{skipped_files} arquivo(s) ignorado(s). "
+        f"{duplicados_de_conteudo} duplicata(s) de conteúdo ignorada(s) nesta execução. "
+        f"{len(descartados_formato)} duplicata(s) de formato ignorada(s) antes de processar. "
         f"{removed_chunks} chunk(s) obsoleto(s) removido(s)."
     )
