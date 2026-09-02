@@ -162,3 +162,59 @@ def test_historico_persistido_preserva_correcoes_anteriores_para_guardrail():
 
     assert len(history) == 12
     assert history[0]["content"] == "mensagem 0"
+
+
+@patch("app.rag.engine.retrieve_products_context", return_value=[])
+@patch("app.rag.engine.execute_mcp_tool")
+@patch("app.rag.engine.litellm.completion")
+def test_listagem_de_elastomeros_remove_adts_e_cats_inseridos_pelo_llm(
+    mock_completion, mock_execute, _mock_retrieve
+):
+    mock_execute.return_value = json.dumps({
+        "por_aplicacao_ou_tipo": {
+            "total": 2,
+            "produtos": ["FLEXX TH T160DE1", "FLEXX TH T193AH4"],
+            "truncado": False,
+        }
+    })
+    mock_completion.return_value = _completion(
+        "Produtos encontrados:\n"
+        "1. FLEXX ADT 432\n"
+        "2. FLEXX CAT 100\n"
+        "3. FLEXX TH T160DE1"
+    )
+
+    result = run_pu_matcher_agent(query="liste os produtos elastômeros")
+
+    assert "FLEXX ADT" not in result["answer"]
+    assert "FLEXX CAT" not in result["answer"]
+    assert "FLEXX TH T160DE1" in result["answer"]
+    assert "2 produtos" in result["answer"]
+    mock_completion.assert_not_called()
+    _mock_retrieve.assert_not_called()
+
+
+@patch("app.rag.engine.retrieve_products_context", return_value=[])
+@patch("app.rag.engine.execute_mcp_tool")
+@patch("app.rag.engine.litellm.completion")
+def test_stream_listagem_elastomeros_tambem_e_deterministico(
+    mock_completion, mock_execute, mock_retrieve
+):
+    mock_execute.return_value = json.dumps({
+        "por_aplicacao_ou_tipo": {
+            "total": 1,
+            "produtos": ["FLEXX TH T160DE1"],
+            "truncado": False,
+        }
+    })
+
+    events = [
+        json.loads(line)
+        for line in stream_pu_matcher_agent(query="liste os produtos elastômeros")
+    ]
+    answer = "".join(event.get("content", "") for event in events if event["type"] == "delta")
+
+    assert "FLEXX TH T160DE1" in answer
+    assert "FLEXX ADT" not in answer
+    mock_completion.assert_not_called()
+    mock_retrieve.assert_not_called()

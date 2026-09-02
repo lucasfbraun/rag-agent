@@ -309,6 +309,35 @@ def test_correia_bate_no_singular_e_plural_como_palavra_inteira():
     assert _termo_bate_no_conteudo("correia", "produção de correias transportadoras") is True
 
 
+def test_listagem_de_elastomeros_exclui_aditivo_e_catalisador():
+    """Incidente real: menção ao destino do produto não classifica sua
+    natureza. ADT e CAT são auxiliares; TH é o sistema que produz o
+    elastômero e deve permanecer no resultado."""
+    fake_client = MagicMock()
+    fake_client.scroll.return_value = (
+        [
+            _ponto_com_conteudo(
+                r"...\FLEXX ADT 432\Boletim FLEXX ADT 432.pdf",
+                "FLEXX ADT 432, aditivo para elastômeros. Aplicado em elastômeros.",
+            ),
+            _ponto_com_conteudo(
+                r"...\FLEXX CAT 100\Boletim FLEXX CAT 100.pdf",
+                "Catalisador utilizado na produção de espumas e elastômeros.",
+            ),
+            _ponto_com_conteudo(
+                r"...\FLEXX TH T160DE1\Boletim FLEXX TH T160DE1.pdf",
+                "Pré-polímero que, combinado com CAT 1, produz elastômero de poliuretano.",
+            ),
+        ],
+        None,
+    )
+
+    with patch("app.rag.catalog_stats.get_qdrant_client", return_value=fake_client):
+        resultado = listar_produtos_por_aplicacao("elastômero")
+
+    assert resultado["por_aplicacao_ou_tipo"]["produtos"] == ["FLEXX TH T160DE1"]
+
+
 def test_termo_de_varias_palavras_continua_usando_substring():
     """Frase (não 1 palavra só) — risco de falso positivo por fragmento é
     baixo o bastante pra manter o comportamento simples de antes."""

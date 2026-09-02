@@ -149,6 +149,7 @@ C) PEDIDO DE LISTAGEM/CATEGORIA (o usuário quer VER AS OPÇÕES ou SABER QUANTO
 REGRAS DE EVIDÊNCIA E CORREÇÃO — OBRIGATÓRIAS:
    - Uma CORREÇÃO EXPLÍCITA DO USUÁRIO é uma restrição obrigatória para o restante da conversa. Se ele disser que uma família não pertence à classe pedida, não serve ou deve ser descartada, NÃO volte a recomendar nenhum produto dessa família.
    - Menção não é classificação: um documento dizer "aditivo para elastômeros", "aglutinante de elastômeros" ou citar uma aplicação não prova que o produto É um elastômero nem que atende à aplicação. A natureza do produto e a aplicação precisam estar explicitamente sustentadas por Boletim Técnico do próprio produto.
+   - Em LISTAGENS de elastômeros, não inclua famílias auxiliares ADT (aditivos) nem CAT (catalisadores/curativos). Elas podem participar do processo, mas não são o sistema ou pré-polímero que produz o elastômero.
    - Nunca transforme ausência de especificação em "não atende" e nunca marque "compatível", "homologado" ou "produto ativo" sem evidência explícita da fonte adequada.
    - O sistema não possui integração real com ERP/LIMS. Portanto, informe que status comercial, estoque, código ERP e homologação não foram verificados; não invente esses dados.
    - Se não houver evidência suficiente para um produto da classe e aplicação pedidas, diga que não encontrou um candidato comprovado e encaminhe para validação da equipe técnica/P&D. É melhor não recomendar do que recomendar uma classe errada.
@@ -188,6 +189,49 @@ def _resposta_recomenda_familia(answer: str, familia: str) -> bool:
     return bool(re.search(rf"{marcador}[^\n]{{0,80}}\b(?:flexx\s+)?{re.escape(familia)}\b", texto))
 
 
+def _eh_pedido_listagem_elastomeros(query: str) -> bool:
+    texto = _normalizar_para_regra(query)
+    return (
+        "elastomero" in texto
+        and bool(re.search(r"\b(?:list\w*|produtos?|quais|traga|mostre)\b", texto))
+    )
+
+
+def _responder_listagem_elastomeros(query: str) -> str:
+    """Resposta estruturada sem LLM para uma classificação de alto risco."""
+    texto = _normalizar_para_regra(query)
+    listar_todos = bool(re.search(r"\b(?:todos|todas|completa|completo)\b", texto))
+    payload = json.loads(execute_mcp_tool(
+        "consultar_produtos_por_aplicacao",
+        {"termo_busca": "elastômero", "listar_todos": listar_todos},
+    ))
+    if payload.get("erro"):
+        return "Catálogo de produtos indisponível no momento. Tente novamente em instantes."
+
+    bucket = payload.get("por_aplicacao_ou_tipo") or {}
+    total = int(bucket.get("total") or 0)
+    produtos = bucket.get("produtos") or []
+    if not produtos:
+        return (
+            "Não encontrei produtos cujo Boletim Técnico comprove a produção de um "
+            "sistema elastomérico. Aditivos e catalisadores auxiliares não são classificados "
+            "como elastômeros."
+        )
+
+    linhas = [
+        f"Encontrei {total} produtos que compõem sistemas com produção de poliuretano "
+        "elastomérico comprovada em Boletim Técnico.",
+        "",
+        *[f"{indice}. {produto}" for indice, produto in enumerate(produtos, start=1)],
+        "",
+        "Aditivos ADT e catalisadores/curativos CAT foram excluídos: são auxiliares de "
+        "processo, não o sistema ou pré-polímero que produz o elastômero.",
+    ]
+    if bucket.get("truncado"):
+        linhas.extend(["", f"Quer que eu liste todos os {total} produtos?"])
+    return "\n".join(linhas)
+
+
 def _aplicar_guardrails_resposta(
     query: str,
     answer: str,
@@ -218,6 +262,23 @@ def _aplicar_guardrails_resposta(
                 "comprovadas no acervo; sem essa evidência, o encaminhamento correto é a equipe "
                 "técnica/P&D."
             )
+
+    if _eh_pedido_listagem_elastomeros(query):
+        linhas_seguras = []
+        for linha in answer.splitlines():
+            linha_normalizada = _normalizar_para_regra(linha)
+            produto_auxiliar = re.search(
+                r"\bflexx\s+(?:adt|cat)\s+[a-z0-9]", linha_normalizada
+            )
+            if not produto_auxiliar:
+                linhas_seguras.append(linha)
+        answer = "\n".join(linhas_seguras).strip()
+        if not answer:
+            answer = (
+                "Não encontrei na resposta produtos com evidência suficiente de sistema "
+                "elastomérico. Aditivos e catalisadores auxiliares foram excluídos."
+            )
+
     # Não existe fonte real de disponibilidade no sistema. Neutralizamos as
     # formulações mais comuns mesmo que o modelo ignore prompt e template.
     padroes_status_sem_fonte = (
@@ -532,6 +593,13 @@ def run_pu_matcher_agent(
     (`incluir_sensivel`, AUD-002/ticket 6 — reaproveita VIEW_COSTS pra
     custo/fórmula, ver docs/spec_rbac.md "Pendências" item 2). engine.py não
     decide permissão, só encaminha a decisão já tomada."""
+    if _eh_pedido_listagem_elastomeros(query):
+        return {
+            "answer": _responder_listagem_elastomeros(query),
+            "sources": [],
+            "model_used": "catalogo-estruturado",
+        }
+
     query_recuperacao = _montar_query_recuperacao(query, history)
     docs = retrieve_products_context(query_recuperacao, incluir_sensivel=ver_custos)
     context_str = _montar_context_str(query_recuperacao, docs)
@@ -628,6 +696,16 @@ def stream_pu_matcher_agent(
     alcançável de verdade pela tela que o usuário usa.
     """
     import json as _json
+
+    if _eh_pedido_listagem_elastomeros(query):
+        yield _json.dumps({
+            "type": "meta", "sources": [], "model_used": "catalogo-estruturado"
+        }) + "\n"
+        yield _json.dumps({
+            "type": "delta", "content": _responder_listagem_elastomeros(query)
+        }) + "\n"
+        yield _json.dumps({"type": "done"}) + "\n"
+        return
 
     try:
         query_recuperacao = _montar_query_recuperacao(query, history)

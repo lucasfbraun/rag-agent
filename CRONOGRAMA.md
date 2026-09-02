@@ -70,6 +70,7 @@ O checklist abaixo (`--full` concluído, 11.273 trechos) descreve o estado **his
 - Busca por aplicação usa palavra/flexão inteira; `correia` não casa mais com `corretamente`/`corrente` em FISPQs (341 → 22 ocorrências literais reais, todas em Boletins da família TH na prévia).
 - Follow-up de correção recupera com a demanda anterior e exclui a família rejeitada da busca positiva; consultas textuais são feitas por termo/flexão antes da pontuação, evitando que o limite de 50 resultados sem ranking esconda os documentos corretos.
 - Guardrail pós-resposta bloqueia família rejeitada durante a conversa inteira nos fluxos síncrono e streaming; status ativo/estoque sem ERP é neutralizado.
+- Listagem explícita de elastômeros é determinística nas rotas síncrona e streaming: só aceita evidência positiva em Boletim de que o produto/sistema produz poliuretano elastomérico. Validação no catálogo real: 46 resultados, zero ADT/CAT; o LLM não participa dessa classificação nem pode reinserir auxiliares.
 - Ferramentas simuladas de ERP/LIMS removidas de `MCP_TOOLS_DEFINITIONS`; templates não afirmam mais código ERP/status comercial. Integração real continua pendente na Fase 4.
 - Validação local real: top-6 somente Boletins FLEXX TH que citam o sistema elastomérico e as três aplicações; `ollama/qwen2.5:3b` não recomendou ADT. Produção `gpt-4o-mini` aguarda autorização específica para envio externo.
 

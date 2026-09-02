@@ -144,6 +144,32 @@ def _termo_bate_no_nome_produto(termo: str, produto: str) -> bool:
 _SEPARADOR_PALAVRA_CONTEUDO = re.compile(r"[^a-zà-öø-ÿ]+")
 
 
+def _normalizar_sem_acentos(texto: str) -> str:
+    decomposed = unicodedata.normalize("NFKD", (texto or "").lower())
+    return "".join(c for c in decomposed if not unicodedata.combining(c))
+
+
+def _conteudo_comprova_tipo_elastomero(filepath: str, content: str) -> bool:
+    """True somente para evidência positiva no Boletim do próprio produto.
+
+    "Aditivo para elastômeros" e "catalisador usado em elastômeros" são
+    relações de uso, não classificação da natureza do produto.
+    """
+    nome_arquivo = _SEPARADOR_CAMINHO.split(filepath)[-1]
+    if "boletim" not in _normalizar_sem_acentos(nome_arquivo):
+        return False
+
+    texto = _normalizar_sem_acentos(content)
+    evidencias_positivas = (
+        r"\bproduz(?:ir|em)?\s+(?:um\s+)?elastomero\b",
+        r"\bobter\s+(?:um\s+)?elastomero\b",
+        r"\bformacao\s+(?:de\s+)?elastomero\b",
+        r"\bsistema\s+elastomerico\b",
+        r"\bpoliuretano\s+elastomerico\b",
+    )
+    return any(re.search(padrao, texto) for padrao in evidencias_positivas)
+
+
 def _termo_bate_no_conteudo(termo_busca: str, content_lower: str) -> bool:
     """True se `termo_busca` aparece no conteúdo do documento.
 
@@ -158,8 +184,7 @@ def _termo_bate_no_conteudo(termo_busca: str, content_lower: str) -> bool:
     "correia"/"correias", sem o prefixo aberto que fazia "correia" casar
     com "corretamente" e "corrente" em centenas de FISPQs."""
     def _normalizar(texto: str) -> str:
-        sem_acentos = unicodedata.normalize("NFKD", texto.lower())
-        return "".join(c for c in sem_acentos if not unicodedata.combining(c))
+        return _normalizar_sem_acentos(texto)
 
     def _flexoes(palavra: str) -> set[str]:
         """Flexões conservadoras, suficientes para singular/plural sem usar
@@ -268,7 +293,17 @@ def listar_produtos_por_aplicacao(termo_busca: str = "", listar_todos: bool = Fa
                     continue
 
                 content = (payload.get("content") or "").lower()
-                if _termo_bate_no_conteudo(termo_busca, content):
+                termo_normalizado = _normalizar_sem_acentos(termo_busca)
+                busca_tipo_elastomero = termo_normalizado in {
+                    "elastomero", "elastomeros", "elastomerico", "elastomericos",
+                }
+                if busca_tipo_elastomero:
+                    bate = _conteudo_comprova_tipo_elastomero(
+                        payload.get("filepath") or "", content
+                    )
+                else:
+                    bate = _termo_bate_no_conteudo(termo_busca, content)
+                if bate:
                     produtos_por_conteudo.add(produto)
             if offset is None:
                 break
