@@ -124,7 +124,8 @@ curl http://localhost:8000/api/match -H "Authorization: Bearer <access_token>" .
 ├── backend/app/
 │   ├── main.py             # API REST FastAPI
 │   ├── templates.py        # Templates padronizados de resposta
-│   ├── db.py, models.py    # Conexão Postgres e model User (Fase 5)
+│   ├── db.py, models.py    # Postgres: usuários, feedback e conversas
+│   ├── conversation_*.py   # CRUD e persistência do histórico por usuário
 │   ├── auth/                # Autenticação, autorização e administração de usuários (Fase 5)
 │   ├── mcp/                 # Ferramentas MCP (catálogo ERP, normas)
 │   └── rag/                 # Ingestão e motor do agente investigativo
@@ -149,6 +150,8 @@ curl http://localhost:8000/api/match -H "Authorization: Bearer <access_token>" .
 | `/api/templates` | GET | `SELECT_TEMPLATE` (todos os perfis) | Lista os templates disponíveis |
 | `/api/match` | POST | `VIEW_CATALOG` (todos os perfis) | Executa o agente investigativo |
 | `/api/match/stream` | POST | `VIEW_CATALOG` (todos os perfis) | Mesma coisa, em streaming (SSE/NDJSON) |
+| `/api/conversations` | GET / POST | `VIEW_CATALOG` (todos os perfis) | Lista / cria conversas do usuário atual |
+| `/api/conversations/{id}` | GET / DELETE | `VIEW_CATALOG` (proprietário) | Retoma / apaga uma conversa e suas mensagens |
 | `/api/ingest` | POST | `MANAGE_INGESTION` (só Admin TI) | Dispara ingestão de documentos em background |
 | `/api/auth/users` | GET / POST | `MANAGE_USERS` (só Admin TI) | Lista / cria usuário |
 | `/api/auth/users/{id}` | GET / PATCH | `MANAGE_USERS` (só Admin TI) | Obtém / edita usuário |

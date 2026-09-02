@@ -2,6 +2,7 @@ from fastapi import Depends, FastAPI, HTTPException, BackgroundTasks
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 from typing import List, Literal, Optional
+import uuid
 from sqlalchemy.orm import Session
 from app.rag.engine import run_pu_matcher_agent, stream_pu_matcher_agent, RetrievalIndisponivelError
 from app.templates import TEMPLATES_DISPONIVEIS
@@ -11,11 +12,20 @@ from app.config import (
 )
 from app.auth.router import router as auth_router
 from app.auth.admin_router import router as admin_router
+from app.conversation_router import router as conversation_router
 from app.auth.permissions import Permission, has_permission, require_permission
 from app.models import User
 from app.db import get_session
 from app.feedback_service import registrar_feedback
+from app.conversation_service import (
+    ConversationNotFoundError,
+    create_conversation,
+    get_conversation,
+    history_for_agent,
+    save_exchange,
+)
 import logging
+import json
 import os
 
 logger = logging.getLogger(__name__)
@@ -27,6 +37,7 @@ app = FastAPI(
 )
 app.include_router(auth_router)
 app.include_router(admin_router)
+app.include_router(conversation_router)
 
 # ---------------------------------------------------------------------------
 # Schemas
@@ -48,6 +59,7 @@ class MatchRequest(BaseModel):
     template_id: str = "proposta_tecnica_completa"
     model_name: str = DEFAULT_CHAT_MODEL
     history: Optional[List[HistoryMessage]] = []
+    conversation_id: Optional[uuid.UUID] = None
 
     @field_validator("model_name")
     @classmethod
@@ -150,22 +162,47 @@ def list_templates():
 
 
 @app.post("/api/match")
-def match_product(req: MatchRequest, current_user: User = Depends(require_permission(Permission.VIEW_CATALOG))):
+def match_product(
+    req: MatchRequest,
+    current_user: User = Depends(require_permission(Permission.VIEW_CATALOG)),
+    session: Session = Depends(get_session),
+):
     """Executa o agente investigativo para match de produto.
 
     Campos sensíveis (custos industriais, laudo de homologação completo) são
     liberados às ferramentas MCP conforme a permissão do usuário logado — nunca
     por instrução de prompt (docs/spec_rbac.md, "Campos sensíveis")."""
     try:
+        persisted_conversation = None
+        history = _history_as_dicts(req)
+        if req.conversation_id is not None:
+            persisted_conversation = get_conversation(
+                session,
+                conversation_id=req.conversation_id,
+                user_id=current_user.id,
+            )
+            history = history_for_agent(persisted_conversation)
+
         res = run_pu_matcher_agent(
             query=req.query,
             template_id=req.template_id,
             model_name=req.model_name,
-            history=_history_as_dicts(req),
+            history=history,
             ver_custos=has_permission(current_user, Permission.VIEW_COSTS),
             ver_laudo_completo=has_permission(current_user, Permission.VIEW_HOMOLOGATION_FULL),
         )
-        return res
+        conversation = save_exchange(
+            session,
+            user_id=current_user.id,
+            conversation_id=(persisted_conversation.id if persisted_conversation else None),
+            query=req.query,
+            answer=res["answer"],
+            sources=res.get("sources"),
+            model_used=res.get("model_used"),
+        )
+        return {**res, "conversation_id": str(conversation.id)}
+    except ConversationNotFoundError:
+        raise HTTPException(status_code=404, detail="Conversa não encontrada.")
     except RetrievalIndisponivelError as e:
         logger.error("Catálogo indisponível em /api/match: %s", e)
         raise HTTPException(
@@ -184,7 +221,9 @@ def match_product(req: MatchRequest, current_user: User = Depends(require_permis
 
 @app.post("/api/match/stream")
 def match_product_stream(
-    req: MatchRequest, current_user: User = Depends(require_permission(Permission.VIEW_CATALOG))
+    req: MatchRequest,
+    current_user: User = Depends(require_permission(Permission.VIEW_CATALOG)),
+    session: Session = Depends(get_session),
 ):
     """
     Versão streaming do agente (Server-Sent Events).
@@ -200,16 +239,69 @@ def match_product_stream(
     contrato de `/api/match`. Precisou trocar `dependencies=[...]` por
     injeção real de `current_user`, igual `/api/match` já fazia.
     """
+    try:
+        if req.conversation_id is None:
+            conversation = create_conversation(session, user_id=current_user.id)
+        else:
+            conversation = get_conversation(
+                session,
+                conversation_id=req.conversation_id,
+                user_id=current_user.id,
+            )
+    except ConversationNotFoundError:
+        raise HTTPException(status_code=404, detail="Conversa não encontrada.")
+
     generator = stream_pu_matcher_agent(
         query=req.query,
         template_id=req.template_id,
         model_name=req.model_name,
-        history=_history_as_dicts(req),
+        history=history_for_agent(conversation),
         ver_custos=has_permission(current_user, Permission.VIEW_COSTS),
         ver_laudo_completo=has_permission(current_user, Permission.VIEW_HOMOLOGATION_FULL),
     )
+
+    def persist_and_stream():
+        answer_parts = []
+        sources = []
+        model_used = req.model_name
+        failed = False
+
+        for raw_event in generator:
+            try:
+                event = json.loads(raw_event)
+            except (json.JSONDecodeError, TypeError):
+                yield raw_event
+                continue
+
+            if event.get("type") == "meta":
+                sources = event.get("sources") or []
+                model_used = event.get("model_used") or req.model_name
+                event["conversation_id"] = str(conversation.id)
+                yield json.dumps(event) + "\n"
+            elif event.get("type") == "delta":
+                answer_parts.append(event.get("content", ""))
+                yield raw_event
+            elif event.get("type") == "error":
+                failed = True
+                yield raw_event
+            elif event.get("type") == "done":
+                answer = "".join(answer_parts)
+                if not failed and answer:
+                    save_exchange(
+                        session,
+                        user_id=current_user.id,
+                        conversation_id=conversation.id,
+                        query=req.query,
+                        answer=answer,
+                        sources=sources,
+                        model_used=model_used,
+                    )
+                yield raw_event
+            else:
+                yield raw_event
+
     return StreamingResponse(
-        generator,
+        persist_and_stream(),
         media_type="application/x-ndjson",
         headers={"X-Accel-Buffering": "no"}
     )

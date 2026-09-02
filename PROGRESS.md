@@ -5,6 +5,24 @@ Ver visão geral de fases em [CRONOGRAMA.md](CRONOGRAMA.md).
 
 ---
 
+## 2026-09-02 — Sessão 33: histórico persistente de conversas por usuário
+
+**Pedido:** histórico no estilo ChatGPT/Claude: conversas salvas por usuário, lista na sidebar para retomar uma conversa anterior e botão "Nova conversa". O plano (modelo, endpoints, tela e seams de teste) foi apresentado e aprovado antes da implementação.
+
+**Backend e banco:** migration `6c8f4a2d91e0` criou `conversations` e `conversation_messages` no PostgreSQL, ligadas ao `user_id` e com exclusão em cascata. A API autenticada ganhou `POST/GET /api/conversations`, `GET/DELETE /api/conversations/{id}`; todas as consultas filtram pelo proprietário e respondem 404 para conversa de outro usuário. O título nasce da primeira pergunta (até 80 caracteres), sem gastar uma chamada extra ao LLM.
+
+**Persistência do chat:** `/api/match` e `/api/match/stream` aceitam `conversation_id`, carregam do servidor as últimas 8 mensagens e persistem o par pergunta/resposta com fontes e modelo. O cliente não é mais a fonte de verdade do histórico quando existe uma conversa salva. O streaming injeta `conversation_id` no evento `meta`, concatena os deltas e só grava depois de `done` sem `error`; resposta parcial de um stream que falhou não entra no histórico. Chamadas antigas sem `conversation_id` continuam aceitas e criam uma conversa automaticamente.
+
+**Frontend:** a sidebar agora lista as conversas mais recentes, destaca a ativa e oferece ações de nova conversa, retomada e exclusão. Selecionar uma conversa recarrega mensagens/fontes/modelo do backend; logout e "Nova conversa" limpam apenas o estado local. As rotas síncrona e streaming passam a conversa ativa e capturam o ID devolvido pelo backend. Corrigido junto o ambiente da suíte do frontend: `Dockerfile.frontend` agora copia `proxy/Caddyfile`, eliminando a falha preexistente do teste PWA dentro da imagem.
+
+**TDD e validação:** 6 testes HTTP novos cobrem criar/obter, ordenar/listar, isolamento/exclusão, persistência síncrona, persistência streaming e rejeição de resposta parcial; 3 testes `Streamlit AppTest` cobrem lista, retomada e exclusão na tela. Suítes finais: **241/241 backend** e **11/11 frontend**. `alembic check`: schema alinhado, sem operação pendente. Validação ao vivo com `gpt-4o-mini` real: a primeira pergunta consultou o catálogo e respondeu 1.324 produtos; após recarregar a conversa, a segunda lembrou corretamente a pergunta anterior; uma terceira chamada pela rota streaming devolveu `meta` com o ID correto, `delta: OK`, `done` e elevou o histórico a 6 mensagens. A conversa e o usuário temporários foram apagados ao final. Todos os 5 containers ficaram healthy.
+
+**Limitação de validação visual:** a skill de navegador não encontrou navegador conectado nesta sessão. O comportamento visual foi validado por `Streamlit AppTest`, mas inspeção manual em Chrome/Edge continua pendente, assim como já estava para o PWA.
+
+**Pendências preservadas:** a reingestão completa continua parada em 10.499/11.273 pontos até investigar por que não progrediu; a limpeza retroativa das duplicatas não foi executada. Próxima prioridade funcional decidida pelo usuário: upload de arquivo permanente no RAG; depois, captura de correções em texto livre/aprendizado contínuo.
+
+---
+
 ## 2026-09-02 — Sessão 32: agente muito mais "inteligente" — busca híbrida, listagem por categoria/família, deduplicação e feedback com memória
 
 **Contexto:** sessão longa, guiada por uma sequência de pedidos diretos do usuário testando o agente ao vivo e relatando comportamento ruim específico — cada achado foi corrigido, testado (TDD) e validado com uma chamada real ao LLM (`gpt-4o-mini`) antes de passar pro próximo. 9 commits (`327e16a`..`67b5ba7`). Suíte final: **235/235** testes.
@@ -36,11 +54,11 @@ Ver visão geral de fases em [CRONOGRAMA.md](CRONOGRAMA.md).
 
 ---
 
-## PRÓXIMA SESSÃO — decisões já tomadas pelo usuário (não perguntar de novo)
+## Decisões registradas ao final da Sessão 32
 
 Ao fim da Sessão 32 o usuário pediu 3 funcionalidades novas e respondeu às perguntas de escopo/prioridade. **As respostas abaixo são decisão fechada dele**, registradas aqui porque a sessão acabou antes da implementação começar:
 
-**Prioridade 1 — Histórico de conversas (começar por aqui).** Estilo ChatGPT/Claude: conversas salvas, lista pra retomar uma conversa anterior, botão "Nova conversa". Hoje o histórico vive só em `st.session_state` (some ao recarregar a página). Implica: tabela(s) nova(s) no Postgres (conversa + mensagens, ligadas ao `user_id`), migration Alembic, endpoints de criar/listar/obter/apagar conversa, persistir cada par pergunta/resposta em `/api/match` e `/api/match/stream`, e reescrever a sidebar + carregamento de histórico no `frontend/app.py`. É a base sobre a qual as outras duas fazem mais sentido.
+**Prioridade 1 — Histórico de conversas — concluída na Sessão 33.** Estilo ChatGPT/Claude: conversas salvas, lista pra retomar uma conversa anterior e botão "Nova conversa". Implementação e validação detalhadas na entrada da Sessão 33, no topo deste arquivo.
 
 **Prioridade 2 — Upload de arquivo no chat.** Decisão do usuário, na íntegra: *"ele irá virar parte do rag, mas mais um adendo, pode ser que esse upload não seja um produto, pode ser algum outro conhecimento... acho que seria interessante vetorizar, pois a ideia é que nosso agente fique mais inteligente e esteja em constante aprendizado"*. Ou seja: o arquivo anexado **é vetorizado e entra no acervo do RAG de forma permanente**, não é contexto efêmero da conversa. Ponto de atenção não resolvido: o acervo hoje assume que todo documento pertence a um produto (`_produto_do_filepath` deriva o nome do produto da estrutura de pastas da rede) — conhecimento avulso ("não é um produto") não tem pasta de produto nenhuma, então precisa de um caminho de metadado próprio pra não virar falso-produto nas listagens. Também precisa decidir permissão (quem pode inserir conhecimento no acervo de todo mundo — hoje `MANAGE_INGESTION` é só Admin TI).
 

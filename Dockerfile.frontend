@@ -10,6 +10,10 @@ COPY ./frontend /app/frontend
 # lido dentro do container — Streamlit resolve config relativo ao CWD onde
 # "streamlit run" foi chamado (/app), não à pasta do script.
 COPY ./.streamlit /app/.streamlit
+# O teste do contrato PWA valida também a configuração que serve o Service
+# Worker na raiz. A imagem de frontend é o ambiente oficial da suíte, então
+# precisa conter esse arquivo de configuração somente-leitura.
+COPY ./proxy /app/proxy
 
 EXPOSE 8501
 

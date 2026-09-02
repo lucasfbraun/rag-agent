@@ -17,6 +17,7 @@ HEALTH_URL = f"{API_BASE}/api/health"
 LOGIN_URL = f"{API_BASE}/api/auth/login"
 ME_URL = f"{API_BASE}/api/auth/me"
 FEEDBACK_URL = f"{API_BASE}/api/feedback"
+CONVERSATIONS_URL = f"{API_BASE}/api/conversations"
 
 st.set_page_config(
     page_title="PU Matcher - Consultor Técnico de Produtos",
@@ -235,6 +236,8 @@ if "access_token" not in st.session_state:
     st.session_state.access_token = None
 if "current_user" not in st.session_state:
     st.session_state.current_user = None
+if "active_conversation_id" not in st.session_state:
+    st.session_state.active_conversation_id = None
 
 
 def _bearer(token: str) -> dict:
@@ -251,6 +254,67 @@ def _fazer_logout():
     st.session_state.access_token = None
     st.session_state.current_user = None
     st.session_state.messages = []
+    st.session_state.active_conversation_id = None
+
+
+def _clear_message_state():
+    st.session_state.messages = []
+    for key in list(st.session_state):
+        if key.startswith("feedback_widget_") or key.startswith("feedback_enviado_"):
+            del st.session_state[key]
+
+
+def _nova_conversa():
+    st.session_state.active_conversation_id = None
+    _clear_message_state()
+
+
+def _carregar_conversa(conversation_id: str) -> bool:
+    try:
+        response = requests.get(
+            f"{CONVERSATIONS_URL}/{conversation_id}",
+            headers=_auth_headers(),
+            timeout=10,
+        )
+        if response.status_code == 401:
+            _fazer_logout()
+            return False
+        if response.status_code != 200:
+            return False
+        data = response.json()
+        _clear_message_state()
+        st.session_state.active_conversation_id = data["id"]
+        st.session_state.messages = [
+            {
+                "role": message["role"],
+                "content": message["content"],
+                "sources": message.get("sources") or [],
+                "model_used": message.get("model_used") or "",
+            }
+            for message in data.get("messages", [])
+        ]
+        return True
+    except requests.exceptions.RequestException:
+        return False
+
+
+def _apagar_conversa(conversation_id: str) -> bool:
+    try:
+        response = requests.delete(
+            f"{CONVERSATIONS_URL}/{conversation_id}",
+            headers=_auth_headers(),
+            timeout=10,
+        )
+        if response.status_code == 401:
+            _fazer_logout()
+            return False
+        if response.status_code != 204:
+            return False
+        if st.session_state.active_conversation_id == conversation_id:
+            _nova_conversa()
+        return True
+    except requests.exceptions.RequestException:
+        return False
 
 
 def _enviar_feedback(query: str, resposta: dict, util: bool) -> bool:
@@ -368,6 +432,61 @@ with st.sidebar:
 
     st.divider()
 
+    # --- Histórico de conversas ---
+    st.subheader("Conversas")
+    if st.button(
+        "Nova conversa",
+        icon=":material/add:",
+        use_container_width=True,
+        type="primary",
+    ):
+        _nova_conversa()
+        st.rerun()
+
+    conversations = []
+    try:
+        conversations_response = requests.get(
+            CONVERSATIONS_URL, headers=_auth_headers(), timeout=10
+        )
+        if conversations_response.status_code == 401:
+            _fazer_logout()
+            st.rerun()
+        elif conversations_response.status_code == 200:
+            conversations = conversations_response.json()
+        else:
+            st.caption("Histórico indisponível.")
+    except requests.exceptions.RequestException:
+        st.caption("Histórico indisponível.")
+
+    for conversation in conversations:
+        conversation_id = conversation["id"]
+        title_col, delete_col = st.columns([5, 1])
+        with title_col:
+            if st.button(
+                conversation["title"],
+                key=f"open_conversation_{conversation_id}",
+                icon=":material/chat_bubble:" if st.session_state.active_conversation_id == conversation_id else ":material/chat_bubble_outline:",
+                type="primary" if st.session_state.active_conversation_id == conversation_id else "secondary",
+                use_container_width=True,
+            ):
+                if _carregar_conversa(conversation_id):
+                    st.rerun()
+                else:
+                    st.error("Não foi possível carregar a conversa.")
+        with delete_col:
+            if st.button(
+                "",
+                key=f"delete_conversation_{conversation_id}",
+                icon=":material/delete:",
+                help=f"Excluir conversa: {conversation['title']}",
+            ):
+                if _apagar_conversa(conversation_id):
+                    st.rerun()
+                else:
+                    st.error("Não foi possível excluir a conversa.")
+
+    st.divider()
+
     # --- Status do backend ---
     st.subheader("🔌 Status do Sistema")
     try:
@@ -427,11 +546,6 @@ with st.sidebar:
     use_streaming = st.toggle("⚡ Streaming de resposta", value=True,
                               help="Exibe a resposta do agente em tempo real, token a token.")
 
-    st.divider()
-
-    if st.button("🔄 Iniciar Nova Demanda de Cliente", use_container_width=True):
-        st.session_state.messages = []
-        st.rerun()
 
 # ---------------------------------------------------------------------------
 # Área Principal
@@ -465,6 +579,7 @@ if prompt := st.chat_input("Digite a demanda ou responda às perguntas do agente
         "query": prompt,
         "template_id": st.session_state.template_id,
         "model_name": selected_model,
+        "conversation_id": st.session_state.active_conversation_id,
         "history": [
             {"role": m["role"], "content": m["content"]}
             for m in st.session_state.messages[:-1]
@@ -502,6 +617,9 @@ if prompt := st.chat_input("Digite a demanda ou responda às perguntas do agente
                             if event["type"] == "meta":
                                 _stream_state["sources"] = event.get("sources", [])
                                 _stream_state["model"] = event.get("model_used", selected_model)
+                                st.session_state.active_conversation_id = event.get(
+                                    "conversation_id", st.session_state.active_conversation_id
+                                )
                             elif event["type"] == "delta":
                                 token = event.get("content", "")
                                 _stream_state["answer"] += token
@@ -549,6 +667,9 @@ if prompt := st.chat_input("Digite a demanda ou responda às perguntas do agente
                         st.rerun()
                     elif response.status_code == 200:
                         data = response.json()
+                        st.session_state.active_conversation_id = data.get(
+                            "conversation_id", st.session_state.active_conversation_id
+                        )
                         st.markdown(data["answer"])
                         if data.get("sources"):
                             st.caption(f"📚 **Boletins Técnicos (TDS) Consultados:** {', '.join(data['sources'])}")
