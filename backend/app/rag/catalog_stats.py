@@ -93,10 +93,14 @@ def _termo_para_busca(termo: str) -> str:
 
 def listar_produtos_por_aplicacao(termo_busca: str, listar_todos: bool = False) -> Dict[str, Any]:
     """Lista produtos distintos do acervo cujo conteúdo menciona o termo
-    dado (aplicação/uso, ex: "colchão", "cortiça").
+    dado — tanto aplicação/uso ("colchão", "cortiça") quanto tipo/natureza
+    do produto ("cola", "espuma"); a busca é neutra quanto a isso, é uma
+    correspondência de palavra-chave no texto do documento, não importa se a
+    palavra descreve pra que o produto serve ou o que ele é.
 
     Por quê existe separado de retrieve_products_context: um pedido de
-    LISTAGEM/categoria ("produtos para colchão") não é a mesma coisa que um
+    LISTAGEM/categoria ("produtos para colchão", "produtos que são colas")
+    não é a mesma coisa que um
     pedido de recomendação única — um top-k de poucos chunks (mesmo com a
     busca híbrida) nunca representa fielmente uma categoria com dezenas de
     produtos (achado real: "colchão" aparece em ~150 arquivos/dezenas de

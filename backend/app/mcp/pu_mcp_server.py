@@ -119,11 +119,11 @@ MCP_TOOLS_DEFINITIONS = [
         "type": "function",
         "function": {
             "name": "consultar_produtos_por_aplicacao",
-            "description": "Lista/conta produtos distintos do acervo real cujo conteúdo menciona uma aplicação/uso (ex: 'colchão', 'cortiça', 'automotivo'). Use SEMPRE que o pedido for uma LISTAGEM ou uma CONTAGEM POR CATEGORIA ('produtos para colchão', 'quais produtos temos para X', 'quantos produtos para automotivo temos') — em vez de um produto específico ou uma recomendação única. NÃO confundir com consultar_estatisticas_catalogo, que é o total do acervo INTEIRO, sem filtro de categoria. Por padrão devolve só uma prévia (10 produtos) + o total real encontrado — pergunte ao usuário se ele quer a lista completa ou só essa prévia antes de decidir; se ele pedir 'todos'/'a lista completa', chame de novo com listar_todos=true.",
+            "description": "Lista/conta produtos distintos do acervo real cujo conteúdo menciona um termo de busca — cobre tanto APLICAÇÃO/USO (ex: 'colchão', 'cortiça', 'automotivo') quanto TIPO/NATUREZA DO PRODUTO (ex: 'cola', 'espuma', 'selante', 'verniz' — o que o produto É, não pra que ele serve). Use SEMPRE que o pedido for uma LISTAGEM ou CONTAGEM POR CATEGORIA de qualquer um desses dois tipos ('produtos para colchão', 'produtos que são colas', 'quantos produtos para automotivo temos') — em vez de um produto específico ou uma recomendação única. NÃO confundir com consultar_estatisticas_catalogo, que é o total do acervo INTEIRO, sem filtro nenhum. Por padrão devolve só uma prévia (10 produtos) + o total real encontrado — pergunte ao usuário se ele quer a lista completa ou só essa prévia antes de decidir; se ele pedir 'todos'/'a lista completa', chame de novo com listar_todos=true.",
             "parameters": {
                 "type": "object",
                 "properties": {
-                    "termo_busca": {"type": "string", "description": "Aplicação/uso citado pelo cliente (ex: 'colchão', 'cortiça')"},
+                    "termo_busca": {"type": "string", "description": "Aplicação/uso OU tipo de produto citado pelo cliente (ex: 'colchão', 'cortiça', 'cola', 'espuma')"},
                     "listar_todos": {"type": "boolean", "description": "true para listar TODOS os produtos encontrados, sem limite nenhum (só use depois que o usuário confirmar que quer a lista completa); false (padrão) devolve uma prévia de até 10"}
                 },
                 "required": ["termo_busca"]
