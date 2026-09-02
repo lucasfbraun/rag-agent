@@ -2,6 +2,7 @@ from fastapi import Depends, FastAPI, HTTPException, BackgroundTasks
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 from typing import List, Literal, Optional
+from sqlalchemy.orm import Session
 from app.rag.engine import run_pu_matcher_agent, stream_pu_matcher_agent, RetrievalIndisponivelError
 from app.templates import TEMPLATES_DISPONIVEIS
 from app.config import (
@@ -12,6 +13,8 @@ from app.auth.router import router as auth_router
 from app.auth.admin_router import router as admin_router
 from app.auth.permissions import Permission, has_permission, require_permission
 from app.models import User
+from app.db import get_session
+from app.feedback_service import registrar_feedback
 import logging
 import os
 
@@ -55,6 +58,21 @@ class MatchRequest(BaseModel):
                 f"Modelos disponíveis: {sorted(ALLOWED_CHAT_MODELS)}"
             )
         return value
+
+class FeedbackRequest(BaseModel):
+    """Avaliação opcional (útil/não útil) de uma resposta do agente já
+    exibida na tela — o cliente manda de volta a pergunta e a resposta
+    (não um ID de interação, que o backend hoje não gera/rastreia) porque
+    isso é tudo que o frontend já tem em mãos no momento do clique."""
+    model_config = ConfigDict(extra="forbid")
+
+    query: str = Field(min_length=1, max_length=8000)
+    answer: str = Field(min_length=1, max_length=20000)
+    util: bool
+    comentario: Optional[str] = Field(default=None, max_length=2000)
+    model_used: Optional[str] = Field(default=None, max_length=100)
+    sources: Optional[List[str]] = None
+
 
 class IngestRequest(BaseModel):
     dir_path: str = "/app/data/raw_documents"
@@ -195,6 +213,37 @@ def match_product_stream(
         media_type="application/x-ndjson",
         headers={"X-Accel-Buffering": "no"}
     )
+
+
+@app.post("/api/feedback")
+def submit_feedback(
+    req: FeedbackRequest,
+    current_user: User = Depends(require_permission(Permission.VIEW_CATALOG)),
+    session: Session = Depends(get_session),
+):
+    """Grava a avaliação (útil/não útil) de uma resposta — mesma permissão
+    de /api/match (quem pode perguntar, pode avaliar). Pedido do usuário:
+    não é obrigatório dar feedback, mas quando dado (positivo ou negativo)
+    precisa ser salvo — o agente consulta o negativo em toda consulta futura
+    (app.rag.engine._montar_licoes_str)."""
+    try:
+        registrar_feedback(
+            session,
+            user_id=current_user.id,
+            query=req.query,
+            answer=req.answer,
+            util=req.util,
+            comentario=req.comentario,
+            model_used=req.model_used,
+            sources=req.sources,
+        )
+    except Exception as e:
+        logger.error("Erro ao gravar feedback: %s", e, exc_info=True)
+        raise HTTPException(
+            status_code=500,
+            detail="Erro interno ao gravar o feedback. Tente novamente em instantes.",
+        )
+    return {"status": "ok"}
 
 
 @app.post("/api/ingest", dependencies=[Depends(require_permission(Permission.MANAGE_INGESTION))])

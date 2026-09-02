@@ -16,6 +16,7 @@ API_URL_SYNC = f"{API_BASE}/api/match"
 HEALTH_URL = f"{API_BASE}/api/health"
 LOGIN_URL = f"{API_BASE}/api/auth/login"
 ME_URL = f"{API_BASE}/api/auth/me"
+FEEDBACK_URL = f"{API_BASE}/api/feedback"
 
 st.set_page_config(
     page_title="PU Matcher - Consultor Técnico de Produtos",
@@ -252,6 +253,51 @@ def _fazer_logout():
     st.session_state.messages = []
 
 
+def _enviar_feedback(query: str, resposta: dict, util: bool) -> bool:
+    """Envia a avaliação (útil/não útil) de uma resposta já exibida.
+    Pedido do usuário: não é obrigatório dar feedback, mas quando dado
+    precisa ser salvo — o agente passa a consultar isso em toda pergunta
+    futura (backend/app/rag/engine.py, _montar_licoes_str)."""
+    try:
+        resp = requests.post(
+            FEEDBACK_URL,
+            json={
+                "query": query,
+                "answer": resposta.get("content", ""),
+                "util": util,
+                "model_used": resposta.get("model_used"),
+                "sources": resposta.get("sources") or [],
+            },
+            headers=_auth_headers(),
+            timeout=10,
+        )
+        return resp.status_code == 200
+    except requests.exceptions.RequestException:
+        return False
+
+
+def _renderizar_feedback(idx: int, msg: dict):
+    """Widget de polegar pra cima/baixo abaixo de uma resposta do agente —
+    st.feedback("thumbs") devolve 0 (não útil), 1 (útil) ou None (sem
+    clique ainda). Só envia UMA vez por mensagem (controlado via
+    session_state, não reenvia a cada rerun do Streamlit)."""
+    enviado_key = f"feedback_enviado_{idx}"
+    if st.session_state.get(enviado_key):
+        st.caption("✅ Obrigado pelo feedback!")
+        return
+
+    pergunta_anterior = ""
+    if idx > 0 and st.session_state.messages[idx - 1]["role"] == "user":
+        pergunta_anterior = st.session_state.messages[idx - 1]["content"]
+
+    selecao = st.feedback("thumbs", key=f"feedback_widget_{idx}")
+    if selecao is not None:
+        util = selecao == 1
+        if _enviar_feedback(pergunta_anterior, msg, util):
+            st.session_state[enviado_key] = True
+            st.rerun()
+
+
 # ---------------------------------------------------------------------------
 # Portão de login — nada abaixo deste bloco roda sem token válido em sessão.
 # Backend (Fase 5, tarefa 5) passou a exigir autenticação em /api/match e
@@ -397,13 +443,15 @@ st.caption(
 )
 
 # Exibe histórico de mensagens
-for msg in st.session_state.messages:
+for idx, msg in enumerate(st.session_state.messages):
     with st.chat_message(msg["role"]):
         st.markdown(msg["content"])
         if "sources" in msg and msg["sources"]:
             st.caption(f"📚 **Boletins Técnicos (TDS) Consultados:** {', '.join(msg['sources'])}")
         if "model_used" in msg and msg["model_used"]:
             st.caption(f"🤖 Modelo: `{msg['model_used']}`")
+        if msg["role"] == "assistant":
+            _renderizar_feedback(idx, msg)
 
 # ---------------------------------------------------------------------------
 # Input e processamento
@@ -488,6 +536,7 @@ if prompt := st.chat_input("Digite a demanda ou responda às perguntas do agente
                 "sources": _stream_state["sources"],
                 "model_used": _stream_state["model"]
             })
+            _renderizar_feedback(len(st.session_state.messages) - 1, st.session_state.messages[-1])
 
         else:
             # Modo síncrono (fallback sem streaming)
@@ -511,6 +560,7 @@ if prompt := st.chat_input("Digite a demanda ou responda às perguntas do agente
                             "sources": data.get("sources", []),
                             "model_used": data.get("model_used", "")
                         })
+                        _renderizar_feedback(len(st.session_state.messages) - 1, st.session_state.messages[-1])
                     else:
                         st.error(f"Erro na resposta da API ({response.status_code}): {response.text}")
                 except requests.exceptions.ConnectionError:

@@ -51,16 +51,22 @@ def test_ferramenta_de_listagem_esta_registrada_na_lista_do_agente():
     assert "consultar_produtos_por_aplicacao" in nomes
 
 
+def _resultado_mock(termo, por_nome=None, por_conteudo=None):
+    por_nome = por_nome or {"total": 0, "produtos": [], "truncado": False}
+    por_conteudo = por_conteudo or {"total": 0, "produtos": [], "truncado": False}
+    return {"termo_buscado": termo, "por_nome_ou_familia": por_nome, "por_aplicacao_ou_tipo": por_conteudo}
+
+
 def test_execute_mcp_tool_lista_repassa_termo_busca_e_devolve_json_valido():
     with patch(
         "app.mcp.pu_mcp_server.listar_produtos_por_aplicacao",
-        return_value={"termo_buscado": "colchão", "total_produtos_encontrados": 2, "produtos": ["A", "B"], "truncado": False},
+        return_value=_resultado_mock("colchão", por_conteudo={"total": 2, "produtos": ["A", "B"], "truncado": False}),
     ) as mock_listar:
         resultado = execute_mcp_tool("consultar_produtos_por_aplicacao", {"termo_busca": "colchão"})
 
     mock_listar.assert_called_once_with("colchão", listar_todos=False)
     dados = json.loads(resultado)
-    assert dados["produtos"] == ["A", "B"]
+    assert dados["por_aplicacao_ou_tipo"]["produtos"] == ["A", "B"]
 
 
 def test_execute_mcp_tool_lista_repassa_listar_todos_true():
@@ -68,11 +74,23 @@ def test_execute_mcp_tool_lista_repassa_listar_todos_true():
     ferramenta precisa vir com listar_todos=True, não a prévia de novo."""
     with patch(
         "app.mcp.pu_mcp_server.listar_produtos_por_aplicacao",
-        return_value={"termo_buscado": "colchão", "total_produtos_encontrados": 37, "produtos": list(range(37)), "truncado": False},
+        return_value=_resultado_mock("colchão", por_conteudo={"total": 37, "produtos": list(range(37)), "truncado": False}),
     ) as mock_listar:
         execute_mcp_tool("consultar_produtos_por_aplicacao", {"termo_busca": "colchão", "listar_todos": True})
 
     mock_listar.assert_called_once_with("colchão", listar_todos=True)
+
+
+def test_execute_mcp_tool_lista_sem_termo_busca_lista_catalogo_inteiro():
+    """Pedido do usuário: "liste todos os produtos" (sem categoria) — a
+    ferramenta precisa funcionar sem termo_busca nenhum no argumento."""
+    with patch(
+        "app.mcp.pu_mcp_server.listar_produtos_por_aplicacao",
+        return_value=_resultado_mock("", por_nome={"total": 1324, "produtos": [], "truncado": True}),
+    ) as mock_listar:
+        execute_mcp_tool("consultar_produtos_por_aplicacao", {})
+
+    mock_listar.assert_called_once_with("", listar_todos=False)
 
 
 def test_falha_no_qdrant_ao_listar_vira_erro_no_payload():

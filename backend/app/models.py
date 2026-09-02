@@ -7,8 +7,8 @@ import enum
 import uuid
 from datetime import datetime, timezone
 
-from sqlalchemy import String, DateTime, Enum as SAEnum
-from sqlalchemy.dialects.postgresql import UUID
+from sqlalchemy import String, Text, DateTime, Boolean, ForeignKey, Enum as SAEnum
+from sqlalchemy.dialects.postgresql import UUID, JSONB
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.db import Base
@@ -65,4 +65,32 @@ class User(Base):
     )
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, default=_utcnow, onupdate=_utcnow
+    )
+
+
+class Feedback(Base):
+    """Avaliação opcional (útil/não útil) que o vendedor dá numa resposta do
+    agente — pedido do usuário: fechar o loop de melhoria contínua. O agente
+    consulta o feedback negativo mais recente ANTES de responder (ver
+    app.feedback_service.obter_licoes_de_feedback, usado em toda consulta por
+    app.rag.engine), pra não repetir um padrão já sinalizado como ruim."""
+    __tablename__ = "feedback"
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    user_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("users.id"), nullable=False, index=True
+    )
+
+    query: Mapped[str] = mapped_column(Text, nullable=False)
+    answer: Mapped[str] = mapped_column(Text, nullable=False)
+    util: Mapped[bool] = mapped_column(Boolean, nullable=False)
+    # Comentário é opcional mesmo quando util=False — o pedido do usuário foi
+    # "não é obrigatório responder" (o clique em útil/não útil já basta).
+    comentario: Mapped[str | None] = mapped_column(Text, nullable=True)
+
+    model_used: Mapped[str | None] = mapped_column(String(100), nullable=True)
+    sources: Mapped[list | None] = mapped_column(JSONB, nullable=True)
+
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, default=_utcnow, index=True
     )

@@ -105,13 +105,21 @@ B) PEDIDO ABERTO DE RECOMENDAÇÃO (o usuário ainda não sabe qual produto quer
      c) Processo do Cliente: Moldagem a frio (MDI), cura a quente (TDI), bloco contínuo ou injeção em molde fechado?
    - QUANDO VOCÊ TIVER DADOS SUFICIENTES (seja de cara, seja depois de perguntar): busque e cruze os dados com os documentos de produtos (TDS) e ferramentas MCP fornecidas, apresente a recomendação no FORMATO PADRÃO DO TEMPLATE CONFIGURADO, e seja opinativo — se o cliente pedir algo incompatível (ex: densidade baixíssima com ultra resiliência sem antichama), alerte e sugira a melhor prática de mercado.
 
-C) PEDIDO DE LISTAGEM/CATEGORIA (o usuário quer VER AS OPÇÕES ou SABER QUANTOS PRODUTOS existem numa categoria — não uma recomendação única nem um dado de produto específico). Categoria aqui é QUALQUER critério de agrupamento, dois tipos:
+C) PEDIDO DE LISTAGEM/CATEGORIA (o usuário quer VER AS OPÇÕES ou SABER QUANTOS PRODUTOS existem — com ou sem categoria — não uma recomendação única nem um dado de produto específico). Quatro variações:
+   - Por FAMÍLIA/CÓDIGO DO NOME (o acervo segue o padrão FLEXX <FAMÍLIA> <NÚMERO>, ex: "FLEXX CAT 42", "FLEXX TH M60AMA3", "FLEXX AG 2032", "FLEXX COLOR PRETO"): o usuário cita só a sigla da família, sem mais nada — "traga os produtos CAT", "quais produtos TH vocês têm", só "AG" ou só "Color". Isso é DIFERENTE de citar um código completo com número (ex: "AG 2032", que é a Situação A, pedido específico) — aqui é só a família, sem número, pedindo TODOS os produtos daquela família.
    - Por APLICAÇÃO/USO: "produtos para colchão", "quais produtos temos para automotivo", "o que vocês têm pra calçados", "quantos produtos para o ramo automotivo temos".
    - Por TIPO/NATUREZA DO PRODUTO (o que o produto É, não pra que ele serve): "me traga produtos que são colas", "quais são as espumas que temos", "produtos do tipo selante" — aqui não importa a aplicação final, é sobre a classificação do produto em si (cola, espuma, verniz, adesivo, resina, catalisador...).
-   - Reconheça pelo formato: "produtos para X" / "produtos que são X" / "quais produtos" / "o que temos para" / "lista de produtos" / "quantos produtos para/que são X" — TODOS esses pedem a ferramenta de categoria, não 1 recomendação nem uma investigação de requisitos nem a ferramenta de total do acervo inteiro.
-   - CHAME A FERRAMENTA `consultar_produtos_por_aplicacao` com o termo (aplicação OU tipo de produto, ex: "colchão" ou "cola"), SEM `listar_todos` na primeira chamada (fica false por padrão — devolve o total real + uma prévia de até 10). O contexto de busca normal (RAG) só traz um punhado de trechos e NUNCA representa a categoria inteira — pode haver dezenas de produtos, e usar só o contexto faria você listar/contar um subconjunto arbitrário como se fosse tudo.
-   - RESPONDA COM O TOTAL REAL primeiro (ex: "Temos 45 produtos para automotivo.") e a prévia dos 10 primeiros como lista curta (nome do produto, 1 linha cada — não abra detalhes técnicos). DEPOIS PERGUNTE: "Quer que eu liste todos os 45 ou só esses 10 principais?" — NÃO decida sozinho, deixe o vendedor escolher.
-   - SE O VENDEDOR PEDIR "todos"/"a lista completa"/"todos os X": chame a ferramenta DE NOVO com `listar_todos=true` e liste TODOS os produtos devolvidos, independente de quantos sejam (10, 50, 100 — não resuma nem corte por conta própria).
+   - SEM NENHUMA CATEGORIA — o CATÁLOGO INTEIRO: "liste todos os produtos", "quais produtos vocês têm" (sem citar aplicação/tipo/família nenhum). Isso NÃO é a mesma coisa que "quantos produtos catalogados" (que só quer o número) — se o pedido é pra LISTAR (ver os nomes), mesmo sem categoria, é esta situação.
+   - Reconheça pelo formato: "produtos para X" / "produtos que são X" / "produtos X" (sigla curta sozinha) / "quais produtos" / "o que temos para" / "lista de produtos" / "liste todos os produtos" / "quantos produtos para/que são X" — TODOS esses pedem a ferramenta de listagem.
+   - CHAME A FERRAMENTA `consultar_produtos_por_aplicacao` com o termo (ex: "CAT", "colchão" ou "cola") — ou SEM `termo_busca` nenhum quando for o catálogo inteiro, sem categoria. SEM `listar_todos` na primeira chamada. O contexto de busca normal (RAG) só traz um punhado de trechos e NUNCA representa a categoria (ou o catálogo inteiro) de forma fiel — pode haver dezenas ou centenas de produtos, e usar só o contexto faria você listar/contar um subconjunto arbitrário como se fosse tudo.
+
+   ENTENDENDO A RESPOSTA — ELA VEM EM DOIS BLOCOS SEPARADOS, NUNCA MISTURE:
+   `por_nome_ou_familia` (o termo é o código/sigla do NOME do produto) e `por_aplicacao_ou_tipo` (o termo aparece no CONTEÚDO do documento, como aplicação/uso ou tipo). Um documento pode citar outro produto por nome dentro do seu próprio texto (ex: uma tabela comparativa que menciona "FLEXX CAT 90" no boletim de outro produto completamente diferente) — isso é um match de conteúdo genuíno, mas NÃO significa que aquele outro produto É da família CAT. Por isso os blocos vêm separados: cada um representa uma interpretação diferente do termo, nunca junte os dois numa lista só.
+   - SÓ UM BLOCO TEM RESULTADO: use esse, sem perguntar qual interpretação — está claro pelo próprio resultado.
+   - OS DOIS BLOCOS TÊM RESULTADO E SÃO CLARAMENTE A MESMA COISA (ex: contagens parecidas, ou o contexto da conversa já deixou óbvio o que o vendedor quis dizer): use o que fizer mais sentido pelo contexto, sem precisar perguntar.
+   - OS DOIS BLOCOS TÊM RESULTADO E SÃO CLARAMENTE COISAS DIFERENTES (contagens bem distintas, ou nenhum indício no que o vendedor disse aponta pra um lado): AQUI VOCÊ TEM DÚVIDA DE VERDADE — pergunte antes de responder, ex: "Você quer dizer os produtos da família CAT (código do produto — encontrei 36), ou produtos relacionados a 'cat' de alguma outra forma (encontrei X pelo conteúdo)?". Não escolha por conta própria nem misture os números dos dois blocos numa soma só.
+   - RESPONDA COM O TOTAL REAL do bloco escolhido primeiro (ex: "Temos 36 produtos da família CAT." ou "Temos 1.324 produtos catalogados no total.") e a prévia dos 10 primeiros como lista curta (nome do produto, 1 linha cada — não abra detalhes técnicos). DEPOIS PERGUNTE: "Quer que eu liste todos os 36 ou só esses 10 principais?" — NÃO decida sozinho se lista tudo ou não, deixe o vendedor escolher, e NUNCA responda só com o número quando o pedido foi pra LISTAR.
+   - SE O VENDEDOR PEDIR "todos"/"a lista completa"/"todos os X": chame a ferramenta DE NOVO com `listar_todos=true` e liste TODOS os produtos do bloco certo, independente de quantos sejam (10, 50, 1000 — não resuma nem corte por conta própria).
    - Depois de listar (prévia ou completa), convide o vendedor a pedir detalhe de um item específico ("me diga o nome de um deles que eu trago a ficha completa").
 """
 
@@ -305,6 +313,55 @@ def _montar_context_str(query: str, docs: List[Dict[str, Any]]) -> str:
     return context_str
 
 
+def _montar_licoes_str() -> str:
+    """Bloco de "lições aprendidas" com o feedback NEGATIVO mais recente
+    (útil/não útil, dado pelo vendedor na tela) — injetado em TODA consulta,
+    não é um recurso à parte que precisa ser pedido (pedido do usuário:
+    "é necessário que o agente sempre consulte essas memórias").
+
+    Import tardio de app.feedback_service (mesmo padrão de _get_qdrant_client
+    — lazy) pra engine.py não ganhar uma dependência de import-time do
+    Postgres/config de auth, que hoje não tem nenhuma. Falha ao consultar
+    (Postgres fora do ar, etc.) só é logada — uma consulta nunca pode falhar
+    porque o feedback de sessões anteriores está indisponível."""
+    try:
+        from app.feedback_service import obter_licoes_de_feedback
+        licoes = obter_licoes_de_feedback()
+    except Exception as e:
+        logger.warning("Falha ao consultar lições de feedback (%s) — seguindo sem elas.", e)
+        return ""
+
+    if not licoes:
+        return ""
+
+    linhas = []
+    for licao in licoes:
+        linha = f'- Pergunta parecida: "{licao["query"]}"'
+        if licao.get("comentario"):
+            linha += f' — motivo dado pelo usuário: "{licao["comentario"]}"'
+        linhas.append(linha)
+
+    return (
+        "\n\nLIÇÕES APRENDIDAS (feedback NEGATIVO recente de vendedores nesta pergunta ou "
+        "parecida — evite repetir os mesmos erros, mas não deixe de responder a pergunta atual "
+        "por causa disso):\n" + "\n".join(linhas)
+    )
+
+
+def _montar_system_instruction(template_id: str) -> str:
+    """Monta o prompt de sistema completo — compartilhado por
+    run_pu_matcher_agent e stream_pu_matcher_agent (antes duplicado nos
+    dois), garante que as lições aprendidas entrem em toda consulta pelos
+    dois caminhos sem precisar lembrar de chamar em cada um."""
+    template_instruction = obter_instrucao_template(template_id)
+    return f"""{AGENT_SYSTEM_PROMPT}
+
+DIRETRIZ DE PADRONIZAÇÃO DE RESPOSTA:
+{template_instruction}
+{_montar_licoes_str()}
+"""
+
+
 def run_pu_matcher_agent(
     query: str,
     template_id: str = "proposta_tecnica_completa",
@@ -323,13 +380,7 @@ def run_pu_matcher_agent(
     decide permissão, só encaminha a decisão já tomada."""
     docs = retrieve_products_context(query, incluir_sensivel=ver_custos)
     context_str = _montar_context_str(query, docs)
-
-    template_instruction = obter_instrucao_template(template_id)
-    system_instruction = f"""{AGENT_SYSTEM_PROMPT}
-
-DIRETRIZ DE PADRONIZAÇÃO DE RESPOSTA:
-{template_instruction}
-"""
+    system_instruction = _montar_system_instruction(template_id)
 
     messages = [{"role": "system", "content": system_instruction}]
     if history:
@@ -434,13 +485,7 @@ def stream_pu_matcher_agent(
         return
 
     context_str = _montar_context_str(query, docs)
-
-    template_instruction = obter_instrucao_template(template_id)
-    system_instruction = f"""{AGENT_SYSTEM_PROMPT}
-
-DIRETRIZ DE PADRONIZAÇÃO DE RESPOSTA:
-{template_instruction}
-"""
+    system_instruction = _montar_system_instruction(template_id)
 
     messages = [{"role": "system", "content": system_instruction}]
     if history:

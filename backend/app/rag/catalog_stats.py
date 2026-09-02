@@ -136,34 +136,111 @@ def _termo_para_busca(termo: str) -> str:
     return termo[:-2] if len(termo) >= 6 else termo
 
 
-def listar_produtos_por_aplicacao(termo_busca: str, listar_todos: bool = False) -> Dict[str, Any]:
-    """Lista produtos distintos do acervo cujo conteúdo menciona o termo
-    dado — tanto aplicação/uso ("colchão", "cortiça") quanto tipo/natureza
-    do produto ("cola", "espuma"); a busca é neutra quanto a isso, é uma
-    correspondência de palavra-chave no texto do documento, não importa se a
-    palavra descreve pra que o produto serve ou o que ele é.
+_SEPARADOR_PALAVRA_PRODUTO = re.compile(r"[\s\-_®]+")
+
+
+def _termo_bate_no_nome_produto(termo: str, produto: str) -> bool:
+    """True se `termo` aparece como PALAVRA INTEIRA no nome do produto —
+    cobre pedido por FAMÍLIA/CÓDIGO ("CAT", "TH", "AG", "COLOR": o acervo
+    segue o padrão FLEXX <FAMÍLIA> <NÚMERO>, ex: "FLEXX CAT 42"). Palavra
+    inteira, não substring — "cat" não pode bater em "catalisador"/
+    "categoria" (que apareceriam via busca de conteúdo, não de nome)."""
+    if not termo or not produto:
+        return False
+    palavras = _SEPARADOR_PALAVRA_PRODUTO.split(produto.lower())
+    return termo.strip().lower() in palavras
+
+
+_SEPARADOR_PALAVRA_CONTEUDO = re.compile(r"[^a-zà-öø-ÿ]+")
+
+
+def _termo_bate_no_conteudo(termo_busca: str, content_lower: str) -> bool:
+    """True se `termo_busca` aparece no conteúdo do documento.
+
+    Achado real: buscar "CAT" (família de produto) com substring simples
+    ("cat" in content) batia em "catálise"/"catalisador" — termos reais de
+    química que aparecem no conteúdo de ~500 produtos sem NENHUMA relação
+    com a família "CAT" — inflando o resultado de ~36 (correto, por nome)
+    para ~550.
+
+    Frase de várias palavras (ex: "construção civil"): risco de falso
+    positivo por fragmento de palavra é praticamente zero — continua
+    substring simples, mesmo comportamento de antes. Termo de 1 palavra é
+    onde mora o risco: longos (>=6 letras, mesmo corte de
+    _termo_para_busca) usam PREFIXO de palavra, pra cobrir plural em
+    português ("colch" prefixo de "colchão"/"colchões"); curtos exigem a
+    palavra INTEIRA, sem folga de prefixo — "cat" nunca é prefixo válido
+    pra decidir sozinho, tem gente demais nesse balaio (catálise,
+    catalisador, categoria...)."""
+    termo_lower = termo_busca.strip().lower()
+    stem = _termo_para_busca(termo_busca)
+
+    if " " in termo_lower:
+        return stem in content_lower
+
+    palavras = _SEPARADOR_PALAVRA_CONTEUDO.split(content_lower)
+    termo_foi_cortado = stem != termo_lower
+    if termo_foi_cortado:
+        return any(p.startswith(stem) for p in palavras if p)
+    return stem in palavras
+
+
+def _resumo_lista(produtos: set, listar_todos: bool) -> Dict[str, Any]:
+    lista = sorted(produtos)
+    limite = None if listar_todos else 10
+    return {
+        "total": len(lista),
+        "produtos": lista if limite is None else lista[:limite],
+        "truncado": limite is not None and len(lista) > limite,
+    }
+
+
+def listar_produtos_por_aplicacao(termo_busca: str = "", listar_todos: bool = False) -> Dict[str, Any]:
+    """Lista produtos distintos do acervo, separando DUAS interpretações
+    possíveis do mesmo termo — pedido do usuário: o agente precisa entender
+    a diferença entre "nome de produto" e "aplicação/segmento", e perguntar
+    quando não tiver certeza de qual o vendedor quis dizer, em vez de
+    misturar as duas coisas num resultado só:
+
+    - `por_nome_ou_familia`: o termo é uma PALAVRA INTEIRA do NOME do
+      produto (padrão do acervo: FLEXX <FAMÍLIA> <NÚMERO>, ex: "FLEXX CAT
+      42" — família "CAT"). Cobre "produtos CAT", "produtos da família TH".
+    - `por_aplicacao_ou_tipo`: o termo (com stem simplificado) aparece no
+      CONTEÚDO do documento — cobre aplicação/uso ("colchão", "cortiça") ou
+      tipo/natureza do produto ("cola", "espuma").
+
+    Por quê separado (achado real, validando "CAT" ao vivo): um boletim de
+    "FLEXX AG 20102" tem uma tabela comparativa que MENCIONA "FLEXX CAT 90"
+    (produto concorrente citado como referência) — o conteúdo bate em "cat"
+    genuinamente, mas "FLEXX AG 20102" não tem NADA a ver com a família CAT.
+    Misturar os dois sinais num resultado só (como esta função fazia antes)
+    inflava famílias de código com produtos de outras famílias que só
+    CITAM aquele código. Separar deixa claro pro agente (e pro usuário,
+    quando perguntado) qual interpretação está sendo usada.
+
+    SEM `termo_busca` (vazio/None), NENHUM filtro é aplicado — todo o
+    catálogo entra em `por_nome_ou_familia`, `por_aplicacao_ou_tipo` fica
+    vazio (pedido do usuário: "listar todos os produtos" sem categoria).
 
     Por quê existe separado de retrieve_products_context: um pedido de
-    LISTAGEM/categoria ("produtos para colchão", "produtos que são colas")
-    não é a mesma coisa que um
-    pedido de recomendação única — um top-k de poucos chunks (mesmo com a
-    busca híbrida) nunca representa fielmente uma categoria com dezenas de
-    produtos (achado real: "colchão" aparece em ~150 arquivos/dezenas de
-    produtos distintos do acervo; duas variações de pergunta traziam
-    conjuntos de top-6 sem nenhuma sobreposição). Isso varre a coleção
-    inteira e devolve os NOMES dos produtos, não os trechos de texto — quem
-    quiser detalhe de um item específico faz uma pergunta de acompanhamento,
-    que aí sim usa retrieve_products_context normalmente.
+    LISTAGEM ("produtos para colchão", "produtos que são colas", "produtos
+    CAT", "liste todos os produtos") não é a mesma coisa que um pedido de
+    recomendação única — um top-k de poucos chunks (mesmo com a busca
+    híbrida) nunca representa fielmente uma categoria (ou o catálogo
+    inteiro) com centenas de produtos. Isso varre a coleção inteira e
+    devolve os NOMES dos produtos, não os trechos de texto — quem quiser
+    detalhe de um item específico faz uma pergunta de acompanhamento, que
+    aí sim usa retrieve_products_context normalmente.
 
-    `listar_todos` (pedido do usuário): por padrão devolve só uma prévia
-    (10 produtos) + o total real encontrado, pra o agente perguntar se o
-    vendedor quer a lista completa antes de despejar dezenas de nomes.
-    Quando `listar_todos=True`, devolve TODOS sem nenhum limite, não importa
-    quantos sejam."""
+    `listar_todos` (pedido do usuário): por padrão cada bucket devolve só
+    uma prévia (10 produtos) + o total real, pra o agente perguntar se o
+    vendedor quer a lista completa antes de despejar dezenas/centenas de
+    nomes. Quando `listar_todos=True`, cada bucket devolve TODOS sem
+    nenhum limite, não importa quantos sejam."""
     try:
         client = get_qdrant_client()
-        stem = _termo_para_busca(termo_busca)
-        produtos = set()
+        produtos_por_nome = set()
+        produtos_por_conteudo = set()
         offset = None
         while True:
             pontos, offset = client.scroll(
@@ -175,21 +252,28 @@ def listar_produtos_por_aplicacao(termo_busca: str, listar_todos: bool = False) 
             )
             for ponto in pontos:
                 payload = ponto.payload or {}
+                produto = _produto_do_filepath(payload.get("filepath") or "")
+                if not produto:
+                    continue
+
+                if not termo_busca:
+                    produtos_por_nome.add(produto)
+                    continue
+
+                if _termo_bate_no_nome_produto(termo_busca, produto):
+                    produtos_por_nome.add(produto)
+                    continue
+
                 content = (payload.get("content") or "").lower()
-                if stem and stem in content:
-                    produto = _produto_do_filepath(payload.get("filepath") or "")
-                    if produto:
-                        produtos.add(produto)
+                if _termo_bate_no_conteudo(termo_busca, content):
+                    produtos_por_conteudo.add(produto)
             if offset is None:
                 break
     except Exception as e:
         raise RetrievalIndisponivelError(str(e)) from e
 
-    lista = sorted(produtos)
-    limite = None if listar_todos else 10
     return {
         "termo_buscado": termo_busca,
-        "total_produtos_encontrados": len(lista),
-        "produtos": lista if limite is None else lista[:limite],
-        "truncado": limite is not None and len(lista) > limite,
+        "por_nome_ou_familia": _resumo_lista(produtos_por_nome, listar_todos),
+        "por_aplicacao_ou_tipo": _resumo_lista(produtos_por_conteudo, listar_todos),
     }

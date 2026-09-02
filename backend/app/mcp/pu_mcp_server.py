@@ -67,8 +67,11 @@ def consultar_estatisticas_catalogo() -> Dict[str, Any]:
 # ("produtos para colchão"), que um top-k de poucos chunks do RAG nunca
 # representaria fielmente (achado real: "colchão" aparece em ~150
 # arquivos/dezenas de produtos distintos do acervo).
-def consultar_produtos_por_aplicacao(termo_busca: str, listar_todos: bool = False) -> Dict[str, Any]:
-    """Lista produtos distintos do acervo cujo conteúdo menciona a aplicação/uso dado.
+def consultar_produtos_por_aplicacao(termo_busca: str = "", listar_todos: bool = False) -> Dict[str, Any]:
+    """Lista produtos distintos do acervo cujo conteúdo menciona a
+    aplicação/uso dado. Sem `termo_busca` (vazio), lista TODOS os produtos
+    do catálogo, sem filtro nenhum (pedido do usuário: "listar todos os
+    produtos" sem categoria).
 
     `listar_todos` (pedido do usuário): por padrão devolve prévia de 10 + o
     total real; quando True, devolve todos, sem limite nenhum."""
@@ -119,14 +122,13 @@ MCP_TOOLS_DEFINITIONS = [
         "type": "function",
         "function": {
             "name": "consultar_produtos_por_aplicacao",
-            "description": "Lista/conta produtos distintos do acervo real cujo conteúdo menciona um termo de busca — cobre tanto APLICAÇÃO/USO (ex: 'colchão', 'cortiça', 'automotivo') quanto TIPO/NATUREZA DO PRODUTO (ex: 'cola', 'espuma', 'selante', 'verniz' — o que o produto É, não pra que ele serve). Use SEMPRE que o pedido for uma LISTAGEM ou CONTAGEM POR CATEGORIA de qualquer um desses dois tipos ('produtos para colchão', 'produtos que são colas', 'quantos produtos para automotivo temos') — em vez de um produto específico ou uma recomendação única. NÃO confundir com consultar_estatisticas_catalogo, que é o total do acervo INTEIRO, sem filtro nenhum. Por padrão devolve só uma prévia (10 produtos) + o total real encontrado — pergunte ao usuário se ele quer a lista completa ou só essa prévia antes de decidir; se ele pedir 'todos'/'a lista completa', chame de novo com listar_todos=true.",
+            "description": "Lista/conta produtos distintos do acervo real, procurando `termo_busca` de DUAS formas independentes e devolvendo os resultados em DOIS blocos separados (nunca misturados): `por_nome_ou_familia` (o termo é a FAMÍLIA/CÓDIGO do NOME do produto, ex: 'CAT', 'TH', 'AG', 'COLOR' — o acervo segue o padrão FLEXX <FAMÍLIA> <NÚMERO>, ex: 'FLEXX CAT 42') e `por_aplicacao_ou_tipo` (o termo aparece no CONTEÚDO do documento como APLICAÇÃO/USO, ex: 'colchão', 'cortiça', 'automotivo', ou TIPO/NATUREZA DO PRODUTO, ex: 'cola', 'espuma', 'selante'). Os dois blocos podem vir os dois preenchidos ao mesmo tempo pro MESMO termo (ex: 'CAT' pode ser família E aparecer citado no conteúdo de outros produtos) — quando isso acontecer, NÃO junte os dois: são interpretações diferentes do termo, e cabe a você (ou ao usuário, se não estiver claro pelo contexto da conversa) decidir qual vale. SEM `termo_busca` (omitido/vazio), lista TODOS os produtos do catálogo em `por_nome_ou_familia`, sem filtro nenhum — use para 'liste todos os produtos' (sem categoria/família nenhuma citada). Use SEMPRE que o pedido for uma LISTAGEM ou CONTAGEM POR CATEGORIA/FAMÍLIA. Se o pedido for só 'quantos produtos catalogados' (um número, sem precisar da lista), use consultar_estatisticas_catalogo em vez desta, que é mais leve. Por padrão cada bloco devolve só uma prévia (10 produtos) + o total real — pergunte ao usuário se ele quer a lista completa ou só essa prévia antes de decidir; se ele pedir 'todos'/'a lista completa', chame de novo com listar_todos=true.",
             "parameters": {
                 "type": "object",
                 "properties": {
-                    "termo_busca": {"type": "string", "description": "Aplicação/uso OU tipo de produto citado pelo cliente (ex: 'colchão', 'cortiça', 'cola', 'espuma')"},
+                    "termo_busca": {"type": "string", "description": "Família/código do nome do produto (ex: 'CAT', 'TH', 'AG'), OU aplicação/uso, OU tipo de produto (ex: 'colchão', 'cortiça', 'cola', 'espuma'). Omita ou deixe vazio para listar TODOS os produtos, sem filtro."},
                     "listar_todos": {"type": "boolean", "description": "true para listar TODOS os produtos encontrados, sem limite nenhum (só use depois que o usuário confirmar que quer a lista completa); false (padrão) devolve uma prévia de até 10"}
-                },
-                "required": ["termo_busca"]
+                }
             }
         }
     }
