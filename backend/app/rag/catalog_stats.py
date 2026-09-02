@@ -25,18 +25,63 @@ _PASTAS_NAO_PRODUTO = {
     "obsoletos", "obsoleto", "certificados", "certificado",
     "fichas de emergência", "fichas de emergencia",
     "revisão anterior", "revisao anterior",
+    # Segmentos estruturais fixos da árvore de rede (mesmos em TODO filepath
+    # do acervo, confirmado por amostragem) — nunca um produto, mesmo quando
+    # um arquivo solto (sem pasta de produto própria) faz o algoritmo subir
+    # até aqui procurando uma pasta não-administrativa.
+    "documentação de produto", "documentacao de produto", "qualidade", "grupos", "flexivel",
 }
+
+# Palavras que, sozinhas dentro do nome da pasta, indicam pasta administrativa
+# ou de referência — nunca um produto de verdade (achado real: "FISPQ",
+# "AMOSTRA FLEXX PI", "FLEXX CL AMOSTRA", "TESTE PALMILHA" apareciam como se
+# fossem produtos distintos numa listagem por categoria, ex: "produtos que
+# são colas"). Correspondência por PALAVRA INTEIRA (não substring) — não
+# basta a pasta conter essas letras, precisa ser uma das palavras que a
+# compõem, pra não excluir por engano um produto cujo nome só pareça com isso.
+#
+# "restaurado" cobre o mesmo marcador de "DOCUMENTAÇÃO DE PRODUTO RESTAURADO
+# 0906" já usado em app.rag.ingestion (_MARCADOR_PASTA_MENOS_PRIORITARIA) —
+# sem isso, um arquivo direto dentro de "FISPQ" (excluída) nessa árvore subia
+# até a raiz "DOCUMENTAÇÃO DE PRODUTO RESTAURADO 0906" e ERA reportado como
+# se essa raiz fosse o produto (achado ao validar a correção do FISPQ acima).
+_PALAVRAS_PASTA_NAO_PRODUTO = {"fispq", "amostra", "teste", "restaurado"}
+
+_SEPARADOR_PALAVRA = re.compile(r"[\s\-_]+")
+
+
+def _eh_pasta_administrativa(pasta: str) -> bool:
+    pasta_lower = pasta.lower()
+    if pasta_lower in _PASTAS_NAO_PRODUTO:
+        return True
+    palavras = _SEPARADOR_PALAVRA.split(pasta_lower)
+    return any(p in _PALAVRAS_PASTA_NAO_PRODUTO for p in palavras)
+
+
+# Limite de quantas pastas subir procurando uma não-administrativa. Sem
+# isso, um arquivo solto dentro de várias pastas administrativas encadeadas
+# (ex: ".../RESTAURADO 0906/FISPQ/arquivo.pdf" — as duas são excluídas)
+# acabaria subindo até segmentos estruturais da rede ("Qualidade", "GRUPOS",
+# o próprio host) e reportando a raiz do compartilhamento como se fosse 1
+# produto — pior que simplesmente não atribuir produto a esse arquivo. Toda
+# estrutura real de produto observada no acervo (pasta-produto + no máximo 1
+# subpasta administrativa, como "Obsoletos/Certificados") cabe em 2 níveis;
+# 4 dá folga sem abrir a porta pra subir até a raiz.
+_PROFUNDIDADE_MAXIMA_BUSCA_PRODUTO = 4
 
 
 def _produto_do_filepath(filepath: str) -> Optional[str]:
     """Extrai o nome da pasta-produto mais próxima do arquivo, pulando
-    subpastas administrativas conhecidas. Retorna None se o caminho não tiver
-    profundidade suficiente para conter uma pasta de produto."""
+    subpastas administrativas/de referência conhecidas. Retorna None se o
+    caminho não tiver profundidade suficiente para conter uma pasta de
+    produto, ou se nenhuma pasta não-administrativa aparecer dentro do
+    limite de busca."""
     partes = [p.strip() for p in _SEPARADOR_CAMINHO.split(filepath) if p.strip()]
     if len(partes) < 2:
         return None
-    for pasta in reversed(partes[:-1]):
-        if pasta.lower() not in _PASTAS_NAO_PRODUTO:
+    candidatos = list(reversed(partes[:-1]))[:_PROFUNDIDADE_MAXIMA_BUSCA_PRODUTO]
+    for pasta in candidatos:
+        if not _eh_pasta_administrativa(pasta):
             return pasta
     return None
 

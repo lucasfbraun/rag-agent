@@ -40,6 +40,41 @@ def test_produto_do_filepath_caminho_raso_demais_retorna_none():
     assert _produto_do_filepath("arquivo.pdf") is None
 
 
+def test_produto_do_filepath_pula_pasta_fispq_solta():
+    """Achado real: pasta genérica "FISPQ" (documentos avulsos, não ligados a
+    1 produto) aparecia como se fosse um produto distinto em listagens."""
+    fp = r"...\FLEXX AG 2032\FISPQ\FISPQ - perguntas frequentes.pdf"
+    assert _produto_do_filepath(fp) == "FLEXX AG 2032"
+
+
+def test_produto_do_filepath_pula_pasta_amostra_mesmo_em_nome_composto():
+    """"AMOSTRA FLEXX PI" e "FLEXX CL AMOSTRA" não são produtos novos — a
+    palavra "amostra" em qualquer posição do nome da pasta marca conteúdo de
+    referência/exemplo, não um produto vendável."""
+    assert _produto_do_filepath(r"...\FLEXX PI\AMOSTRA FLEXX PI\arquivo.pdf") == "FLEXX PI"
+    assert _produto_do_filepath(r"...\FLEXX CL\FLEXX CL AMOSTRA\arquivo.pdf") == "FLEXX CL"
+
+
+def test_produto_do_filepath_nao_exclui_produto_que_so_parece_com_a_palavra():
+    """Correspondência é por PALAVRA INTEIRA — uma pasta cujo nome contenha as
+    letras "teste" só como parte de outra palavra não pode ser excluída."""
+    assert _produto_do_filepath(r"...\FLEXX TESTEIRA 2000\arquivo.pdf") == "FLEXX TESTEIRA 2000"
+
+
+def test_produto_do_filepath_arquivo_solto_sem_pasta_de_produto_retorna_none():
+    """Achado real: um arquivo administrativo solto direto dentro de "FISPQ",
+    numa árvore cujo nome também é administrativo ("...RESTAURADO 0906"),
+    não tem nenhuma pasta-produto de verdade acima dele — subir até acertar
+    os segmentos estruturais fixos da rede ("Documentação de Produto",
+    "Qualidade", "GRUPOS") reportaria a raiz inteira como se fosse 1 produto,
+    o que é pior que simplesmente não contar esse arquivo."""
+    fp = (
+        r"//10.1.1.205/flexivel/GRUPOS/Qualidade/Documentação de Produto"
+        r"\DOCUMENTAÇÃO DE PRODUTO RESTAURADO 0906\FISPQ\FISPQ - perguntas frequentes.pdf"
+    )
+    assert _produto_do_filepath(fp) is None
+
+
 # --- obter_estatisticas_catalogo: agregação sobre a coleção -----------------
 
 def _ponto(filepath):
