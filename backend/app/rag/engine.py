@@ -1,6 +1,7 @@
 import json
 import logging
 import re
+import unicodedata
 from typing import List, Dict, Any, Optional
 import litellm
 from qdrant_client.http import models as qmodels
@@ -77,6 +78,28 @@ def _extrair_palavras_chave(query: str) -> List[str]:
     palavras = re.findall(r"[a-zà-öø-ÿ]+", query.lower())
     return [p for p in palavras if len(p) >= 4 and p not in _STOPWORDS_PT]
 
+
+def _variantes_palavra_chave(palavra: str) -> List[str]:
+    """Flexões conservadoras para a busca textual tokenizada do Qdrant."""
+    variantes = [palavra]
+    if palavra.endswith("ão"):
+        variantes.append(f"{palavra[:-2]}ões")
+    elif palavra.endswith("ões"):
+        variantes.append(f"{palavra[:-3]}ão")
+    elif palavra.endswith("al"):
+        variantes.append(f"{palavra[:-2]}ais")
+    elif palavra.endswith("el"):
+        variantes.append(f"{palavra[:-2]}éis")
+    elif palavra.endswith("il"):
+        variantes.append(f"{palavra[:-2]}is")
+    elif palavra.endswith("m"):
+        variantes.append(f"{palavra[:-1]}ns")
+    elif palavra.endswith("s"):
+        variantes.append(palavra[:-1])
+    else:
+        variantes.append(f"{palavra}s")
+    return list(dict.fromkeys(variantes))
+
 AGENT_SYSTEM_PROMPT = """Você é o PU Matcher, um Consultor Técnico Sênior e Especialista em Vendas Técnicas e Aplicações de Poliuretanos (PU) da linha FLEXX®.
 
 SEU OBJETIVO PRINCIPAL:
@@ -122,7 +145,128 @@ C) PEDIDO DE LISTAGEM/CATEGORIA (o usuário quer VER AS OPÇÕES ou SABER QUANTO
    - RESPONDA COM O TOTAL REAL do bloco escolhido primeiro (ex: "Temos 36 produtos da família CAT." ou "Temos 1.324 produtos catalogados no total.") e a prévia dos 10 primeiros como lista curta (nome do produto, 1 linha cada — não abra detalhes técnicos). DEPOIS PERGUNTE: "Quer que eu liste todos os 36 ou só esses 10 principais?" — NÃO decida sozinho se lista tudo ou não, deixe o vendedor escolher, e NUNCA responda só com o número quando o pedido foi pra LISTAR.
    - SE O VENDEDOR PEDIR "todos"/"a lista completa"/"todos os X": chame a ferramenta DE NOVO com `listar_todos=true` e liste TODOS os produtos do bloco certo, independente de quantos sejam (10, 50, 1000 — não resuma nem corte por conta própria).
    - Depois de listar (prévia ou completa), convide o vendedor a pedir detalhe de um item específico ("me diga o nome de um deles que eu trago a ficha completa").
+
+REGRAS DE EVIDÊNCIA E CORREÇÃO — OBRIGATÓRIAS:
+   - Uma CORREÇÃO EXPLÍCITA DO USUÁRIO é uma restrição obrigatória para o restante da conversa. Se ele disser que uma família não pertence à classe pedida, não serve ou deve ser descartada, NÃO volte a recomendar nenhum produto dessa família.
+   - Menção não é classificação: um documento dizer "aditivo para elastômeros", "aglutinante de elastômeros" ou citar uma aplicação não prova que o produto É um elastômero nem que atende à aplicação. A natureza do produto e a aplicação precisam estar explicitamente sustentadas por Boletim Técnico do próprio produto.
+   - Nunca transforme ausência de especificação em "não atende" e nunca marque "compatível", "homologado" ou "produto ativo" sem evidência explícita da fonte adequada.
+   - O sistema não possui integração real com ERP/LIMS. Portanto, informe que status comercial, estoque, código ERP e homologação não foram verificados; não invente esses dados.
+   - Se não houver evidência suficiente para um produto da classe e aplicação pedidas, diga que não encontrou um candidato comprovado e encaminhe para validação da equipe técnica/P&D. É melhor não recomendar do que recomendar uma classe errada.
 """
+
+
+def _normalizar_para_regra(texto: str) -> str:
+    decomposed = unicodedata.normalize("NFKD", (texto or "").lower())
+    return "".join(c for c in decomposed if not unicodedata.combining(c))
+
+
+def _familias_rejeitadas(query: str) -> List[str]:
+    """Extrai famílias curtas de correções explícitas do turno atual.
+
+    O escopo é deliberadamente estreito: só frases inequívocas de rejeição,
+    para não inferir uma restrição a partir de uma pergunta ou mera menção.
+    """
+    texto = _normalizar_para_regra(query)
+    padroes = (
+        r"\b(?:esses?|essas?|os|as)\s+([a-z][a-z0-9-]{1,11})\s+nao\s+(?:sao|servem|atendem)",
+        r"\bnao\s+(?:quero|recomende|indique)\s+(?:os|as|o|a)?\s*([a-z][a-z0-9-]{1,11})\b",
+        r"\b([a-z][a-z0-9-]{1,11})\s+nao\s+(?:serve|servem|atende|atendem|e|sao)\b",
+    )
+    familias = []
+    for padrao in padroes:
+        for familia in re.findall(padrao, texto):
+            if familia.endswith("s") and len(familia) > 2:
+                familia = familia[:-1]
+            if familia not in {"produto", "isso", "isto", "esse", "essa"}:
+                familias.append(familia)
+    return list(dict.fromkeys(familias))
+
+
+def _resposta_recomenda_familia(answer: str, familia: str) -> bool:
+    texto = _normalizar_para_regra(answer)
+    marcador = rf"(?:produto\s+recomendado|produto\s+indicado|recomendo|recomendamos|indico|indicamos)"
+    return bool(re.search(rf"{marcador}[^\n]{{0,80}}\b(?:flexx\s+)?{re.escape(familia)}\b", texto))
+
+
+def _aplicar_guardrails_resposta(
+    query: str,
+    answer: str,
+    history: Optional[List[Dict[str, str]]] = None,
+) -> str:
+    """Impede que uma recomendação contradiga uma rejeição inequívoca.
+
+    Prompt reduz a incidência; esta validação é a garantia de entrega, pois
+    conteúdo gerado pelo provedor nunca é tratado como confiável por si só.
+    """
+    mensagens_usuario = [
+        mensagem.get("content", "")
+        for mensagem in (history or [])
+        if mensagem.get("role") == "user"
+    ]
+    familias = []
+    for mensagem in [*mensagens_usuario, query]:
+        familias.extend(_familias_rejeitadas(mensagem))
+
+    for familia in dict.fromkeys(familias):
+        if _resposta_recomenda_familia(answer, familia):
+            logger.warning("Resposta bloqueada: recomendação da família rejeitada '%s'.", familia)
+            return (
+                f"Você está correto: a família {familia.upper()} foi descartada pela sua correção "
+                "e não será recomendada para esta demanda. Não encontrei evidência suficiente "
+                "no Boletim Técnico para indicar com segurança outro produto. "
+                "Vou considerar somente produtos cuja natureza e aplicação estejam explicitamente "
+                "comprovadas no acervo; sem essa evidência, o encaminhamento correto é a equipe "
+                "técnica/P&D."
+            )
+    # Não existe fonte real de disponibilidade no sistema. Neutralizamos as
+    # formulações mais comuns mesmo que o modelo ignore prompt e template.
+    padroes_status_sem_fonte = (
+        r"(?:status\s*:\s*)?produto ativo em linha\. ?",
+        r"(?:status\s*:\s*)?produto de linha em cat[aá]logo ativo\. ?",
+        r"(?:status\s*:\s*)?ativo para vendas\. ?",
+        r"(?:status\s*:\s*)?em estoque(?:\s*/\s*pronta entrega)?\. ?",
+    )
+    for padrao in padroes_status_sem_fonte:
+        answer = re.sub(
+            padrao,
+            "Status comercial não verificado nesta base; confirmar no ERP. ",
+            answer,
+            flags=re.IGNORECASE,
+        )
+    return answer.rstrip()
+
+
+def _montar_query_recuperacao(
+    query: str, history: Optional[List[Dict[str, str]]] = None
+) -> str:
+    """Preserva a demanda anterior em correções e follow-ups referenciais.
+
+    O LLM recebe o histórico, mas o retriever não recebia. Assim, no turno
+    "esses ADTs não são elastômeros", o catálogo era pesquisado só por ADT e
+    esquecia pneus/peças/correias. Não combinamos histórico em perguntas
+    independentes para evitar arrastar um assunto antigo para um novo.
+    """
+    texto = _normalizar_para_regra(query)
+    depende_do_anterior = bool(_familias_rejeitadas(query)) or bool(re.search(
+        r"\b(?:isso|isto|esse|essa|esses|essas|aquele|aquela|aqueles|aquelas|"
+        r"anterior|anteriores|dele|dela|deles|delas)\b",
+        texto,
+    ))
+    if not depende_do_anterior or not history:
+        return query
+
+    mensagens_usuario = [
+        mensagem.get("content", "")
+        for mensagem in history
+        if mensagem.get("role") == "user" and mensagem.get("content")
+    ]
+    if not mensagens_usuario:
+        return query
+    if _familias_rejeitadas(query):
+        # O termo rejeitado é restrição, não critério positivo de busca. A
+        # mensagem atual continua no prompt do LLM e na validação final.
+        return mensagens_usuario[-1]
+    return f"{mensagens_usuario[-1]}\n\nContinuação: {query}"
 
 def _get_qdrant_client():
     """Instancia o QdrantClient de forma lazy (não falha no import-time)."""
@@ -204,22 +348,31 @@ def retrieve_products_context(
     keyword_hits: List[Dict[str, Any]] = []
     palavras_chave = _extrair_palavras_chave(query)
     if palavras_chave:
-        filtro_palavras = qmodels.Filter(
-            should=[
-                qmodels.FieldCondition(key="content", match=qmodels.MatchText(text=palavra))
-                for palavra in palavras_chave
-            ],
-            must_not=sensibilidade_must_not,
-        )
         try:
-            pontos, _ = client.scroll(
-                collection_name=COLLECTION_NAME,
-                scroll_filter=filtro_palavras,
-                with_payload=True,
-                with_vectors=False,
-                limit=50,
-            )
-            candidatos = [p.payload for p in pontos]
+            candidatos_por_chave = {}
+            # Um scroll OR global limitado a 50 não é ranking: termos
+            # genéricos ocupavam o lote e "correia" nunca chegava aos
+            # candidatos. Cada termo/flexão recebe seu próprio lote curto.
+            for palavra in palavras_chave:
+                for variante in _variantes_palavra_chave(palavra):
+                    filtro_palavra = qmodels.Filter(
+                        must=[qmodels.FieldCondition(
+                            key="content", match=qmodels.MatchText(text=variante)
+                        )],
+                        must_not=sensibilidade_must_not,
+                    )
+                    pontos, _ = client.scroll(
+                        collection_name=COLLECTION_NAME,
+                        scroll_filter=filtro_palavra,
+                        with_payload=True,
+                        with_vectors=False,
+                        limit=50,
+                    )
+                    for ponto in pontos:
+                        payload = ponto.payload
+                        chave = (payload.get("filename"), payload.get("chunk_index"))
+                        candidatos_por_chave[chave] = payload
+            candidatos = list(candidatos_por_chave.values())
 
             def _pontuacao(payload: Dict[str, Any]) -> int:
                 texto = (payload.get("content") or "").lower()
@@ -379,8 +532,9 @@ def run_pu_matcher_agent(
     (`incluir_sensivel`, AUD-002/ticket 6 — reaproveita VIEW_COSTS pra
     custo/fórmula, ver docs/spec_rbac.md "Pendências" item 2). engine.py não
     decide permissão, só encaminha a decisão já tomada."""
-    docs = retrieve_products_context(query, incluir_sensivel=ver_custos)
-    context_str = _montar_context_str(query, docs)
+    query_recuperacao = _montar_query_recuperacao(query, history)
+    docs = retrieve_products_context(query_recuperacao, incluir_sensivel=ver_custos)
+    context_str = _montar_context_str(query_recuperacao, docs)
     system_instruction = _montar_system_instruction(template_id)
 
     messages = [{"role": "system", "content": system_instruction}]
@@ -441,6 +595,7 @@ MENSAGEM / DEMANDA DO VENDEDOR OU CLIENTE:
     else:
         answer = choice.message.content
 
+    answer = _aplicar_guardrails_resposta(query, answer, history)
     sources = list(set([d.get("filename") for d in docs if d.get("filename")]))
     return {"answer": answer, "sources": sources, "model_used": model_name}
 
@@ -475,7 +630,8 @@ def stream_pu_matcher_agent(
     import json as _json
 
     try:
-        docs = retrieve_products_context(query, incluir_sensivel=ver_custos)
+        query_recuperacao = _montar_query_recuperacao(query, history)
+        docs = retrieve_products_context(query_recuperacao, incluir_sensivel=ver_custos)
     except RetrievalIndisponivelError:
         logger.error("Catálogo indisponível — abortando stream sem chamar o LLM.")
         yield _json.dumps({
@@ -485,7 +641,7 @@ def stream_pu_matcher_agent(
         yield _json.dumps({"type": "done"}) + "\n"
         return
 
-    context_str = _montar_context_str(query, docs)
+    context_str = _montar_context_str(query_recuperacao, docs)
     system_instruction = _montar_system_instruction(template_id)
 
     messages = [{"role": "system", "content": system_instruction}]
@@ -550,10 +706,18 @@ MENSAGEM / DEMANDA DO VENDEDOR OU CLIENTE:
             stream=True,
             num_retries=3
         )
+        partes = []
         for chunk in response:
             delta = chunk.choices[0].delta.content
             if delta:
+                partes.append(delta)
+        resposta_original = "".join(partes)
+        resposta_validada = _aplicar_guardrails_resposta(query, resposta_original, history)
+        if resposta_validada == resposta_original:
+            for delta in partes:
                 yield _json.dumps({"type": "delta", "content": delta}) + "\n"
+        else:
+            yield _json.dumps({"type": "delta", "content": resposta_validada}) + "\n"
     except Exception as e:
         # Texto bruto da exceção fica só no log (AUD-011, ticket 10) — o
         # cliente recebe uma mensagem genérica, nunca o detalhe interno.

@@ -82,34 +82,9 @@ def consultar_produtos_por_aplicacao(termo_busca: str = "", listar_todos: bool =
 
 # Definição de ferramentas no padrão MCP / LiteLLM
 MCP_TOOLS_DEFINITIONS = [
-    {
-        "type": "function",
-        "function": {
-            "name": "consultar_catalogo_erp",
-            "description": "Consulta código ERP, disponibilidade de linha e embalagens de um produto de poliuretano.",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "termo_busca": {"type": "string", "description": "Nome ou código do produto"}
-                },
-                "required": ["termo_busca"]
-            }
-        }
-    },
-    {
-        "type": "function",
-        "function": {
-            "name": "consultar_normas_homologadas",
-            "description": "Consulta quais produtos da empresa já foram testados e homologados para normas específicas (antichama, ABNT, ASTM, FMVSS).",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "norma_requerida": {"type": "string", "description": "Código da norma (ex: 'ABNT NBR 9178', 'FMVSS 302', 'UL94')"}
-                },
-                "required": ["norma_requerida"]
-            }
-        }
-    },
+    # ERP e homologações ainda são simulações fixas. As funções continuam
+    # disponíveis para testes da infraestrutura/RBAC, mas não são oferecidas
+    # ao LLM até existirem conectores reais.
     {
         "type": "function",
         "function": {

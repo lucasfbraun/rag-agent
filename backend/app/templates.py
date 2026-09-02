@@ -11,7 +11,7 @@ TEMPLATES_DISPONIVEIS = {
 🎯 **RECOMENDAÇÃO DE PRODUTO HOMOLOGADO - PU MATCH**
 
 • **Demanda Informada:** [Resumo das necessidades do cliente]
-• **Produto Recomendado:** **[NOME COMERCIAL DO PRODUTO]** (Código ERP: `[CÓDIGO]`)
+• **Produto Recomendado:** **[NOME COMERCIAL DO PRODUTO]** (Código ERP: não verificado nesta base)
 • **Família Química:** [ex: Sistema MDI Moldado a Frio / Poliol Poliéster / etc.]
 
 📋 **Tabela Comparativa de Especificações:**
@@ -26,7 +26,7 @@ TEMPLATES_DISPONIVEIS = {
 - [Dica de processo: temperatura de molde, relação NCO, desmoldagem]
 
 ⚠️ **Disponibilidade Comercial e Próximos Passos:**
-- Produto ativo em linha.
+- Status comercial não verificado nesta base; confirmar no ERP.
 - Sugestão: Solicitar amostra piloto para teste no molde do cliente.
 """
     },
@@ -36,12 +36,12 @@ TEMPLATES_DISPONIVEIS = {
         "formato": """
 ✅ **Temos o produto ideal para sua demanda!**
 
-* **Produto:** **[NOME COMERCIAL]** (Cód: `[CÓDIGO]`)
+* **Produto:** **[NOME COMERCIAL]** (Código ERP: não verificado nesta base)
 * **Aplicação Principal:** [Aplicação homologada]
 * **Principais Destaques:**
   - [Propriedade 1: ex: Densidade 50 kg/m³ e alta resiliência]
   - [Propriedade 2: Atende norma de flamabilidade CONTRAN / ABNT]
-* **Status:** Produto de linha em catálogo ativo.
+* **Status:** Status comercial não verificado nesta base; confirmar no ERP.
 * **Ficha Técnica (TDS):** [Nome do arquivo TDS anexado/referenciado]
 """
     },

@@ -10,6 +10,7 @@ subpasta administrativa entre o produto e o arquivo — `Obsoletos`,
 na ingestão hoje. Ver `_produto_do_filepath`.
 """
 import re
+import unicodedata
 from typing import Any, Dict, Optional
 
 from app.rag.ingestion import get_qdrant_client
@@ -125,17 +126,6 @@ def obter_estatisticas_catalogo() -> Dict[str, Any]:
     }
 
 
-def _termo_para_busca(termo: str) -> str:
-    """Stem simplificado: corta os 2 últimos caracteres de termos com 6+
-    letras. Por quê: plural/singular em português nem sempre compartilha
-    sufixo literal — "colchão" NÃO é substring de "colchões" (ã vs õ) — mas
-    "colch" é prefixo comum aos dois. Termos curtos (<6) ficam como estão:
-    cortar demais viraria ruído (ex: "cola" -> "col" bateria em "coluna",
-    "colar", que não têm nada a ver)."""
-    termo = termo.strip().lower()
-    return termo[:-2] if len(termo) >= 6 else termo
-
-
 _SEPARADOR_PALAVRA_PRODUTO = re.compile(r"[\s\-_®]+")
 
 
@@ -163,26 +153,39 @@ def _termo_bate_no_conteudo(termo_busca: str, content_lower: str) -> bool:
     com a família "CAT" — inflando o resultado de ~36 (correto, por nome)
     para ~550.
 
-    Frase de várias palavras (ex: "construção civil"): risco de falso
-    positivo por fragmento de palavra é praticamente zero — continua
-    substring simples, mesmo comportamento de antes. Termo de 1 palavra é
-    onde mora o risco: longos (>=6 letras, mesmo corte de
-    _termo_para_busca) usam PREFIXO de palavra, pra cobrir plural em
-    português ("colch" prefixo de "colchão"/"colchões"); curtos exigem a
-    palavra INTEIRA, sem folga de prefixo — "cat" nunca é prefixo válido
-    pra decidir sozinho, tem gente demais nesse balaio (catálise,
-    catalisador, categoria...)."""
-    termo_lower = termo_busca.strip().lower()
-    stem = _termo_para_busca(termo_busca)
+    A comparação usa tokens inteiros e um conjunto conservador de flexões
+    singular/plural. Isso cobre "colchão"/"colchões" e
+    "correia"/"correias", sem o prefixo aberto que fazia "correia" casar
+    com "corretamente" e "corrente" em centenas de FISPQs."""
+    def _normalizar(texto: str) -> str:
+        sem_acentos = unicodedata.normalize("NFKD", texto.lower())
+        return "".join(c for c in sem_acentos if not unicodedata.combining(c))
 
-    if " " in termo_lower:
-        return stem in content_lower
+    def _flexoes(palavra: str) -> set[str]:
+        """Flexões conservadoras, suficientes para singular/plural sem usar
+        prefixos abertos que confundem `correia` com `corretamente`."""
+        variantes = {palavra}
+        if palavra.endswith("ao"):
+            variantes.add(f"{palavra[:-2]}oes")
+        elif palavra.endswith("oes"):
+            variantes.add(f"{palavra[:-3]}ao")
+        elif palavra.endswith("s"):
+            variantes.add(palavra[:-1])
+        else:
+            variantes.add(f"{palavra}s")
+        return variantes
 
-    palavras = _SEPARADOR_PALAVRA_CONTEUDO.split(content_lower)
-    termo_foi_cortado = stem != termo_lower
-    if termo_foi_cortado:
-        return any(p.startswith(stem) for p in palavras if p)
-    return stem in palavras
+    termo_tokens = [p for p in _SEPARADOR_PALAVRA_CONTEUDO.split(_normalizar(termo_busca)) if p]
+    conteudo_tokens = [p for p in _SEPARADOR_PALAVRA_CONTEUDO.split(_normalizar(content_lower)) if p]
+    if not termo_tokens:
+        return False
+
+    largura = len(termo_tokens)
+    for inicio in range(len(conteudo_tokens) - largura + 1):
+        trecho = conteudo_tokens[inicio:inicio + largura]
+        if all(valor in _flexoes(esperado) for esperado, valor in zip(termo_tokens, trecho)):
+            return True
+    return False
 
 
 def _resumo_lista(produtos: set, listar_todos: bool) -> Dict[str, Any]:
@@ -205,7 +208,7 @@ def listar_produtos_por_aplicacao(termo_busca: str = "", listar_todos: bool = Fa
     - `por_nome_ou_familia`: o termo é uma PALAVRA INTEIRA do NOME do
       produto (padrão do acervo: FLEXX <FAMÍLIA> <NÚMERO>, ex: "FLEXX CAT
       42" — família "CAT"). Cobre "produtos CAT", "produtos da família TH".
-    - `por_aplicacao_ou_tipo`: o termo (com stem simplificado) aparece no
+    - `por_aplicacao_ou_tipo`: o termo (com flexão singular/plural) aparece no
       CONTEÚDO do documento — cobre aplicação/uso ("colchão", "cortiça") ou
       tipo/natureza do produto ("cola", "espuma").
 

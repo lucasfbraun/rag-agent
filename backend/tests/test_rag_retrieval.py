@@ -219,6 +219,48 @@ def test_palavra_chave_com_duas_ou_mais_batendo_prioriza_sobre_semantico():
     assert not any(r["filename"] == "Boletim qualquer.pdf" for r in result)
 
 
+def test_termo_discriminante_nao_some_por_limite_global_de_50_candidatos():
+    """Regressão real: a consulta com pneus/peças/correias fazia um único
+    scroll OR limitado a 50. A ordem não é relevância e nenhum TH correto
+    entrou no lote, apesar de o boletim conter todos os termos pedidos."""
+    from app.config import COLLECTION_NAME
+
+    fake_client = MagicMock()
+    fake_client.get_collections.return_value = _fake_collections([COLLECTION_NAME])
+    hit_certo = _hit(
+        "BOLETIM TÉCNICO FLEXX TH T160DE1.pdf",
+        0,
+        "produz elastômero de poliuretano para pneus industriais sólidos, "
+        "peças mecânicas e correias transportadoras",
+    )
+    ruido = [_hit(f"FISPQ {i}.pdf", 0, "produto usado corretamente") for i in range(50)]
+
+    def scroll_por_termo(**kwargs):
+        filtro = kwargs["scroll_filter"]
+        termos_must = [cond.match.text for cond in (filtro.must or []) if hasattr(cond.match, "text")]
+        if "correia" in termos_must:
+            return ([hit_certo], None)
+        return (ruido, None)
+
+    fake_client.scroll.side_effect = scroll_por_termo
+    hit_semantico = MagicMock()
+    hit_semantico.payload = {
+        "filename": "Boletim FLEXX ADT 431.pdf",
+        "chunk_index": 0,
+        "content": "aditivo para elastômeros",
+    }
+    fake_client.search.return_value = [hit_semantico]
+
+    with patch("app.rag.engine._get_qdrant_client", return_value=fake_client), \
+         patch("app.rag.engine.get_embedding", return_value=[0.1, 0.2]):
+        result = retrieve_products_context(
+            "elastômero para pneu industrial, peça mecânica e correia",
+            top_k=6,
+        )
+
+    assert result[0]["filename"] == "BOLETIM TÉCNICO FLEXX TH T160DE1.pdf"
+
+
 def test_falha_na_busca_por_palavra_chave_nao_derruba_a_busca_semantica():
     from app.config import COLLECTION_NAME
 

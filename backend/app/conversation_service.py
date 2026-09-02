@@ -52,9 +52,14 @@ def delete_conversation(
 
 
 def history_for_agent(conversation: Conversation) -> list[dict[str, str]]:
+    """Entrega o histórico completo para regras determinísticas.
+
+    O engine limita a janela enviada ao LLM às últimas 8 mensagens, mas
+    guardrails precisam enxergar correções explícitas de toda a conversa.
+    """
     return [
         {"role": message.role, "content": message.content}
-        for message in conversation.messages[-8:]
+        for message in conversation.messages
     ]
 
 

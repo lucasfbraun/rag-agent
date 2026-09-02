@@ -49,3 +49,10 @@ def test_montar_system_instruction_sempre_inclui_o_bloco_quando_ha_licoes():
     assert AGENT_SYSTEM_PROMPT in prompt
     assert "LIÇÕES APRENDIDAS" in prompt
     assert "trouxe produto errado" in prompt
+
+
+def test_prompt_trata_correcao_do_usuario_como_restricao_obrigatoria():
+    with patch("app.feedback_service.obter_licoes_de_feedback", return_value=[]):
+        prompt = _montar_system_instruction("proposta_tecnica_completa")
+    assert "CORREÇÃO EXPLÍCITA DO USUÁRIO" in prompt
+    assert "não prova que o produto É um elastômero" in prompt

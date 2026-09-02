@@ -51,6 +51,14 @@ def test_ferramenta_de_listagem_esta_registrada_na_lista_do_agente():
     assert "consultar_produtos_por_aplicacao" in nomes
 
 
+def test_ferramentas_simuladas_nao_sao_expostas_ao_modelo():
+    """ERP/LIMS ainda são mocks fixos. O LLM não pode apresentá-los como
+    evidência real de status comercial, código ou homologação."""
+    nomes = [t["function"]["name"] for t in MCP_TOOLS_DEFINITIONS]
+    assert "consultar_catalogo_erp" not in nomes
+    assert "consultar_normas_homologadas" not in nomes
+
+
 def _resultado_mock(termo, por_nome=None, por_conteudo=None):
     por_nome = por_nome or {"total": 0, "produtos": [], "truncado": False}
     por_conteudo = por_conteudo or {"total": 0, "produtos": [], "truncado": False}

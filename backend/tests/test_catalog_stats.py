@@ -14,7 +14,6 @@ from app.rag.catalog_stats import (
     obter_estatisticas_catalogo,
     listar_produtos_por_aplicacao,
     _produto_do_filepath,
-    _termo_para_busca,
     _termo_bate_no_nome_produto,
     _termo_bate_no_conteudo,
 )
@@ -123,16 +122,6 @@ def test_falha_no_qdrant_levanta_erro_tipado_em_vez_de_contagem_zerada():
             obter_estatisticas_catalogo()
 
 
-# --- _termo_para_busca: stem simplificado pra cobrir plural/singular pt-br --
-
-def test_termo_para_busca_corta_2_chars_de_termo_longo():
-    assert _termo_para_busca("colchão") == "colch"
-
-
-def test_termo_para_busca_nao_corta_termo_curto():
-    assert _termo_para_busca("cola") == "cola"
-
-
 # --- listar_produtos_por_aplicacao: listagem/categoria, não recomendação única
 
 def _ponto_com_conteudo(filepath, content):
@@ -141,8 +130,8 @@ def _ponto_com_conteudo(filepath, content):
     return p
 
 
-def test_lista_produtos_distintos_que_mencionam_o_termo_stemado():
-    """Achado real: "colchão" não é substring de "colchões" — o stem "colch"
+def test_lista_produtos_distintos_que_mencionam_flexao_do_termo():
+    """Achado real: "colchão" não é substring de "colchões" — a flexão
     precisa achar as duas formas. Nenhum produto se chama literalmente
     "colchão", então tudo cai no bucket por_aplicacao_ou_tipo."""
     fake_client = MagicMock()
@@ -303,8 +292,21 @@ def test_termo_curto_bate_quando_aparece_como_palavra_isolada():
     assert _termo_bate_no_conteudo("cola", "o produto é uma cola de pu monocomponente") is True
 
 
-def test_termo_longo_continua_usando_prefixo_de_palavra_para_plural():
+def test_termo_longo_cobre_plural_sem_prefixo_aberto():
     assert _termo_bate_no_conteudo("colchão", "aplicação em colchões de espuma") is True
+
+
+def test_correia_nao_bate_em_corretamente_nem_corrente():
+    """Regressão do incidente real: o stem ``corre`` transformava textos
+    genéricos de FISPQ em 341 supostos produtos para correia."""
+    assert _termo_bate_no_conteudo(
+        "correia", "nenhum perigo quando usado corretamente; lavar com água corrente"
+    ) is False
+
+
+def test_correia_bate_no_singular_e_plural_como_palavra_inteira():
+    assert _termo_bate_no_conteudo("correia", "aplicação em correia industrial") is True
+    assert _termo_bate_no_conteudo("correia", "produção de correias transportadoras") is True
 
 
 def test_termo_de_varias_palavras_continua_usando_substring():

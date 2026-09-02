@@ -5,6 +5,22 @@ Ver visão geral de fases em [CRONOGRAMA.md](CRONOGRAMA.md).
 
 ---
 
+## 2026-09-02 — Sessão 34: guardrails contra recomendação contraditória e recuperação corrigida
+
+**Incidente reproduzido:** para "elastômero para pneu industrial, peça mecânica, correia", a listagem retornava 341 produtos irrelevantes (incluindo ADTs). Após o usuário corrigir "esses ADTs não são elastômeros", o agente recomendava `FLEXX ADT 432`, inventava compatibilidade e declarava "Produto ativo em linha". A causa não era uma só: `correia` virava o prefixo aberto `corre` e casava com "corretamente"/"água corrente" em FISPQs; o follow-up pesquisava apenas a correção e esquecia a demanda anterior; o scroll textual limitava a 50 resultados sem ranking; templates afirmavam status ativo; e ferramentas de ERP/LIMS simuladas eram oferecidas ao LLM como se fossem fontes reais.
+
+**Correções TDD:** busca de categoria passou a comparar tokens inteiros com flexões conservadoras (`correia`/`correias`, sem casar `corrente`); o retrieval de follow-up reutiliza a última demanda e não usa a família explicitamente rejeitada como critério positivo; cada palavra técnica/flexão recebe um lote textual próprio antes da pontuação, eliminando o limite OR global arbitrário. Correções explícitas viraram restrições persistentes da conversa e uma validação final compartilhada bloqueia recomendações de família rejeitada nos fluxos síncrono e streaming. Alegações de produto ativo/em estoque são neutralizadas deterministicamente enquanto não houver ERP real.
+
+**Fontes não confiáveis removidas do agente:** `consultar_catalogo_erp` e `consultar_normas_homologadas` continuam no módulo apenas como scaffolding/testes de RBAC, mas não fazem mais parte de `MCP_TOOLS_DEFINITIONS` até existirem conectores reais. Templates agora dizem "status comercial/código ERP não verificado". O prompt exige Boletim Técnico do próprio produto para provar natureza e aplicação e proíbe confundir "aditivo para elastômeros" com "é um elastômero".
+
+**Validação real local:** `correia` caiu de 341 para 22 produtos com ocorrência literal; os resultados restantes são `FLEXX TH` sustentados por Boletins Técnicos. A sequência completa recuperou no top-6 somente Boletins TH (`T160DE1`, `T193AH4`, `T195AH1`, `T160DH1`, `T190AH4`), todos descrevendo pré-polímero + curativo que produz elastômero de PU para pneus industriais sólidos, peças mecânicas e correias transportadoras. O LLM real local `ollama/qwen2.5:3b` não recomendou ADT nem inventou disponibilidade; explicou que os produtos são pré-polímeros componentes do sistema elastomérico. Validação com o modelo de produção `gpt-4o-mini` não foi executada: o ambiente bloqueou envio dos trechos internos a provedor externo sem autorização específica do usuário.
+
+**Testes e ambiente:** ciclos vermelho/verde registrados para o falso positivo lexical, limite global de candidatos, recuperação conversacional, rejeição persistente (inclusive fora da janela de 8 mensagens enviada ao LLM), sanitização de status e remoção das ferramentas simuladas. Suítes finais: **252/252 backend** e **11/11 frontend**; 5/5 containers healthy.
+
+**Pendências preservadas:** investigar a reingestão parada em 10.499/11.273 antes de relançar; não executar a limpeza destrutiva das duplicatas sem confirmação. A próxima prioridade funcional anterior (upload permanente no RAG) não foi iniciada nesta correção emergencial.
+
+---
+
 ## 2026-09-02 — Sessão 33: histórico persistente de conversas por usuário
 
 **Pedido:** histórico no estilo ChatGPT/Claude: conversas salvas por usuário, lista na sidebar para retomar uma conversa anterior e botão "Nova conversa". O plano (modelo, endpoints, tela e seams de teste) foi apresentado e aprovado antes da implementação.

@@ -64,7 +64,14 @@ O checklist abaixo (`--full` concluído, 11.273 trechos) descreve o estado **his
 ---
 
 ## Fase 2 — Motor RAG & Agente Investigativo
-**Status:** 🟨 Em andamento — **Sessão 32 (2026-09-02): busca híbrida, listagem por categoria/família/tipo, deduplicação de ingestão e feedback com memória, todos validados ao vivo com `gpt-4o-mini` real.** Retrieval puramente semântico (embedding local) provou repetidamente errar em cenários reais (código de produto parecido, aplicação descrita com quase as mesmas palavras do boletim certo, família de produto confundida com termo de química por substring) — corrigido com busca híbrida (código exato + palavra-chave + família do nome) e dois blocos de resultado separados (nome vs. conteúdo) quando o termo é ambíguo, em vez de misturar. Ver `PROGRESS.md`, Sessão 32, para o detalhe completo dos 9 commits. Catálogo real ainda **incompleto** (10.499 de 11.273 pontos históricos) — reingestão parada até investigação (ver Fase 1). Auditoria de 2026-08-25 encontrou bugs reais no motor; **AUD-002, AUD-003 e AUD-006 corrigidos em 2026-08-26** (tickets 6, 2 e 5). Ver `docs/plano_correcao_auditoria_2026-08-25.md`.
+**Status:** 🟨 Em andamento — **Sessões 32 e 34 (2026-09-02): busca híbrida/listagem e guardrails de recomendação corrigidos.** Retrieval puramente semântico (embedding local) provou repetidamente errar em cenários reais; a Sessão 34 corrigiu também o falso positivo `correia` → `corre` (341 resultados), o limite textual global sem ranking e a perda da demanda anterior em follow-ups. Correções explícitas agora persistem como restrições, respostas contraditórias/status comercial sem fonte são bloqueados, e ferramentas simuladas não são mais expostas ao LLM. Ver `PROGRESS.md`, Sessões 32 e 34. Catálogo real ainda **incompleto** (10.499 de 11.273 pontos históricos) — reingestão parada até investigação (ver Fase 1). Auditoria de 2026-08-25 encontrou bugs reais no motor; **AUD-002, AUD-003 e AUD-006 corrigidos em 2026-08-26** (tickets 6, 2 e 5). Ver `docs/plano_correcao_auditoria_2026-08-25.md`.
+
+**✅ Sessão 34 (2026-09-02) — incidente ADT/elastômero corrigido:**
+- Busca por aplicação usa palavra/flexão inteira; `correia` não casa mais com `corretamente`/`corrente` em FISPQs (341 → 22 ocorrências literais reais, todas em Boletins da família TH na prévia).
+- Follow-up de correção recupera com a demanda anterior e exclui a família rejeitada da busca positiva; consultas textuais são feitas por termo/flexão antes da pontuação, evitando que o limite de 50 resultados sem ranking esconda os documentos corretos.
+- Guardrail pós-resposta bloqueia família rejeitada durante a conversa inteira nos fluxos síncrono e streaming; status ativo/estoque sem ERP é neutralizado.
+- Ferramentas simuladas de ERP/LIMS removidas de `MCP_TOOLS_DEFINITIONS`; templates não afirmam mais código ERP/status comercial. Integração real continua pendente na Fase 4.
+- Validação local real: top-6 somente Boletins FLEXX TH que citam o sistema elastomérico e as três aplicações; `ollama/qwen2.5:3b` não recomendou ADT. Produção `gpt-4o-mini` aguarda autorização específica para envio externo.
 
 **✅ Sessão 32 (2026-09-02) — resumo dos achados/correções, detalhe completo em `PROGRESS.md`:**
 - Busca híbrida (`retrieve_products_context`): código de produto exato (índice de texto no `filename`) + palavra-chave de conteúdo (índice de texto no `content`, mínimo 2 termos) complementam a busca semântica; aviso explícito no contexto quando um código citado não bate com nada real.
@@ -87,7 +94,7 @@ O checklist abaixo (`--full` concluído, 11.273 trechos) descreve o estado **his
 
 **Dependências:** Fase 1 concluída (dados reais indexados).
 
-**⚠️ Novo bug encontrado:** o agente recomenda produtos usando dados da ferramenta MCP **simulada** (`PU-SEAT-5000 FR`, fake) mesmo quando a base real (RAG) não tem nada relevante, sem deixar claro pro usuário que a recomendação não veio do catálogo real. Risco de o vendedor achar que é um produto real da empresa. Não corrigido ainda — fora do escopo desta tarefa (era testar o fluxo, não corrigi-lo).
+**✅ Bug das ferramentas simuladas corrigido na Sessão 34:** o agente não recebe mais `consultar_catalogo_erp` nem `consultar_normas_homologadas` em `MCP_TOOLS_DEFINITIONS`; assim, os dados fake (`PU-SEAT-5000 FR`, status/estoque/laudos simulados) não podem ser usados em resposta. As funções permanecem apenas como scaffolding interno até a Fase 4 integrar fontes reais.
 
 **Bloqueio de máquina lenta (Sessão 9) — parcialmente resolvido:** prompt trivial sem contexto caiu de 278s para 18.9s nesta sessão (causa da lentidão nunca identificada, aparentemente transitória). Porém pergunta real com RAG+tools ainda levou 103.8s — por isso o timeout do frontend (`frontend/app.py`) foi ampliado de 120s/90s para **240s** em ambas as rotas (stream e síncrona) nesta sessão, pra viabilizar o teste.
 
@@ -105,7 +112,7 @@ O checklist abaixo (`--full` concluído, 11.273 trechos) descreve o estado **his
 ---
 
 ## Fase 4 — Integrações MCP / ERP Reais
-**Status:** ⬜ Não iniciado (atualmente `pu_mcp_server.py` retorna dados simulados)
+**Status:** ⬜ Não iniciado (`pu_mcp_server.py` ainda contém scaffolding simulado, mas ele não é exposto ao LLM desde a Sessão 34)
 
 - [ ] Mapear endpoints reais do ERP (SAP/TOTVS/outro) para consulta de catálogo e estoque
 - [ ] Mapear fonte real de laudos de homologação (LIMS ou repositório de qualidade)
