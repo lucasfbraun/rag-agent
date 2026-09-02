@@ -119,6 +119,22 @@ def test_detectar_codigos_produto_multiplos_codigos():
     assert _detectar_codigos_produto("compare AG 2032 com CAT 136") == ["ag 2032", "cat 136"]
 
 
+def test_detectar_codigos_produto_ignora_artigo_colado_em_numero():
+    """Bug real: "liste os 77" (77 = contagem de uma listagem anterior, não
+    código nenhum) casava "os" + "77" como se fosse o código "OS 77" — o
+    agente respondia "produto não encontrado" em vez de listar os 77
+    pedidos. "os"/"as"/"um"/"de"/etc. nunca são sigla de família real."""
+    assert _detectar_codigos_produto("liste os 77") == []
+    assert _detectar_codigos_produto("quero ver as 15 opções") == []
+    assert _detectar_codigos_produto("mostra um 20") == []
+
+
+def test_detectar_codigos_produto_nao_ignora_familia_real_parecida_com_stopword():
+    """Sigla real de 2 letras que não está na lista de artigos/preposições
+    continua funcionando normalmente."""
+    assert _detectar_codigos_produto("boletim RG 2464") == ["rg 2464"]
+
+
 def _hit(filename, chunk_index, content="texto"):
     payload = {"filename": filename, "chunk_index": chunk_index, "content": content}
     ponto = MagicMock()
@@ -288,4 +304,13 @@ def test_montar_context_str_inclui_aviso_quando_codigo_pedido_nao_bate_em_nada()
 def test_montar_context_str_sem_aviso_quando_codigo_pedido_foi_encontrado():
     docs = [{"filename": "Boletim FLEXX AG 2032.pdf", "content": "dados reais"}]
     context = _montar_context_str("traga os dados do boletim AG 2032", docs)
+    assert "NENHUM documento com esse código exato foi encontrado" not in context
+
+
+def test_montar_context_str_liste_os_77_nao_dispara_aviso_de_nao_encontrado():
+    """Bug real (relatado pelo usuário): resposta de acompanhamento "liste os
+    77" (pedindo a lista completa mencionada na resposta anterior) disparava
+    o aviso de "código não encontrado", atropelando a listagem pedida."""
+    docs = [{"filename": "FLEXX CL 2001.pdf", "content": "aplicação automotiva"}]
+    context = _montar_context_str("liste os 77", docs)
     assert "NENHUM documento com esse código exato foi encontrado" not in context

@@ -18,6 +18,18 @@ logger = logging.getLogger(__name__)
 # CAT 136.doc"). Usado pra detectar código de produto na pergunta do usuário.
 _PADRAO_CODIGO_PRODUTO = re.compile(r"\b([A-Za-zÀ-ÖØ-öø-ÿ]{1,6})\s?(\d{2,6}[A-Za-z]{0,2})\b")
 
+# Palavras curtas de função (artigo, preposição, pronome) que NUNCA são sigla
+# de família de produto, mesmo batendo no padrão acima quando ficam coladas
+# num número — achado real: "liste os 77" (77 = contagem de uma listagem
+# anterior, não código nenhum) casava "os" + "77" como se fosse "OS 77", e o
+# agente respondia "produto não encontrado" em vez de listar os 77 pedidos.
+_PALAVRAS_NUNCA_SAO_FAMILIA_DE_CODIGO = {
+    "os", "as", "um", "uma", "de", "da", "do", "em", "no", "na", "por", "com",
+    "que", "e", "ou", "se", "ao", "aos", "eu", "tu", "ele", "ela", "nos",
+    "todos", "todas", "esses", "essas", "este", "esta", "estes", "estas",
+    "isso", "isto", "tem", "têm",
+}
+
 
 def _detectar_codigos_produto(query: str) -> List[str]:
     """Extrai possíveis códigos de produto (ex: "AG 2032", "CAT 136") da
@@ -31,6 +43,8 @@ def _detectar_codigos_produto(query: str) -> List[str]:
     de texto no nome do arquivo (ver retrieve_products_context)."""
     codigos = []
     for familia, numero in _PADRAO_CODIGO_PRODUTO.findall(query):
+        if familia.lower() in _PALAVRAS_NUNCA_SAO_FAMILIA_DE_CODIGO:
+            continue
         codigos.append(f"{familia} {numero}".lower())
     return codigos
 
@@ -45,6 +59,7 @@ _STOPWORDS_PT = {
     "poderia", "poderiam", "pode", "podem", "traga", "trazer", "traz", "dados",
     "informação", "informações", "favor", "algum", "alguma", "existe", "temos",
     "tem", "tenho", "nosso", "nossa", "usar", "aplicar", "sendo", "está", "estão",
+    "liste", "listar", "lista", "todos", "todas", "esses", "essas",
 }
 
 
