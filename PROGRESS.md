@@ -27,10 +27,26 @@ Ver visão geral de fases em [CRONOGRAMA.md](CRONOGRAMA.md).
 
 **Testes:** ~110 novos entre as 9 sub-frentes (TDD em todas, vários ciclos de "corrigido → validado ao vivo → achou efeito colateral → corrigido de novo" — registrado como normal, não como retrabalho malfeito). Suíte completa: 148 (início da sessão) → 235.
 
+**9. Termo guarda-chuva do cliente (`bfdb54f`, último commit da sessão):** usuário reportou que "produtos para cadeia de frios" trazia poucas opções — "cadeia de frios" é expressão do dia a dia do cliente, não o vocabulário técnico dos boletins (que falam "isolamento térmico"/"refrigeração"). Duas iterações de prompt, cada uma validada chamando o LLM real e inspecionando as `tool_calls` decididas: a versão **condicional** ("reconheça quando for guarda-chuva, então expanda") não funcionou — o modelo chamou a ferramenta 1x só, com a frase quase literal, achou 1 produto por coincidência de nome e parou. A versão **procedural** (regra fixa: pra todo pedido por aplicação/uso, sempre pensar em 2-3 termos técnicos equivalentes e chamar a ferramenta uma vez por termo) funcionou: "cadeia de frios" agora dispara 3 chamadas e apresenta os 3 grupos (1 + 216 + 28 produtos). Lição registrada: **este modelo segue instrução imperativa/incondicional muito melhor que instrução condicional que exige "reconhecer uma situação" antes de agir.**
+
 **Pendências abertas ao final:**
-- **Reingestão completa em andamento** (disparada por pedido explícito do usuário, PID rodando em background, log `data/.ingest_full_2026-09-02.log`) — ainda sem progresso visível na contagem de pontos (10.499) na última checagem; histórico desta mesma recuperação já teve 2 interrupções por Docker/disco (Sessões 30/31), esta é a 3ª tentativa.
-- **Limpeza retroativa das duplicatas já indexadas** (~4.900 chunks redundantes) — decisão pendente com o usuário, deliberadamente não feita nesta sessão (operação destrutiva em produção); aguardando a reingestão terminar primeiro.
-- `_produto_do_filepath` continua uma aproximação sobre estrutura de pastas, não um campo estruturado — "Angeltech" (pasta de marca com múltiplos produtos lumped) ainda aparece como falso-produto, mas 100% confinado à árvore duplicada pendente de limpeza acima.
+- **Reingestão completa NÃO concluída — 3ª tentativa também morreu** (reinício do PC ao fim da sessão). Contagem parada em **10.499 de 11.273** pontos históricos. Nunca houve progresso visível nesta 3ª tentativa (contagem inalterada por ~3h antes de morrer) — vale investigar se estava genuinamente travada antes de simplesmente relançar. Histórico: interrupção 1 = disco cheio (Sessão 30/31), 2 = reinício do Docker (Sessão 31/32), 3 = reinício do PC (Sessão 32).
+- **Limpeza retroativa das duplicatas já indexadas** (~4.900 chunks redundantes, quase metade da coleção) — decisão pendente com o usuário, deliberadamente não feita (operação destrutiva em produção).
+- `_produto_do_filepath` continua uma aproximação sobre estrutura de pastas, não um campo estruturado — "Angeltech" (pasta de marca com múltiplos produtos) ainda aparece como falso-produto, mas 100% confinado à árvore duplicada pendente de limpeza acima.
+
+---
+
+## PRÓXIMA SESSÃO — decisões já tomadas pelo usuário (não perguntar de novo)
+
+Ao fim da Sessão 32 o usuário pediu 3 funcionalidades novas e respondeu às perguntas de escopo/prioridade. **As respostas abaixo são decisão fechada dele**, registradas aqui porque a sessão acabou antes da implementação começar:
+
+**Prioridade 1 — Histórico de conversas (começar por aqui).** Estilo ChatGPT/Claude: conversas salvas, lista pra retomar uma conversa anterior, botão "Nova conversa". Hoje o histórico vive só em `st.session_state` (some ao recarregar a página). Implica: tabela(s) nova(s) no Postgres (conversa + mensagens, ligadas ao `user_id`), migration Alembic, endpoints de criar/listar/obter/apagar conversa, persistir cada par pergunta/resposta em `/api/match` e `/api/match/stream`, e reescrever a sidebar + carregamento de histórico no `frontend/app.py`. É a base sobre a qual as outras duas fazem mais sentido.
+
+**Prioridade 2 — Upload de arquivo no chat.** Decisão do usuário, na íntegra: *"ele irá virar parte do rag, mas mais um adendo, pode ser que esse upload não seja um produto, pode ser algum outro conhecimento... acho que seria interessante vetorizar, pois a ideia é que nosso agente fique mais inteligente e esteja em constante aprendizado"*. Ou seja: o arquivo anexado **é vetorizado e entra no acervo do RAG de forma permanente**, não é contexto efêmero da conversa. Ponto de atenção não resolvido: o acervo hoje assume que todo documento pertence a um produto (`_produto_do_filepath` deriva o nome do produto da estrutura de pastas da rede) — conhecimento avulso ("não é um produto") não tem pasta de produto nenhuma, então precisa de um caminho de metadado próprio pra não virar falso-produto nas listagens. Também precisa decidir permissão (quem pode inserir conhecimento no acervo de todo mundo — hoje `MANAGE_INGESTION` é só Admin TI).
+
+**Prioridade 3 — Aprendizado contínuo.** Usuário marcou as TRÊS opções: manter o feedback útil/não útil que já existe, **capturar correções em texto livre** (quando o vendedor corrige o agente numa mensagem normal, sem clicar em "não útil") e **aprender com documentos anexados** (ligado à prioridade 2). A parte de "correção em texto livre" tem um risco real já levantado com o usuário e ainda sem solução definida: como decidir de forma confiável o que é uma correção e não só uma pergunta de acompanhamento.
+
+**Estado do ambiente ao fim da sessão:** PC reiniciado, Docker subido de novo e todos os 5 containers do projeto saudáveis; coleção com 10.499 pontos; nenhuma ingestão rodando; árvore de trabalho limpa, 10 commits da sessão (`327e16a`..`bfdb54f`); 235/235 testes passando.
 
 ---
 
