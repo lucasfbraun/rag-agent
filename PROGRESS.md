@@ -33,6 +33,22 @@ Ver visão geral de fases em [CRONOGRAMA.md](CRONOGRAMA.md).
 
 **Incidente menor durante a execução:** havia uma ingestão iniciada por fora (PowerShell, 13:27:50) que ficou órfã quando a coleção foi apagada — ela teria falhado no primeiro `upsert`. Foi encerrada e a execução recomeçou limpa. **Duas ingestões simultâneas não podem rodar**: a reconciliação de uma trata os pontos da outra como órfãos e os apaga.
 
+**Verificação de cobertura (feita depois, porque a queda de 10.499 para 4.410 merece prova e não alegação).** Comparando o índice com a FONTE DA VERDADE — o acervo na rede, não o índice anterior:
+
+| | Acervo (rede) | Índice |
+|---|---|---|
+| Produtos com pelo menos 1 arquivo legível | **1.327** | **1.323** |
+
+**Cobertura de 99,7%.** A referência histórica do painel era 850 produtos catalogados; hoje são 1.323 — o número de PRODUTOS subiu. O que caiu foi o de trechos, porque o que sumiu era texto literalmente repetido: 4.410 trechos para 1.323 produtos dá ~3,3 trechos por produto (um boletim + FISPQ + certificado), contra ~8 antes, com o mesmo texto indexado 2 e 3 vezes.
+
+Os 4 produtos ausentes foram rastreados um a um no log, e **nenhum é falha da ingestão**:
+- `FLEXX POL 3310` — o único arquivo é `~$letim_DIA_A_DIA_A.docx`, arquivo de BLOQUEIO do Word (prefixo `~$`), não um documento.
+- `FLEXX RGT ECO 24116` — `Cannot read an empty file`: **o PDF está vazio/corrompido no próprio acervo**.
+- `FLEXX TH T95AMA` — só tem `.doc` legado (a pendência conhecida, adiada por decisão do usuário).
+- `POLIVEDO - old` — catálogo descartado por ser idêntico ao da pasta `POLIVEDO`; a pasta se chama "old". Comportamento correto.
+
+**Para a equipe da qualidade (o sistema não conserta sozinho):** o boletim do `FLEXX RGT ECO 24116` está corrompido na rede, e o `FLEXX POL 3310` não tem nenhum documento além de um temporário do Word.
+
 **Estado final:** 4.410 pontos, dimensão 1536, status green; backend reconstruído e usando `text-embedding-3-small`; 5/5 containers healthy. A Fase 1 volta a ter o acervo completo indexado, agora sem duplicata.
 
 ---
