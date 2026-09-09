@@ -1,7 +1,6 @@
 import streamlit as st
 import streamlit.components.v1 as components
 import requests
-import base64
 import json
 import os
 
@@ -68,29 +67,29 @@ _inject_brand_css()
 # ---------------------------------------------------------------------------
 # Título com o símbolo da marca
 # ---------------------------------------------------------------------------
-@st.cache_data(show_spinner=False)
-def _icone_em_base64() -> str:
-    """O símbolo da marca embutido como data URI.
-
-    Por que embutido e não `st.image` numa coluna ao lado: o ícone precisa
-    ficar na MESMA linha do texto, alinhado ao meio dele. `st.columns` põe os
-    dois em blocos irmãos, e o alinhamento vertical entre uma imagem e um
-    heading fica à mercê da altura da linha — some no celular, onde as colunas
-    colapsam uma sobre a outra. Um `<img>` inline acompanha o texto sempre.
-
-    O arquivo é o favicon de 64px (~4 KB), não o de 512: aqui ele é desenhado
-    com 26px de altura, e mandar 36 KB para isso seria desperdício. Em cache
-    porque o Streamlit reexecuta o script inteiro a cada interação."""
-    with open(os.path.join(STATIC_DIR, "favicon.png"), "rb") as arquivo:
-        return base64.b64encode(arquivo.read()).decode("ascii")
+# URL servida pelo próprio Streamlit (`enableStaticServing = true` em
+# .streamlit/config.toml), não um data URI em base64.
+#
+# A primeira versão embutia o PNG como `data:image/png;base64,...`. Funciona em
+# tese, mas depende de o sanitizador de HTML do Streamlit (DOMPurify) aceitar
+# data URI em `<img>` — uma regra que muda entre versões e falha em SILÊNCIO:
+# a tag some, o cabeçalho aparece sem ícone nenhum, e não há erro em lugar
+# algum para explicar. A URL estática não depende disso, cacheia normalmente
+# pelo navegador e dispensa ler e codificar o arquivo a cada execução.
+_URL_ICONE = "/app/static/favicon.png"
 
 
 def _titulo_com_icone(texto: str) -> None:
-    """Cabeçalho de seção com o símbolo do Grupo Flexível no lugar do emoji."""
+    """Cabeçalho de seção com o símbolo do Grupo Flexível no lugar do emoji.
+
+    Por que `<img>` inline e não `st.image` numa coluna ao lado: o ícone
+    precisa ficar na MESMA linha do texto e alinhado ao meio dele. `st.columns`
+    põe os dois em blocos irmãos, o alinhamento vertical fica à mercê da altura
+    da linha, e no celular as colunas colapsam uma sobre a outra — jogando o
+    ícone para cima do título."""
     st.markdown(
         f'<h3 style="display:flex;align-items:center;gap:10px;margin:0 0 .4rem 0;">'
-        f'<img src="data:image/png;base64,{_icone_em_base64()}" alt="" '
-        f'style="height:26px;width:26px;flex:none;">'
+        f'<img src="{_URL_ICONE}" alt="" style="height:26px;width:26px;flex:none;">'
         f'<span>{texto}</span></h3>',
         unsafe_allow_html=True,
     )

@@ -146,5 +146,5 @@ def test_cabecalho_principal_usa_o_simbolo_da_marca_e_nao_um_emoji():
     assert not app.exception
     cabecalhos = [m.value for m in app.markdown if "Assistente de Vendas" in m.value]
     assert cabecalhos, "cabeçalho da área principal não foi renderizado"
-    assert "data:image/png;base64," in cabecalhos[0]
+    assert '<img src="/app/static/favicon.png"' in cabecalhos[0]
     assert "🎯" not in cabecalhos[0]
