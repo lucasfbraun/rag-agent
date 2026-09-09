@@ -292,6 +292,12 @@ def test_termo_curto_bate_quando_aparece_como_palavra_isolada():
     assert _termo_bate_no_conteudo("cola", "o produto é uma cola de pu monocomponente") is True
 
 
+def test_pu_e_poliuretano_sao_equivalentes_na_busca_de_conteudo():
+    assert _termo_bate_no_conteudo("PU", "sistema de poliuretano para moldagem") is True
+    assert _termo_bate_no_conteudo("poliuretano", "cola de PU monocomponente") is True
+    assert _termo_bate_no_conteudo("PU", "palavra publicar não é a sigla isolada") is False
+
+
 def test_termo_longo_cobre_plural_sem_prefixo_aberto():
     assert _termo_bate_no_conteudo("colchão", "aplicação em colchões de espuma") is True
 

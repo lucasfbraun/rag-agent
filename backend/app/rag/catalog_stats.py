@@ -189,6 +189,8 @@ def _termo_bate_no_conteudo(termo_busca: str, content_lower: str) -> bool:
     def _flexoes(palavra: str) -> set[str]:
         """Flexões conservadoras, suficientes para singular/plural sem usar
         prefixos abertos que confundem `correia` com `corretamente`."""
+        if palavra in {"pu", "pus", "poliuretano", "poliuretanos"}:
+            return {"pu", "pus", "poliuretano", "poliuretanos"}
         variantes = {palavra}
         if palavra.endswith("ao"):
             variantes.add(f"{palavra[:-2]}oes")

@@ -17,6 +17,11 @@ from typing import Dict, Any
 
 from app.rag.catalog_stats import obter_estatisticas_catalogo, listar_produtos_por_aplicacao
 from app.rag.exceptions import RetrievalIndisponivelError
+from app.rag.spec_search import (
+    PROPRIEDADES,
+    TOLERANCIA_PADRAO_PERCENTUAL,
+    buscar_produtos_por_especificacao,
+)
 
 # Simulação de consulta ao ERP Corporativo (SAP / TOTVS / etc.)
 def consultar_catalogo_erp(termo_busca: str, ver_custos: bool = False) -> Dict[str, Any]:
@@ -80,6 +85,39 @@ def consultar_produtos_por_aplicacao(termo_busca: str = "", listar_todos: bool =
     except RetrievalIndisponivelError as e:
         return {"erro": f"Catálogo indisponível no momento: {e}"}
 
+# Idem: dados reais. Terceira dimensão de consulta ao acervo, ao lado de nome
+# (família) e conteúdo (aplicação/tipo) — o NÚMERO da especificação técnica.
+# Cobre a pergunta que nem o RAG nem as duas ferramentas acima respondem:
+# "quais produtos têm hidroxila de 180?" (ver app.rag.spec_search).
+def consultar_produtos_por_especificacao(
+    propriedade: str,
+    valor: float,
+    operador: str = "igual",
+    valor_maximo: float = None,
+    tolerancia_percentual: float = TOLERANCIA_PADRAO_PERCENTUAL,
+    listar_todos: bool = False,
+) -> Dict[str, Any]:
+    """Produtos do acervo cuja especificação técnica atende ao valor pedido."""
+    try:
+        return buscar_produtos_por_especificacao(
+            propriedade=propriedade,
+            valor=valor,
+            operador=operador,
+            valor_maximo=valor_maximo,
+            tolerancia_percentual=tolerancia_percentual,
+            listar_todos=listar_todos,
+        )
+    except RetrievalIndisponivelError as e:
+        return {"erro": f"Catálogo indisponível no momento: {e}"}
+
+
+_DESCRICAO_PROPRIEDADES = ", ".join(
+    f"'{chave}' ({dados['titulo']}"
+    + (f", em {dados['unidade_tipica']}" if dados["unidade_tipica"] else "")
+    + ")"
+    for chave, dados in PROPRIEDADES.items()
+)
+
 # Definição de ferramentas no padrão MCP / LiteLLM
 MCP_TOOLS_DEFINITIONS = [
     # ERP e homologações ainda são simulações fixas. As funções continuam
@@ -104,6 +142,75 @@ MCP_TOOLS_DEFINITIONS = [
                     "termo_busca": {"type": "string", "description": "Família/código do nome do produto (ex: 'CAT', 'TH', 'AG'), OU aplicação/uso, OU tipo de produto (ex: 'colchão', 'cortiça', 'cola', 'espuma'). Omita ou deixe vazio para listar TODOS os produtos, sem filtro."},
                     "listar_todos": {"type": "boolean", "description": "true para listar TODOS os produtos encontrados, sem limite nenhum (só use depois que o usuário confirmar que quer a lista completa); false (padrão) devolve uma prévia de até 10"}
                 }
+            }
+        }
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "consultar_produtos_por_especificacao",
+            "description": (
+                "Encontra produtos do acervo real pelo VALOR NUMÉRICO de uma especificação técnica — "
+                "ex: 'quero um produto com hidroxila de 180', 'viscosidade acima de 5000 cPs', "
+                "'NCO entre 12 e 13%', 'tempo de reação de 45 segundos', 'densidade de 35 kg/m³'. "
+                "Use SEMPRE que o pedido combinar o nome de uma propriedade técnica com um número. "
+                "NÃO use busca semântica para isso: o embedding não compara grandezas, então ele "
+                "traz 'algum produto que fala de hidroxila', não os que têm hidroxila 180. "
+                "Não use quando o usuário já citou um código de produto e quer o dado DELE "
+                "(ex: 'qual a hidroxila do AG 2032') — isso o contexto recuperado já responde. "
+                "A resposta traz, por produto, a faixa lida na tabela, a unidade e o documento de "
+                "origem (Boletim Técnico é a especificação de referência; Certificado/Laudo vale "
+                "para o lote). Traz também `faixa_no_acervo`, o mínimo e o máximo dessa propriedade "
+                "em TODO o acervo: quando `total` for 0, informe essa faixa ao vendedor e pergunte "
+                "se o valor pedido está correto, em vez de só dizer 'não encontrei'. Por padrão "
+                "devolve prévia de 10 + o total real; se o vendedor pedir a lista completa, chame "
+                "de novo com listar_todos=true."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "propriedade": {
+                        "type": "string",
+                        "description": (
+                            "Chave canônica da propriedade. Valores aceitos: "
+                            f"{_DESCRICAO_PROPRIEDADES}. Traduza o termo do vendedor para uma "
+                            "destas chaves (ex: 'hidroxila'/'índice de OH' -> 'indice_hidroxila'; "
+                            "'isocianato livre' -> 'teor_nco'). Propriedades de tempo são sempre "
+                            "em SEGUNDOS (converta minutos/horas antes de chamar)."
+                        ),
+                        "enum": sorted(PROPRIEDADES.keys()),
+                    },
+                    "valor": {
+                        "type": "number",
+                        "description": "Valor pedido. Com operador 'entre', é o limite INFERIOR.",
+                    },
+                    "operador": {
+                        "type": "string",
+                        "enum": ["igual", "maior", "menor", "entre"],
+                        "description": (
+                            "'igual' (padrão) casa por tolerância; 'maior'/'menor' para 'acima "
+                            "de'/'abaixo de'; 'entre' exige também valor_maximo."
+                        ),
+                    },
+                    "valor_maximo": {
+                        "type": "number",
+                        "description": "Limite superior — obrigatório quando operador='entre'.",
+                    },
+                    "tolerancia_percentual": {
+                        "type": "number",
+                        "description": (
+                            f"Só para operador 'igual'. Padrão {TOLERANCIA_PADRAO_PERCENTUAL:g}%. "
+                            "Aumente quando a primeira busca não achar nada e o vendedor aceitar "
+                            "um valor aproximado; use 0 para casar apenas a faixa declarada no "
+                            "documento."
+                        ),
+                    },
+                    "listar_todos": {
+                        "type": "boolean",
+                        "description": "true devolve todos os produtos, sem limite; false (padrão) devolve prévia de 10 + total.",
+                    },
+                },
+                "required": ["propriedade", "valor"],
             }
         }
     }
@@ -133,5 +240,32 @@ def execute_mcp_tool(
     elif tool_name == "consultar_produtos_por_aplicacao":
         return json.dumps(consultar_produtos_por_aplicacao(
             arguments.get("termo_busca", ""), listar_todos=arguments.get("listar_todos", False)
+        ))
+    elif tool_name == "consultar_produtos_por_especificacao":
+        try:
+            valor = float(arguments["valor"])
+        except (KeyError, TypeError, ValueError):
+            # Argumento gerado pelo LLM não é confiável por si só: sem valor
+            # numérico a busca não tem critério, e devolver erro legível é o
+            # que permite ao modelo corrigir na rodada seguinte (mesmo
+            # tratamento dado a JSON inválido em app.rag.engine).
+            return json.dumps({
+                "erro": "Argumento 'valor' ausente ou não numérico — informe o número pedido "
+                        "pelo vendedor (propriedades de tempo em segundos)."
+            })
+        valor_maximo = arguments.get("valor_maximo")
+        try:
+            valor_maximo = None if valor_maximo is None else float(valor_maximo)
+        except (TypeError, ValueError):
+            valor_maximo = None
+        return json.dumps(consultar_produtos_por_especificacao(
+            propriedade=arguments.get("propriedade", ""),
+            valor=valor,
+            operador=arguments.get("operador", "igual"),
+            valor_maximo=valor_maximo,
+            tolerancia_percentual=float(
+                arguments.get("tolerancia_percentual", TOLERANCIA_PADRAO_PERCENTUAL) or 0
+            ),
+            listar_todos=arguments.get("listar_todos", False),
         ))
     return json.dumps({"erro": "Ferramenta não encontrada."})

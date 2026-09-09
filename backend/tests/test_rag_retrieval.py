@@ -191,6 +191,12 @@ def test_extrair_palavras_chave_descarta_stopwords_e_termos_curtos():
     ]
 
 
+def test_extrair_palavras_chave_mapeia_pu_para_poliuretano():
+    assert _extrair_palavras_chave("produtos de PU para solado") == [
+        "poliuretano", "solado"
+    ]
+
+
 def test_palavra_chave_com_duas_ou_mais_batendo_prioriza_sobre_semantico():
     from app.config import COLLECTION_NAME
 

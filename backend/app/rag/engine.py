@@ -7,8 +7,20 @@ import litellm
 from qdrant_client.http import models as qmodels
 from app.templates import obter_instrucao_template
 from app.mcp.pu_mcp_server import MCP_TOOLS_DEFINITIONS, execute_mcp_tool
+from app.rag.doc_sections import (
+    PALAVRAS_DE_SECAO,
+    contem_secao,
+    detectar_secoes,
+    montar_instrucao_de_secao,
+    termos_de_indice,
+)
 from app.rag.embeddings import get_embedding
 from app.rag.exceptions import RetrievalIndisponivelError
+from app.rag.spec_search import (
+    buscar_produtos_por_especificacao,
+    interpretar_consulta_especificacao,
+    resumir_especificacoes_dos_documentos,
+)
 from app.config import QDRANT_HOST, QDRANT_PORT, COLLECTION_NAME, EMBEDDING_MODEL, DEFAULT_CHAT_MODEL
 
 logger = logging.getLogger(__name__)
@@ -76,13 +88,25 @@ def _extrair_palavras_chave(query: str) -> List[str]:
     aplicação diz literalmente "produção de rolhas de cortiça aglomerada")
     nos top-6 por similaridade vetorial."""
     palavras = re.findall(r"[a-zà-öø-ÿ]+", query.lower())
-    return [p for p in palavras if len(p) >= 4 and p not in _STOPWORDS_PT]
+    palavras = ["poliuretano" if p in {"pu", "pus"} else p for p in palavras]
+    return [
+        p for p in palavras
+        if len(p) >= 4
+        and p not in _STOPWORDS_PT
+        # Nome de SEÇÃO do boletim ("vantagens", "armazenamento", "reatividade")
+        # aparece em quase todo documento do acervo: como palavra-chave solta só
+        # enchia o top-k de ruído. O pedido de seção tem caminho próprio, mais
+        # preciso — ver app.rag.doc_sections e `_recuperar_por_secao`.
+        and _normalizar_para_regra(p) not in PALAVRAS_DE_SECAO
+    ]
 
 
 def _variantes_palavra_chave(palavra: str) -> List[str]:
     """Flexões conservadoras para a busca textual tokenizada do Qdrant."""
     variantes = [palavra]
-    if palavra.endswith("ão"):
+    if palavra == "poliuretano":
+        variantes.extend(["poliuretanos", "pu"])
+    elif palavra.endswith("ão"):
         variantes.append(f"{palavra[:-2]}ões")
     elif palavra.endswith("ões"):
         variantes.append(f"{palavra[:-3]}ão")
@@ -117,6 +141,9 @@ A) PEDIDO ESPECÍFICO (produto/código/documento já nomeado pelo usuário):
    - Ex: "traga os dados do boletim AG 2032", "qual a densidade do FLEXX CAT 136", "me manda a ficha do produto X".
    - O usuário JÁ SABE o que quer — ele não está pedindo uma recomendação, está pedindo um dado.
    - RESPONDA DIRETO com o que foi encontrado no contexto, SEM fazer perguntas de qualificação antes.
+   - VALE PARA QUALQUER ASSUNTO DO PRODUTO, não só especificação: características e vantagens, aplicação/uso recomendado, perfil de reatividade (tempo de creme, de reação, de gel, de pega, de cura), segurança e armazenamento (EPI, validade, estocagem), embalagens, informações complementares. Quando o contexto trouxer o aviso "🎯 SEÇÃO PEDIDA", os trechos daquela seção foram colocados PRIMEIRO — responda a partir deles.
+   - Se a seção pedida NÃO estiver nos trechos recuperados, diga que aquele dado específico não consta no documento recuperado. NUNCA entregue outra seção no lugar (ex: responder com a tabela de especificação quando o que foi pedido foi embalagem, validade ou armazenamento) e NUNCA complete com conhecimento geral de mercado como se fosse do boletim.
+   - Quando o contexto trouxer o bloco "📋 LEITURA ESTRUTURADA DAS TABELAS DE ESPECIFICAÇÃO", PREFIRA aqueles valores aos números do texto corrido: a extração de PDF embaralha as colunas da tabela, e esse bloco é a leitura já resolvida propriedade→valor do MESMO documento. Cite sempre o documento de origem.
    - SE O CONTEXTO TRAZ O AVISO "⚠️ ATENÇÃO: o(s) código(s) ... foi(ram) mencionado(s) ... mas NENHUM documento com esse código exato foi encontrado": NÃO invente uma resposta usando os trechos parecidos como se fossem do produto pedido. Diga diretamente ao usuário que esse produto/código NÃO foi encontrado na base de dados — pode sugerir que confira o código/nome, mas a mensagem principal é "não encontrado", não uma recomendação alternativa não pedida.
 
 B) PEDIDO ABERTO DE RECOMENDAÇÃO (o usuário ainda não sabe qual produto quer):
@@ -145,6 +172,15 @@ C) PEDIDO DE LISTAGEM/CATEGORIA (o usuário quer VER AS OPÇÕES ou SABER QUANTO
    - RESPONDA COM O TOTAL REAL do bloco escolhido primeiro (ex: "Temos 36 produtos da família CAT." ou "Temos 1.324 produtos catalogados no total.") e a prévia dos 10 primeiros como lista curta (nome do produto, 1 linha cada — não abra detalhes técnicos). DEPOIS PERGUNTE: "Quer que eu liste todos os 36 ou só esses 10 principais?" — NÃO decida sozinho se lista tudo ou não, deixe o vendedor escolher, e NUNCA responda só com o número quando o pedido foi pra LISTAR.
    - SE O VENDEDOR PEDIR "todos"/"a lista completa"/"todos os X": chame a ferramenta DE NOVO com `listar_todos=true` e liste TODOS os produtos do bloco certo, independente de quantos sejam (10, 50, 1000 — não resuma nem corte por conta própria).
    - Depois de listar (prévia ou completa), convide o vendedor a pedir detalhe de um item específico ("me diga o nome de um deles que eu trago a ficha completa").
+
+D) PEDIDO POR ESPECIFICAÇÃO TÉCNICA (o usuário descreve um NÚMERO que o produto precisa ter, sem citar código de produto):
+   - Ex: "quero um produto com hidroxila de 180", "preciso de viscosidade acima de 5000 cPs", "algum sistema com NCO entre 12 e 13%", "tempo de reação de 45 segundos", "densidade de 35 kg/m³", "dureza Shore A 80".
+   - Isso NÃO é a Situação B (recomendação aberta) nem a C (listagem por categoria): o critério já veio pronto e é numérico. Não faça perguntas de qualificação antes — o vendedor já disse o que precisa.
+   - CHAME A FERRAMENTA `consultar_produtos_por_especificacao` com a propriedade canônica, o valor e o operador. NUNCA responda esse tipo de pergunta só com o contexto de busca semântica: o embedding não compara grandezas, então os trechos recuperados falam da propriedade certa com o VALOR ERRADO, e apresentá-los como resposta é um erro silencioso.
+   - Quando o contexto já trouxer o bloco "🔎 BUSCA POR ESPECIFICAÇÃO TÉCNICA", a varredura JÁ FOI FEITA — responda com aquela lista e aquele total, sem repetir a chamada. Chame a ferramenta de novo só para mudar algo: outra propriedade, outra tolerância, ou a lista completa (`listar_todos=true`) depois que o vendedor pedir.
+   - RESPONDA COM O TOTAL REAL primeiro, depois a prévia (nome do produto, o valor lido e o documento de origem, 1 linha cada), e então pergunte se ele quer a lista completa ou a ficha de algum item.
+   - SE NÃO ENCONTRAR NENHUM: diga claramente que nenhum produto do acervo atende, informe a FAIXA que existe no acervo para aquela propriedade (`faixa_no_acervo`) e pergunte se o valor pedido está correto. NUNCA ofereça um produto de valor diferente como se atendesse ao pedido.
+   - Boletim Técnico é a especificação de REFERÊNCIA do produto; Certificado/Laudo vale para o lote analisado. Diga de qual dos dois veio o número que você está usando.
 
 REGRAS DE EVIDÊNCIA E CORREÇÃO — OBRIGATÓRIAS:
    - Uma CORREÇÃO EXPLÍCITA DO USUÁRIO é uma restrição obrigatória para o restante da conversa. Se ele disser que uma família não pertence à classe pedida, não serve ou deve ser descartada, NÃO volte a recomendar nenhum produto dessa família.
@@ -334,6 +370,83 @@ def _get_qdrant_client():
     from qdrant_client import QdrantClient
     return QdrantClient(host=QDRANT_HOST, port=QDRANT_PORT, timeout=10)
 
+
+# Quantos trechos da seção pedida entram na frente do contexto. 6 cobre uma
+# seção quebrada em vários chunks sem empurrar para fora o resto do boletim.
+_MAXIMO_TRECHOS_DE_SECAO = 6
+
+
+def _recuperar_por_secao(
+    client,
+    secoes: List[str],
+    codigos: List[str],
+    sensibilidade_must_not: List[Any],
+) -> List[Dict[str, Any]]:
+    """Trechos que contêm o CABEÇALHO da seção pedida, dentro do produto citado.
+
+    Só roda quando a pergunta cita um código de produto: sem esse recorte, um
+    filtro por "vantagens" varreria o acervo inteiro (a palavra está em quase
+    todo boletim) e devolveria trechos arbitrários de produtos aleatórios. Sem
+    código, a preferência por seção ainda vale — mas só como reordenação do que
+    a busca normal já trouxe (`_ordenar_por_secao`).
+
+    O filtro de texto do Qdrant é uma peneira grossa (casa a palavra em
+    qualquer lugar do trecho); `contem_secao` é quem confirma que o trecho
+    realmente ABRE a seção, e não só a menciona de passagem.
+    """
+    termos = termos_de_indice(secoes)
+    if not termos or not codigos:
+        return []
+
+    filtro = qmodels.Filter(
+        must=[
+            qmodels.Filter(should=[
+                qmodels.FieldCondition(key="filename", match=qmodels.MatchText(text=codigo))
+                for codigo in codigos
+            ]),
+            qmodels.Filter(should=[
+                qmodels.FieldCondition(key="content", match=qmodels.MatchText(text=termo))
+                for termo in termos
+            ]),
+        ],
+        must_not=sensibilidade_must_not,
+    )
+    try:
+        pontos, _ = client.scroll(
+            collection_name=COLLECTION_NAME,
+            scroll_filter=filtro,
+            with_payload=True,
+            with_vectors=False,
+            limit=30,
+        )
+    except Exception as e:
+        logger.warning(
+            "Falha na busca pela seção %s (%s) — seguindo sem priorização de seção.", secoes, e
+        )
+        return []
+
+    confirmados = [
+        p.payload for p in pontos
+        if any(contem_secao((p.payload or {}).get("content") or "", secao) for secao in secoes)
+    ]
+    return confirmados[:_MAXIMO_TRECHOS_DE_SECAO]
+
+
+def _ordenar_por_secao(
+    docs: List[Dict[str, Any]], secoes: List[str]
+) -> List[Dict[str, Any]]:
+    """Reordenação estável: quem abre a seção pedida vem primeiro, o resto
+    mantém a ordem original. Não descarta nada — o trecho sem a seção ainda
+    pode carregar o dado, e cortar aqui esconderia evidência do agente."""
+    if not secoes:
+        return docs
+    com_secao, sem_secao = [], []
+    for doc in docs:
+        conteudo = doc.get("content") or ""
+        destino = com_secao if any(contem_secao(conteudo, s) for s in secoes) else sem_secao
+        destino.append(doc)
+    return com_secao + sem_secao
+
 def retrieve_products_context(
     query: str, top_k: int = 6, incluir_sensivel: bool = False
 ) -> List[Dict[str, Any]]:
@@ -406,6 +519,11 @@ def retrieve_products_context(
                 "Falha na busca exata por código de produto (%s) — seguindo só com busca semântica.", e
             )
 
+    secoes = detectar_secoes(query)
+    secao_hits = _recuperar_por_secao(
+        client, secoes, codigos, sensibilidade_must_not
+    ) if secoes else []
+
     keyword_hits: List[Dict[str, Any]] = []
     palavras_chave = _extrair_palavras_chave(query)
     if palavras_chave:
@@ -437,7 +555,15 @@ def retrieve_products_context(
 
             def _pontuacao(payload: Dict[str, Any]) -> int:
                 texto = (payload.get("content") or "").lower()
-                return sum(1 for palavra in palavras_chave if palavra in texto)
+                return sum(
+                    1
+                    for palavra in palavras_chave
+                    if (
+                        bool(re.search(r"\b(?:poliuretanos?|pu)\b", texto))
+                        if palavra == "poliuretano"
+                        else palavra in texto
+                    )
+                )
 
             # Exige pelo menos 2 palavras-chave batendo (ou a única, se só
             # houver 1) — 1 palavra genérica batendo sozinha num acervo de
@@ -466,21 +592,21 @@ def retrieve_products_context(
 
     semantic_hits = [hit.payload for hit in results]
 
-    # Prioridade: match exato de código > match por palavra-chave > semântico.
-    prioritarios: List[Dict[str, Any]] = list(exact_hits)
+    # Prioridade: seção pedida > match exato de código > palavra-chave > semântico.
+    prioritarios: List[Dict[str, Any]] = list(secao_hits)
     vistos = {(h.get("filename"), h.get("chunk_index")) for h in prioritarios}
-    for h in keyword_hits:
+    for h in [*exact_hits, *keyword_hits]:
         chave = (h.get("filename"), h.get("chunk_index"))
         if chave not in vistos:
             prioritarios.append(h)
             vistos.add(chave)
 
     if not prioritarios:
-        return semantic_hits
+        return _ordenar_por_secao(semantic_hits, secoes)
 
     complemento = [h for h in semantic_hits if (h.get("filename"), h.get("chunk_index")) not in vistos]
     vagas_restantes = max(0, top_k - len(prioritarios))
-    return prioritarios + complemento[:vagas_restantes]
+    return _ordenar_por_secao(prioritarios + complemento[:vagas_restantes], secoes)
 
 
 def _codigos_sem_correspondencia(query: str, docs: List[Dict[str, Any]]) -> List[str]:
@@ -499,16 +625,88 @@ def _codigos_sem_correspondencia(query: str, docs: List[Dict[str, Any]]) -> List
     return [c for c in codigos if c not in nomes]
 
 
+def _montar_bloco_busca_por_especificacao(query: str) -> str:
+    """Resultado da busca por especificação numérica, quando a pergunta é uma
+    ("quero um produto com hidroxila de 180").
+
+    Por que entra no contexto em vez de depender só da ferramenta MCP: o
+    caminho de tool calling depende de o modelo DECIDIR chamar a ferramenta, e
+    a resposta a "produtos com hidroxila 180" fica errada de um jeito
+    silencioso quando ele não chama (ele responde com os trechos semânticos
+    que falam de hidroxila, com outro valor). A ferramenta continua existindo
+    para o agente refinar (outra tolerância, lista completa); este bloco
+    garante o piso. Quando a pergunta cita um código de produto, não roda: aí
+    o pedido é o dado DAQUELE produto, não uma busca no acervo.
+    """
+    codigos = _detectar_codigos_produto(query)
+    if codigos:
+        return ""
+    criterio = interpretar_consulta_especificacao(query, codigos_produto=codigos)
+    if not criterio:
+        return ""
+
+    try:
+        resultado = buscar_produtos_por_especificacao(
+            propriedade=criterio["propriedade"],
+            valor=criterio["valor"],
+            operador=criterio["operador"],
+            valor_maximo=criterio["valor_maximo"],
+            tolerancia_percentual=criterio["tolerancia_percentual"],
+        )
+    except RetrievalIndisponivelError as e:
+        logger.warning("Busca por especificação indisponível (%s) — seguindo só com o RAG.", e)
+        return ""
+
+    linhas = [
+        "",
+        f"🔎 BUSCA POR ESPECIFICAÇÃO TÉCNICA — critério interpretado: {resultado['criterio']}.",
+        f"Produtos encontrados no acervo: {resultado['total']}.",
+    ]
+    if resultado["produtos"]:
+        linhas.append(
+            "Esta lista veio de uma varredura do acervo INTEIRO (não de um top-k) — use estes "
+            "números e estes nomes, não os do texto corrido:"
+        )
+        for item in resultado["produtos"]:
+            unidade = f" {item['unidade']}" if item["unidade"] else ""
+            linhas.append(
+                f"- {item['produto']}: {resultado['propriedade_titulo']} {item['valores']}{unidade} "
+                f"[{item['tipo_documento']}: {item['documento']}]"
+            )
+        if resultado["truncado"]:
+            linhas.append(
+                f"(prévia dos {len(resultado['produtos'])} primeiros de {resultado['total']} — "
+                "pergunte ao vendedor se ele quer a lista completa)"
+            )
+    else:
+        faixa = resultado.get("faixa_no_acervo")
+        linhas.append(
+            "NENHUM produto do acervo atende a esse critério. Diga isso claramente — não "
+            "ofereça um produto de valor diferente como se atendesse."
+        )
+        if faixa:
+            linhas.append(
+                f"Para contexto, no acervo inteiro essa propriedade vai de {faixa['minimo']:g} a "
+                f"{faixa['maximo']:g} {faixa['unidade']} — vale informar essa faixa ao vendedor e "
+                "perguntar se o valor pedido está correto."
+            )
+    linhas.append(resultado["aviso"])
+    return "\n".join(linhas)
+
+
 def _montar_context_str(query: str, docs: List[Dict[str, Any]]) -> str:
     """Monta o bloco de contexto injetado no prompt do LLM a partir dos
     documentos recuperados — compartilhado por run_pu_matcher_agent e
     stream_pu_matcher_agent (antes duplicado nos dois)."""
+    bloco_especificacao = _montar_bloco_busca_por_especificacao(query)
+
     if not docs:
-        return (
+        vazio = (
             "⚠️ ATENÇÃO: A base de dados de produtos ainda não foi indexada ou está vazia. "
             "Responda apenas com base no seu conhecimento técnico geral de poliuretanos, "
             "mas deixe claro que não há dados do catálogo interno disponíveis no momento."
         )
+        return f"{vazio}\n{bloco_especificacao}" if bloco_especificacao else vazio
 
     context_str = "\n\n---\n\n".join([
         f"[Catálogo / TDS: {d.get('filename')}]\n{d.get('content')}"
@@ -525,6 +723,13 @@ def _montar_context_str(query: str, docs: List[Dict[str, Any]]) -> str:
             "fossem do produto pedido: diga claramente ao usuário que esse produto/código não foi "
             "encontrado na base de dados."
         )
+
+    # Leitura estruturada da tabela + seção pedida: os dois só acrescentam
+    # interpretação sobre os MESMOS documentos acima, nunca substituem o texto
+    # original — o agente precisa poder conferir a evidência bruta.
+    context_str += resumir_especificacoes_dos_documentos(docs)
+    context_str += bloco_especificacao
+    context_str += montar_instrucao_de_secao(detectar_secoes(query))
     return context_str
 
 
