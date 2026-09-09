@@ -141,6 +141,19 @@ def deactivate_user(session: Session, user_id) -> User:
     return user
 
 
+def activate_user(session: Session, user_id) -> User:
+    """Reativa uma conta desativada — contrapartida de deactivate_user.
+
+    "Excluir = desativar" só é uma decisão segura se der para desfazer: sem
+    isto, um usuário desativado por engano ficava trancado para sempre, e a
+    única saída era mexer no banco à mão. Não precisa da guarda de último
+    Admin TI: reativar nunca reduz o número de admins ativos."""
+    user = _get_user_or_raise(session, user_id)
+    user.status = UserStatus.ATIVO
+    session.flush()
+    return user
+
+
 def authenticate(session: Session, username: str, password: str) -> User:
     """Confere username+senha. Levanta AutenticacaoInvalidaError (credencial errada
     ou usuário inexistente — mesma mensagem pros dois casos, para não revelar quais

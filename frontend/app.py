@@ -18,6 +18,7 @@ LOGIN_URL = f"{API_BASE}/api/auth/login"
 ME_URL = f"{API_BASE}/api/auth/me"
 FEEDBACK_URL = f"{API_BASE}/api/feedback"
 CONVERSATIONS_URL = f"{API_BASE}/api/conversations"
+USERS_URL = f"{API_BASE}/api/auth/users"
 
 st.set_page_config(
     page_title="PU Matcher - Consultor Técnico de Produtos",
@@ -238,6 +239,8 @@ if "current_user" not in st.session_state:
     st.session_state.current_user = None
 if "active_conversation_id" not in st.session_state:
     st.session_state.active_conversation_id = None
+if "pagina" not in st.session_state:
+    st.session_state.pagina = "chat"
 
 
 def _bearer(token: str) -> dict:
@@ -255,6 +258,7 @@ def _fazer_logout():
     st.session_state.current_user = None
     st.session_state.messages = []
     st.session_state.active_conversation_id = None
+    st.session_state.pagina = "chat"
 
 
 def _clear_message_state():
@@ -363,6 +367,186 @@ def _renderizar_feedback(idx: int, msg: dict):
 
 
 # ---------------------------------------------------------------------------
+# Administração de usuários (Admin TI)
+#
+# O backend já expunha tudo em /api/auth/users desde a Fase 5, tarefa 7 — mas
+# sem tela, provisionar usuário exigia CLI ou curl, e por isso o sistema rodou
+# até aqui com UM usuário só. Esta é a interface daquelas rotas, nada novo de
+# regra de negócio: permissão, invariante de último Admin TI e "excluir =
+# desativar" continuam decididos no servidor. O frontend esconde o que o
+# usuário não pode fazer; ele não é quem autoriza.
+# ---------------------------------------------------------------------------
+PERFIS = {
+    "vendedor": "Vendedor",
+    "tecnico": "Técnico de Aplicação",
+    "gestor": "Gestor Comercial",
+    "quimico_pd": "Químico / P&D",
+    "admin_ti": "Admin TI",
+}
+
+
+def _rotulo_perfil(perfil: str) -> str:
+    return PERFIS.get(perfil, perfil.replace("_", " ").title())
+
+
+def _pode_administrar_usuarios() -> bool:
+    user = st.session_state.current_user
+    return bool(user) and user.get("perfil") == "admin_ti"
+
+
+def _api_usuarios(metodo: str, caminho: str = "", **kwargs):
+    """Chamada às rotas de administração. Devolve (ok, dados_ou_mensagem).
+
+    Centraliza as três coisas que se repetiriam em cada botão da tela: header
+    de autenticação, expiração de sessão (401 derruba o login em vez de virar
+    um erro genérico) e a tradução do corpo de erro do FastAPI, que traz o
+    motivo real em `detail` — é ali que chegam "email já usado", "senha fraca"
+    e "não é possível desativar o último Admin TI ativo"."""
+    try:
+        resposta = requests.request(
+            metodo, f"{USERS_URL}{caminho}", headers=_auth_headers(), timeout=15, **kwargs
+        )
+    except requests.exceptions.RequestException:
+        return False, "Não foi possível falar com o backend."
+
+    if resposta.status_code == 401:
+        _fazer_logout()
+        st.rerun()
+    if resposta.status_code == 403:
+        return False, "Seu perfil não tem permissão para administrar usuários."
+    if 200 <= resposta.status_code < 300:
+        return True, (resposta.json() if resposta.content else None)
+    try:
+        detalhe = resposta.json().get("detail")
+    except ValueError:
+        detalhe = None
+    if isinstance(detalhe, list):  # erro de validação do Pydantic
+        detalhe = "; ".join(item.get("msg", "") for item in detalhe)
+    return False, detalhe or f"Erro {resposta.status_code}."
+
+
+def _render_form_novo_usuario():
+    with st.form("form_novo_usuario", border=False, clear_on_submit=True):
+        col_a, col_b = st.columns(2)
+        username = col_a.text_input("Usuário (login)", placeholder="nome.sobrenome")
+        nome = col_b.text_input("Nome completo")
+        col_c, col_d = st.columns(2)
+        email = col_c.text_input("E-mail", placeholder="nome@grupoflexivel.com.br")
+        perfil = col_d.selectbox(
+            "Perfil", options=list(PERFIS), format_func=_rotulo_perfil,
+            help="Define o que a pessoa enxerga: custo industrial e laudo completo, "
+                 "por exemplo, só aparecem para os perfis autorizados.",
+        )
+        senha = st.text_input("Senha inicial", type="password")
+        st.caption("A pessoa entra com essa senha; troque depois em 'Redefinir senha'.")
+
+        if st.form_submit_button("Cadastrar usuário", type="primary", use_container_width=True):
+            if not (username and nome and email and senha):
+                st.error("Preencha usuário, nome, e-mail e senha.")
+                return
+            ok, retorno = _api_usuarios("POST", json={
+                "username": username, "nome": nome, "email": email,
+                "password": senha, "perfil": perfil,
+            })
+            if ok:
+                st.success("Usuário cadastrado.")
+                st.rerun()
+            else:
+                st.error(retorno)
+
+
+def _render_cartao_usuario(usuario: dict, eu_mesmo: bool):
+    ativo = usuario["status"] == "ativo"
+    with st.container(border=True):
+        cabecalho, acao = st.columns([5, 1])
+        with cabecalho:
+            marcador = "" if ativo else " · :red[desativado]"
+            sufixo = " · :grey[(você)]" if eu_mesmo else ""
+            st.markdown(f"**{usuario['nome']}**{sufixo}{marcador}")
+            st.caption(
+                f"`{usuario['username']}` · {usuario['email']} · "
+                f"{_rotulo_perfil(usuario['perfil'])}"
+            )
+        with acao:
+            if eu_mesmo:
+                # O backend recusa a autodesativação; esconder o botão evita
+                # oferecer uma ação que só pode terminar em erro.
+                st.caption("—")
+            elif ativo:
+                if st.button("Desativar", key=f"off_{usuario['id']}", use_container_width=True):
+                    ok, retorno = _api_usuarios("POST", f"/{usuario['id']}/deactivate")
+                    if ok:
+                        st.rerun()
+                    st.error(retorno)
+            else:
+                if st.button(
+                    "Reativar", key=f"on_{usuario['id']}", type="primary",
+                    use_container_width=True,
+                ):
+                    ok, retorno = _api_usuarios("POST", f"/{usuario['id']}/activate")
+                    if ok:
+                        st.rerun()
+                    st.error(retorno)
+
+        with st.expander("Editar"):
+            with st.form(f"form_editar_{usuario['id']}", border=False):
+                col_a, col_b, col_c = st.columns([2, 2, 1.4])
+                nome = col_a.text_input("Nome", value=usuario["nome"], key=f"n_{usuario['id']}")
+                email = col_b.text_input("E-mail", value=usuario["email"], key=f"e_{usuario['id']}")
+                perfil = col_c.selectbox(
+                    "Perfil", options=list(PERFIS), format_func=_rotulo_perfil,
+                    index=list(PERFIS).index(usuario["perfil"]) if usuario["perfil"] in PERFIS else 0,
+                    key=f"p_{usuario['id']}",
+                )
+                if st.form_submit_button("Salvar alterações"):
+                    ok, retorno = _api_usuarios("PATCH", f"/{usuario['id']}", json={
+                        "nome": nome, "email": email, "perfil": perfil,
+                    })
+                    if ok:
+                        st.rerun()
+                    st.error(retorno)
+
+            with st.form(f"form_senha_{usuario['id']}", border=False, clear_on_submit=True):
+                nova_senha = st.text_input("Nova senha", type="password", key=f"s_{usuario['id']}")
+                if st.form_submit_button("Redefinir senha"):
+                    if not nova_senha:
+                        st.error("Informe a nova senha.")
+                    else:
+                        ok, retorno = _api_usuarios(
+                            "POST", f"/{usuario['id']}/password",
+                            json={"new_password": nova_senha},
+                        )
+                        if ok:
+                            st.success("Senha redefinida.")
+                        else:
+                            st.error(retorno)
+
+
+def _render_pagina_usuarios():
+    st.markdown("### 👥 Usuários e perfis")
+    st.caption(
+        "Cadastre quem vai acessar o PU Matcher e defina o perfil de cada um. "
+        "Desativar preserva o histórico da pessoa — a conta nunca é apagada."
+    )
+
+    ok, usuarios = _api_usuarios("GET")
+    if not ok:
+        st.error(usuarios)
+        return
+
+    ativos = [u for u in usuarios if u["status"] == "ativo"]
+    aba_lista, aba_novo = st.tabs(
+        [f"Cadastrados ({len(ativos)} ativos)", "Cadastrar usuário"]
+    )
+    with aba_novo:
+        _render_form_novo_usuario()
+    with aba_lista:
+        eu = (st.session_state.current_user or {}).get("id")
+        for usuario in usuarios:
+            _render_cartao_usuario(usuario, eu_mesmo=usuario["id"] == eu)
+
+
+# ---------------------------------------------------------------------------
 # Portão de login — nada abaixo deste bloco roda sem token válido em sessão.
 # Backend (Fase 5, tarefa 5) passou a exigir autenticação em /api/match e
 # companhia; sem isto o frontend simplesmente parou de funcionar.
@@ -429,6 +613,24 @@ with st.sidebar:
     if st.button("🚪 Sair", use_container_width=True):
         _fazer_logout()
         st.rerun()
+
+    # Administração só aparece para quem pode administrar. Isto é conveniência
+    # de interface, não segurança: quem forjar a chamada esbarra em
+    # Permission.MANAGE_USERS no backend, que é onde a decisão mora.
+    if _pode_administrar_usuarios():
+        if st.session_state.pagina == "chat":
+            if st.button(
+                "Usuários e perfis", icon=":material/group:", use_container_width=True
+            ):
+                st.session_state.pagina = "usuarios"
+                st.rerun()
+        else:
+            if st.button(
+                "Voltar ao chat", icon=":material/arrow_back:",
+                type="primary", use_container_width=True,
+            ):
+                st.session_state.pagina = "chat"
+                st.rerun()
 
     st.divider()
 
@@ -550,6 +752,17 @@ with st.sidebar:
 # ---------------------------------------------------------------------------
 # Área Principal
 # ---------------------------------------------------------------------------
+# A administração ocupa a área principal inteira em vez de virar um expander
+# na sidebar: são formulários e uma lista que crescem com o número de pessoas.
+# `st.stop()` evita renderizar o chat por baixo — o histórico da conversa
+# continua em session_state e volta intacto ao clicar em "Voltar ao chat".
+if st.session_state.pagina == "usuarios":
+    if not _pode_administrar_usuarios():
+        st.session_state.pagina = "chat"
+        st.rerun()
+    _render_pagina_usuarios()
+    st.stop()
+
 st.markdown("### 🎯 Assistente de Vendas Técnicas & Match de Produtos")
 st.caption(
     "Descreva a demanda do cliente (ex: 'Cliente quer desenvolver assento de ônibus de alta densidade') "

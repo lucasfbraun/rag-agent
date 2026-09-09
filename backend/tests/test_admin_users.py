@@ -171,6 +171,41 @@ def test_admin_desativa_usuario(client, created_user_ids):
     assert login_resp.status_code == 401
 
 
+def test_admin_reativa_usuario_desativado(client, created_user_ids):
+    """Contrapartida de /deactivate. "Excluir = desativar" só é uma decisão
+    segura se der para desfazer — e com a tela de administração a desativação
+    passou a estar a um clique, então desativar por engano deixou de ser
+    hipotético."""
+    token, _ = _token_for(Role.ADMIN_TI, created_user_ids, client)
+    payload = _novo_usuario_payload()
+    criado = client.post("/api/auth/users", json=payload, headers=_auth_header(token)).json()
+    created_user_ids.append(uuid.UUID(criado["id"]))
+    client.post(f"/api/auth/users/{criado['id']}/deactivate", headers=_auth_header(token))
+
+    resp = client.post(f"/api/auth/users/{criado['id']}/activate", headers=_auth_header(token))
+    assert resp.status_code == 200
+    assert resp.json()["status"] == "ativo"
+
+    # Reativar sem devolver o acesso não resolveria nada.
+    login_resp = client.post(
+        "/api/auth/login",
+        json={"username": payload["username"], "password": payload["password"]},
+    )
+    assert login_resp.status_code == 200
+
+
+def test_reativar_usuario_inexistente_retorna_404(client, created_user_ids):
+    token, _ = _token_for(Role.ADMIN_TI, created_user_ids, client)
+    resp = client.post(f"/api/auth/users/{uuid.uuid4()}/activate", headers=_auth_header(token))
+    assert resp.status_code == 404
+
+
+def test_reativar_exige_permissao_de_administrar_usuarios(client, created_user_ids):
+    token, _ = _token_for(Role.VENDEDOR, created_user_ids, client)
+    resp = client.post(f"/api/auth/users/{uuid.uuid4()}/activate", headers=_auth_header(token))
+    assert resp.status_code == 403
+
+
 def test_admin_nao_pode_desativar_a_propria_conta(client, created_user_ids):
     token, admin_id = _token_for(Role.ADMIN_TI, created_user_ids, client)
     resp = client.post(f"/api/auth/users/{admin_id}/deactivate", headers=_auth_header(token))

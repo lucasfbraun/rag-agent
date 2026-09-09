@@ -28,6 +28,7 @@ from app.auth.user_service import (
     UltimoAdminError,
     UsuarioJaExisteError,
     UsuarioNaoEncontradoError,
+    activate_user,
     create_user,
     deactivate_user,
     get_user_by_id,
@@ -124,6 +125,19 @@ def editar_usuario(user_id: uuid.UUID, req: EditarUsuarioRequest, session: Sessi
 def redefinir_senha(user_id: uuid.UUID, req: RedefinirSenhaRequest, session: Session = Depends(get_session)):
     with _commit_traduzindo_erros(session):
         set_password(session, user_id, req.new_password)
+
+
+@router.post(
+    "/{user_id}/activate", response_model=UsuarioResponse,
+    dependencies=[Depends(require_permission(Permission.MANAGE_USERS))],
+)
+def reativar_usuario(user_id: uuid.UUID, session: Session = Depends(get_session)):
+    """Contrapartida de /deactivate. Sem ela, desativar por engano trancava a
+    conta para sempre — risco que passa a ser real agora que a desativação
+    está a um clique na tela de administração, não mais só no CLI."""
+    with _commit_traduzindo_erros(session):
+        user = activate_user(session, user_id)
+    return UsuarioResponse.from_user(user)
 
 
 @router.post("/{user_id}/deactivate", response_model=UsuarioResponse)
