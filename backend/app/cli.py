@@ -4,7 +4,7 @@ CLI de ingestão do PU Matcher.
 Uso:
     python -m app.cli ingest
     python -m app.cli ingest --dir /app/data/raw_documents
-    python -m app.cli ingest --dir /app/data/raw_documents --model ollama/nomic-embed-text
+    python -m app.cli ingest --dir /app/data/raw_documents --model text-embedding-3-small
 
     python -m app.cli health
 """

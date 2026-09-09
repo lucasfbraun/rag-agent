@@ -20,11 +20,6 @@ load_dotenv(os.path.join(os.path.dirname(__file__), ".env"))
 # (achado ao investigar por que --full parou de funcionar do host, Sessão 30).
 os.environ["QDRANT_HOST"] = "localhost"
 
-# Mesmo problema com o Ollama: .env tem OLLAMA_API_BASE apontando pra
-# "host.docker.internal" (nome especial que só o Docker resolve, pra um
-# container alcançar o host) — rodando no host, o Ollama está em localhost.
-os.environ["OLLAMA_API_BASE"] = "http://localhost:11434"
-
 # Garante que o modulo app seja encontrado
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "backend"))
 

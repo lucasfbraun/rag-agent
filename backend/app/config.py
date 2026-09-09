@@ -12,9 +12,12 @@ QDRANT_HOST = os.getenv("QDRANT_HOST", "localhost")
 QDRANT_PORT = int(os.getenv("QDRANT_PORT", 6333))
 COLLECTION_NAME = "pu_products_catalog"
 
-# gemini-embedding-001 (Google/Gemini) = 3072 dims | ollama/nomic-embed-text (local) = 768 dims
-EMBEDDING_MODEL = os.getenv("EMBEDDING_MODEL", "gemini/gemini-embedding-001")
-VECTOR_SIZE = int(os.getenv("VECTOR_SIZE", "3072"))
+# text-embedding-3-small (OpenAI) = 1536 dims | gemini-embedding-001 = 3072 dims.
+# VECTOR_SIZE PRECISA bater com a dimensão do modelo escolhido, e o modelo precisa
+# ser o mesmo na ingestão e na consulta — trocar de embedding obriga a recriar a
+# coleção do zero (ver .env.example).
+EMBEDDING_MODEL = os.getenv("EMBEDDING_MODEL", "text-embedding-3-small")
+VECTOR_SIZE = int(os.getenv("VECTOR_SIZE", "1536"))
 
 # Alias sempre-atual do Gemini — resistente a descontinuações de versão pontuais
 DEFAULT_CHAT_MODEL = "gemini/gemini-flash-latest"
@@ -27,8 +30,6 @@ DEFAULT_CHAT_MODEL = "gemini/gemini-flash-latest"
 # (ver docstring do módulo) — não unificado agora porque o frontend roda num
 # processo Python separado, sem import de app.config.
 ALLOWED_CHAT_MODELS = frozenset({
-    "ollama/qwen2.5:3b",
-    "ollama/qwen2.5:7b",
     "gemini/gemini-flash-latest",
     "gemini/gemini-3.6-flash",
     "gemini/gemini-pro-latest",

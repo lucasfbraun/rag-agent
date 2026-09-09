@@ -18,12 +18,15 @@ Acompanhamento do desenvolvimento:
 
 - **Backend:** FastAPI
 - **RAG / Vector DB:** Qdrant
-- **Multi-LLM:** LiteLLM (Gemini, OpenAI, Anthropic, Grok, ou Ollama local/gratuito — ver `.env.example`)
+- **Multi-LLM:** LiteLLM (OpenAI, Gemini, Anthropic, Grok — ver `.env.example`)
+- **Embedding:** `text-embedding-3-small` (OpenAI, 1536 dims). O modelo e o `VECTOR_SIZE` precisam ser os mesmos na ingestão e na consulta — trocar de embedding obriga a recriar a coleção do zero
 - **Frontend:** Streamlit, atrás de um proxy reverso (Caddy) — ver "Identidade visual & instalação como app (PWA)"
 - **Autenticação & RBAC:** PostgreSQL + JWT (Fase 5 — ver seção abaixo)
 - **Ferramentas vivas:** MCP (catálogo ERP e normas/homologações — atualmente simuladas, ver Fase 4 do cronograma)
 
 ## Como rodar localmente
+
+> **Use `docker compose` (com espaço), não `docker-compose` (com hífen).** O hífen é o Compose V1, descontinuado — e este `docker-compose.yml` **não funciona nele**: o arquivo não declara `version:`, então a V1 o lê como formato legado e ignora `healthcheck` e `depends_on: condition: service_healthy`, subindo os serviços fora de ordem.
 
 1. Copie `.env.example` para `.env` e preencha as chaves de API reais (nunca commitar o `.env`):
    ```bash
@@ -31,11 +34,11 @@ Acompanhamento do desenvolvimento:
    ```
 2. Suba os contêineres (aguarda healthchecks automaticamente):
    ```bash
-   docker-compose up -d --build
+   docker compose up -d --build
    ```
 3. Verifique se todos os serviços estão saudáveis:
    ```bash
-   docker-compose ps
+   docker compose ps
    # ou via API:
    curl http://localhost:8000/api/health
    ```
@@ -50,6 +53,32 @@ Acompanhamento do desenvolvimento:
 5. Crie o primeiro usuário Admin TI (obrigatório — sem ele ninguém consegue logar; ver "Autenticação & Perfis (RBAC)" abaixo para o comando).
 6. Acesse a interface em `http://localhost:8501` e faça login com o usuário criado no passo anterior.
    > Desde a Sessão 27, `8501` é servido por um proxy Caddy na frente do Streamlit (serviço `proxy` no Compose), não pelo container `frontend` diretamente — necessário pro Service Worker do PWA funcionar (ver seção abaixo). Pra quem debuga direto no container, o Streamlit em si continua ouvindo em `8501` só na rede interna do Compose (sem porta publicada no host).
+
+### Instalando em Ubuntu/Debian (servidor Linux)
+
+O Ubuntu não traz o Docker. **Não** use as duas opções que o `apt` sugere quando `docker-compose` não é encontrado: `apt install docker-compose` instala o Compose V1 (descontinuado, incompatível com este arquivo, ver aviso acima), e `snap install docker` confina o daemon de um jeito que quebra os bind mounts usados aqui (`./data/qdrant_storage`, `./proxy/Caddyfile`).
+
+Instale do repositório oficial:
+
+```bash
+sudo apt remove -y docker docker-engine docker.io containerd runc docker-compose
+sudo apt update && sudo apt install -y ca-certificates curl gnupg
+sudo install -m 0755 -d /etc/apt/keyrings
+curl -fsSL https://download.docker.com/linux/ubuntu/gpg | sudo gpg --dearmor -o /etc/apt/keyrings/docker.gpg
+sudo chmod a+r /etc/apt/keyrings/docker.gpg
+echo "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/docker.gpg] https://download.docker.com/linux/ubuntu $(. /etc/os-release && echo $VERSION_CODENAME) stable" | sudo tee /etc/apt/sources.list.d/docker.list > /dev/null
+sudo apt update
+sudo apt install -y docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin
+sudo usermod -aG docker $USER && newgrp docker   # rodar docker sem sudo
+```
+
+**Três coisas que pegam numa máquina nova, e não são erro do projeto:**
+
+1. **Permissão do `.env`.** Se você criou o arquivo com `sudo`, ele fica de root e o Compose pode não conseguir lê-lo: `sudo chown $USER:$USER .env && chmod 600 .env`. Sem `SECRET_KEY` e `POSTGRES_PASSWORD` preenchidos, o backend levanta `RuntimeError` no import e o container entra em crash-loop — é proposital, não é falha.
+
+2. **O banco vem vazio, inclusive sem usuários.** `data/qdrant_storage/` e `data/postgres_storage/` estão no `.gitignore`, então o clone traz só as pastas vazias: zero produtos indexados e **zero usuários**, ou seja, ninguém consegue nem fazer login. Crie o primeiro Admin TI com o comando da seção "Autenticação & Perfis (RBAC)" antes de tentar usar a interface.
+
+3. **O acervo real está num compartilhamento SMB do Windows.** `ingest_network.py` aponta para `//10.1.1.205/flexivel/...`, um caminho UNC. No Linux é preciso montar o compartilhamento antes (`sudo apt install cifs-utils` e um `mount -t cifs`), e ajustar o caminho no script.
 
 ## Como rodar localmente (sem Docker)
 

@@ -730,8 +730,6 @@ with st.sidebar:
     selected_model = st.selectbox(
         "Provedor / Modelo:",
         [
-            "ollama/qwen2.5:3b",
-            "ollama/qwen2.5:7b",
             "gemini/gemini-flash-latest",
             "gemini/gemini-3.6-flash",
             "gemini/gemini-pro-latest",
