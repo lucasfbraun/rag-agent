@@ -5,6 +5,38 @@ Ver visão geral de fases em [CRONOGRAMA.md](CRONOGRAMA.md).
 
 ---
 
+## 2026-09-09 — Sessão 35c: reingestão completa concluída (a primeira desde o incidente da Sessão 30)
+
+**Pedido do usuário:** "consegue continuar com a reingestão?" — seguido, no meio do caminho, da decisão de abandonar o Ollama ("a ideia é que eu use os motores pagos, gpt, gemini, claude") e de autorizar a limpeza de disco e a recriação da coleção.
+
+**O diagnóstico anterior estava errado.** O cronograma registrava a 3ª tentativa como "travada, contagem inalterada por ~3h". O log mostra o contrário: o contador do próprio script subia normalmente (`💾 2607 trechos indexados até agora`) e ela percorreu o acervo até a família `FLEXX SOFT` antes de ser interrompida. A contagem do Qdrant ficar parada era **comportamento esperado**, não sintoma: os IDs dos pontos são determinísticos (`uuid5(filepath::chunk_index)`), então reprocessar arquivo já indexado sobrescreve o mesmo ponto em vez de criar outro. Confirmado que a família SOFT já estava na coleção — o script passou horas reindexando o que já existia, e o total não tinha como se mexer.
+
+**O bloqueador real era disco:** 255 MB livres de 237 GB (a mesma causa que matou a 1ª tentativa em 28/08). O `docker builder prune -af` liberou 28 GB de cache e 20 GB de imagens *dentro* do Docker, mas o host não se mexeu — o `docker_data.vhdx` é um disco virtual que cresce e nunca encolhe sozinho (61 GB de arquivo para ~13 GB de conteúdo). A compactação por `wsl --manage --set-sparse` foi **recusada pelo próprio Windows** ("desabilitado por possível corrupção de dados"); não foi forçada com `--allow-unsafe` num disco que guarda o Postgres e o Qdrant. Encerrar a distro WSL já devolveu ~9,5 GB, o suficiente com folga.
+
+**Troca de embedding (consequência da saída do Ollama):** `ollama/nomic-embed-text` (768 dims) → `text-embedding-3-small` (OpenAI, 1536 dims). Não é editar uma variável: dimensão diferente torna a coleção incompatível, então os 10.499 pontos antigos foram descartados e o índice foi reconstruído do zero. Gemini foi descartado como embedding porque a chave está num tier de quota restrito (429, `quotaValue: 20`) e a ingestão são milhares de chamadas.
+
+**Embedding em lote** (`get_embeddings`, novo): medido contra a API real, uma chamada por chunk leva ~716 ms — a latência é quase toda ida-e-volta de rede — enquanto um lote de 128 sai a ~31 ms por chunk. O lote é por arquivo, de propósito: agrupar entre arquivos quebraria a garantia de que um arquivo só é gravado inteiro ou não é gravado. A resposta é ordenada por `index` em vez de confiar na ordem de chegada, porque trocar dois vetores de lugar seria um erro silencioso — sem exceção e sem sintoma até alguém reparar que a busca traz o produto errado.
+
+**Resultado da reingestão (`🎉 Indexação concluída`, EXIT=0):**
+
+| | |
+|---|---|
+| Arquivos no acervo | 13.647 |
+| Duplicatas de formato descartadas (PDF/DOCX do mesmo doc) | 4.063 |
+| Duplicatas de conteúdo descartadas (árvore "RESTAURADO 0906") | 3.463 |
+| Arquivos ignorados (`.doc` legado, vazios) | 1.368 |
+| **Indexados** | **4.410 trechos de 3.420 arquivos** |
+
+**O total caiu de 10.499 para 4.410 — e isso é o resultado correto, não perda.** A diferença é exatamente a pendência antiga registrada na Sessão 32: quase metade da coleção era redundante. Os filtros de deduplicação, que até aqui só preveniam acúmulo futuro, limparam o passivo de graça ao reconstruir do zero.
+
+**Ganho de qualidade observado na validação:** "cola para rolha de cortiça" agora traz o `Boletim FLEXX AG 2066` **pela busca vetorial**. Esse é o caso documentado na Sessão 32 em que o embedding local falhava mesmo com o boletim contendo quase as mesmas palavras, e só a busca híbrida por palavra-chave salvava. A busca por especificação também ficou mais rápida (~4,4 s contra ~5,8 s), simplesmente por haver menos trechos redundantes para varrer.
+
+**Incidente menor durante a execução:** havia uma ingestão iniciada por fora (PowerShell, 13:27:50) que ficou órfã quando a coleção foi apagada — ela teria falhado no primeiro `upsert`. Foi encerrada e a execução recomeçou limpa. **Duas ingestões simultâneas não podem rodar**: a reconciliação de uma trata os pontos da outra como órfãos e os apaga.
+
+**Estado final:** 4.410 pontos, dimensão 1536, status green; backend reconstruído e usando `text-embedding-3-small`; 5/5 containers healthy. A Fase 1 volta a ter o acervo completo indexado, agora sem duplicata.
+
+---
+
 ## 2026-09-09 — Sessão 35b: tela de cadastro de usuários e perfis
 
 **Pedido do usuário:** "como está a parte de criação de usuários e perfis, foi feito?" e, em seguida, "quero poder cadastrar os usuários que acessarão nossa aplicação".
