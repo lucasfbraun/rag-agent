@@ -132,3 +132,19 @@ def test_excluir_conversa_ativa_limpa_a_tela():
     delete.assert_called_once()
     assert app.session_state.active_conversation_id is None
     assert app.session_state.messages == []
+
+
+def test_cabecalho_principal_usa_o_simbolo_da_marca_e_nao_um_emoji():
+    """O título da área de chat era "### 🎯 Assistente de Vendas Técnicas".
+    Trocado pelo símbolo do Grupo Flexível, embutido inline para ficar na mesma
+    linha do texto — `st.columns` deixaria o alinhamento vertical à mercê da
+    altura da linha e colapsaria no celular."""
+    app = _authenticated_app()
+    with patch("requests.get", side_effect=_fake_get):
+        app.run(timeout=10)
+
+    assert not app.exception
+    cabecalhos = [m.value for m in app.markdown if "Assistente de Vendas" in m.value]
+    assert cabecalhos, "cabeçalho da área principal não foi renderizado"
+    assert "data:image/png;base64," in cabecalhos[0]
+    assert "🎯" not in cabecalhos[0]

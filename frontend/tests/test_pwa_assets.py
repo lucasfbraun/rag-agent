@@ -147,3 +147,12 @@ def test_derivados_sao_leves_o_suficiente_para_web():
     for nome in ("favicon.png", "logo.png", "icon-192.png", "icon-512.png"):
         kb = os.path.getsize(os.path.join(STATIC_DIR, nome)) / 1024
         assert kb < 100, f"{nome} tem {kb:.0f} KB — muito pesado para asset de tela"
+
+
+def test_favicon_e_pequeno_o_bastante_para_ir_embutido_no_titulo():
+    """O cabeçalho da área principal desenha o símbolo da marca inline, como
+    data URI (`_icone_em_base64`). Base64 cresce o arquivo em ~33%, e ele viaja
+    no HTML a cada carregamento — por isso o inline usa o favicon de 64px, não
+    o ícone de 512."""
+    kb = os.path.getsize(os.path.join(STATIC_DIR, "favicon.png")) / 1024
+    assert kb < 10, f"favicon.png tem {kb:.1f} KB — pesado demais para embutir no HTML"
