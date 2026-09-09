@@ -30,6 +30,14 @@ import pytest
 from app.rag.ingestion import ingest_catalog_directory, init_qdrant_collection
 
 
+def _vetores_falsos(chunks, model):
+    """`get_embeddings` devolve um vetor POR chunk, na ordem recebida. Um mock
+    de valor fixo esconderia justamente o erro que o lote pode introduzir:
+    vetor do chunk errado no ponto errado — sem exceção, sem sintoma, até
+    alguém reparar que a busca traz o produto errado."""
+    return [[0.1, 0.2, 0.3] for _ in chunks]
+
+
 def _chunk_id(file_path: str, chunk_idx: int) -> str:
     return str(uuid.uuid5(uuid.NAMESPACE_URL, f"{file_path}::{chunk_idx}"))
 
@@ -54,7 +62,7 @@ def fake_client():
 
 @pytest.fixture
 def fake_embedding():
-    with patch("app.rag.ingestion.get_embedding", return_value=[0.1, 0.2, 0.3]):
+    with patch("app.rag.ingestion.get_embeddings", side_effect=_vetores_falsos):
         yield
 
 
@@ -172,14 +180,16 @@ def test_falha_no_meio_de_um_arquivo_nao_grava_chunks_parciais(fake_client):
 
         chamadas = {"n": 0}
 
-        def embedding_com_falha(chunk, model):
+        def embedding_com_falha(chunks, model):
+            # O embedding passou a ir em LOTE por arquivo, então a falha
+            # acontece na chamada do arquivo inteiro, não no 2º chunk. O que
+            # este teste protege continua idêntico: arquivo que falha no meio
+            # do processamento não pode deixar ponto nenhum gravado.
             chamadas["n"] += 1
-            if chamadas["n"] == 2:
-                raise Exception("timeout simulado no meio do arquivo")
-            return [0.1, 0.2, 0.3]
+            raise Exception("timeout simulado ao embedar o arquivo")
 
         with patch("app.rag.ingestion.get_qdrant_client", return_value=fake_client), \
-             patch("app.rag.ingestion.get_embedding", side_effect=embedding_com_falha):
+             patch("app.rag.ingestion.get_embeddings", side_effect=embedding_com_falha):
             ingest_catalog_directory(tmp)
 
         # Nenhum ponto do arquivo com falha pode ter sido gravado — nem o

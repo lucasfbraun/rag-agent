@@ -38,6 +38,11 @@ from app.rag.ingestion import _e_conteudo_sensivel, ingest_catalog_directory
 
 # --- heurística de classificação --------------------------------------------
 
+def _vetores_falsos(chunks, model):
+    """A ingestão embeda em lote: um vetor por chunk, na ordem recebida."""
+    return [[0.1, 0.2] for _ in chunks]
+
+
 def test_texto_com_custo_industrial_e_classificado_como_sensivel():
     assert _e_conteudo_sensivel("O custo industrial deste produto é de R$ 18,40 por kg.")
 
@@ -85,7 +90,7 @@ def test_chunk_sensivel_recebe_payload_sensivel_true(fake_client):
             f.write("O custo industrial deste produto é de R$ 18,40 por kg.")
 
         with patch("app.rag.ingestion.get_qdrant_client", return_value=fake_client), \
-             patch("app.rag.ingestion.get_embedding", return_value=[0.1, 0.2]):
+             patch("app.rag.ingestion.get_embeddings", side_effect=_vetores_falsos):
             ingest_catalog_directory(tmp)
 
         pontos_gravados = []
@@ -102,7 +107,7 @@ def test_chunk_normal_recebe_payload_sensivel_false(fake_client):
             f.write("Densidade aparente: 1,04 g/cm³. Índice NCO%: 30.")
 
         with patch("app.rag.ingestion.get_qdrant_client", return_value=fake_client), \
-             patch("app.rag.ingestion.get_embedding", return_value=[0.1, 0.2]):
+             patch("app.rag.ingestion.get_embeddings", side_effect=_vetores_falsos):
             ingest_catalog_directory(tmp)
 
         pontos_gravados = []

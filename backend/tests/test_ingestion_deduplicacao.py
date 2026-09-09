@@ -37,6 +37,14 @@ from app.rag.ingestion import (
 
 # --- funções puras de detecção -----------------------------------------------
 
+def _vetores_falsos(chunks, model):
+    """`get_embeddings` devolve um vetor POR chunk, na ordem recebida. Um mock
+    de valor fixo esconderia justamente o erro que o lote pode introduzir:
+    vetor do chunk errado no ponto errado — sem exceção, sem sintoma, até
+    alguém reparar que a busca traz o produto errado."""
+    return [[0.1, 0.2, 0.3] for _ in chunks]
+
+
 def test_agrupar_por_nome_base_agrupa_mesma_pasta_mesmo_nome_extensao_diferente():
     arquivos = [
         r"C:\acervo\FLEXX AG 2032\FISPQ FLEXX AG 2032.pdf",
@@ -118,7 +126,7 @@ def fake_client():
 
 @pytest.fixture
 def fake_embedding():
-    with patch("app.rag.ingestion.get_embedding", return_value=[0.1, 0.2, 0.3]):
+    with patch("app.rag.ingestion.get_embeddings", side_effect=_vetores_falsos):
         yield
 
 

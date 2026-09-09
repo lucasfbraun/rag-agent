@@ -9,7 +9,7 @@ from pypdf import PdfReader
 import docx
 from qdrant_client import QdrantClient
 from qdrant_client.http import models as qmodels
-from app.rag.embeddings import get_embedding
+from app.rag.embeddings import get_embeddings
 from app.config import QDRANT_HOST, QDRANT_PORT, COLLECTION_NAME, EMBEDDING_MODEL, VECTOR_SIZE
 
 def get_qdrant_client() -> QdrantClient:
@@ -335,14 +335,19 @@ def ingest_catalog_directory(dir_path: str, embedding_model: str = EMBEDDING_MOD
 
             chunks = chunk_text(raw_text)
 
-            for chunk_idx, chunk in enumerate(chunks):
+            # Todos os chunks do arquivo num pedido só: a latência do embedding
+            # é quase toda ida-e-volta de rede, então N chamadas de ~700 ms
+            # viram uma. O lote é POR ARQUIVO de propósito — agrupar entre
+            # arquivos quebraria a garantia de que um arquivo só é gravado
+            # inteiro ou não é gravado (ver `pontos_do_arquivo` acima).
+            vetores = get_embeddings(chunks, embedding_model)
+
+            for chunk_idx, (chunk, vector) in enumerate(zip(chunks, vetores)):
                 # ID determinístico: evita duplicatas se a ingestão for reexecutada
                 point_uuid = str(uuid.uuid5(
                     uuid.NAMESPACE_URL,
                     f"{file_path}::{chunk_idx}"
                 ))
-
-                vector = get_embedding(chunk, embedding_model)
 
                 pontos_do_arquivo.append(
                     qmodels.PointStruct(
