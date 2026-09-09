@@ -166,6 +166,22 @@ def test_pergunta_por_especificacao_traz_a_varredura_pronta_no_contexto():
     assert "FLEXX POL 1180" in contexto
 
 
+def test_bloco_diz_que_os_produtos_listados_atendem_ao_criterio():
+    """Achado validando ao vivo com gpt-4o-mini: para "hidroxila de 180" o
+    agente abriu com "Nenhum produto do acervo atende" e, na linha seguinte,
+    listou o FLEXX ADR 204 (158 a 178, dentro da tolerância). Contradição na
+    cara do vendedor — o bloco precisa dizer explicitamente que quem está na
+    lista atende, e que faixa que não cobre o número exato se apresenta como
+    "atende dentro da tolerância", não como ausência de resultado."""
+    with patch(
+        "app.rag.engine.buscar_produtos_por_especificacao", return_value=_resultado_de_busca()
+    ):
+        contexto = _montar_context_str("quero um produto com hidroxila de 180", [])
+
+    assert "ATENDEM ao critério" in contexto
+    assert "TOLERÂNCIA" in contexto
+
+
 def test_sem_resultado_o_contexto_carrega_a_faixa_real_do_acervo():
     """"Não encontrei" seco não diz ao vendedor se ele errou o número ou se o
     acervo não tem aquilo."""

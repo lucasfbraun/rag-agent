@@ -113,6 +113,14 @@ curl -X POST http://localhost:8000/api/auth/login \
 curl http://localhost:8000/api/match -H "Authorization: Bearer <access_token>" ...
 ```
 
+### Cadastrando usuários pela tela
+
+Quem tem perfil **Admin TI** vê o atalho **"Usuários e perfis"** na barra lateral. Ali dá para cadastrar quem vai acessar o sistema, definir o perfil de cada um, editar dados, redefinir senha e desativar/reativar contas — sem precisar de CLI.
+
+Desativar **não apaga** a conta: o histórico de conversas e o feedback da pessoa são preservados, e a conta pode ser reativada depois. O sistema também recusa desativar o último Admin TI ativo, e ninguém consegue desativar a própria conta.
+
+> A tela é a interface de `/api/auth/users`; a autorização continua sendo decidida no backend (`Permission.MANAGE_USERS`). O primeiro Admin TI ainda precisa ser criado pelo comando descrito acima — é ele quem cadastra os demais.
+
 ## Estrutura do projeto
 
 ```

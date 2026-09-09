@@ -5,6 +5,24 @@ Ver visão geral de fases em [CRONOGRAMA.md](CRONOGRAMA.md).
 
 ---
 
+## 2026-09-09 — Sessão 35b: tela de cadastro de usuários e perfis
+
+**Pedido do usuário:** "como está a parte de criação de usuários e perfis, foi feito?" e, em seguida, "quero poder cadastrar os usuários que acessarão nossa aplicação".
+
+**Diagnóstico:** o backend estava pronto desde a Fase 5, tarefa 7 — 5 perfis, `/api/auth/users` com criar/listar/obter/editar/redefinir senha/desativar, tudo atrás de `Permission.MANAGE_USERS`, "excluir = desativar" e invariante de ≥1 Admin TI ativo. O que nunca existiu foi **tela**: provisionar alguém exigia CLI ou `curl`, e por isso o sistema rodou até hoje com **um único usuário cadastrado** (`lucas.braun`, criado em 24/08).
+
+**Entregue:** página "Usuários e perfis" na área principal do Streamlit, visível só para Admin TI — lista com o estado de cada conta (ativa/desativada), cadastro, edição de nome/e-mail/perfil, redefinição de senha e desativar/reativar. O erro do backend chega ao usuário com o motivo real vindo de `detail` ("e-mail já usado", "senha fraca", "último Admin TI ativo"), não um "erro 409" seco.
+
+**Gap real do backend fechado junto:** existia `/deactivate` e não existia reativação. "Excluir = desativar" só é uma decisão segura se der para desfazer — e o risco deixou de ser hipotético no momento em que desativar passou a estar a um clique, e não mais só no CLI. Sem a rota, a única saída era mexer no banco à mão. Criados `activate_user()` e `POST /api/auth/users/{id}/activate`.
+
+**Onde a autorização mora:** a tela esconde o que a pessoa não pode fazer (o próprio usuário não recebe botão de desativar, perfil sem `MANAGE_USERS` não vê o atalho e cai de volta no chat se forçar a página). Isso é conveniência de interface, não segurança — quem forjar a chamada esbarra em `Permission.MANAGE_USERS` no servidor, que continua sendo quem decide.
+
+**Testes:** 13 novos (10 de tela via `AppTest`, 3 de rota). Suítes completas rodadas com **Postgres e Qdrant reais**, dentro do container: **342/342 backend** e **21/21 frontend** — a primeira vez nesta sequência de sessões em que a suíte inteira roda verde no ambiente real, e não parcialmente por falta de banco.
+
+**Validação ao vivo:** login, listagem, criação, desativação, reativação e exclusão exercitados contra a API real (usuário temporário criado e removido ao final; o banco voltou a ter só o `lucas.braun`). **Não validado:** a tela em navegador real — a cobertura é por `AppTest`, mesma limitação já registrada para o PWA.
+
+---
+
 ## 2026-09-09 — Sessão 35: agente responde por ESPECIFICAÇÃO TÉCNICA e por SEÇÃO do boletim
 
 **Pedido do usuário:** "quando um usuário pedir algo referente a especificações técnicas o agente ser capaz de responder — ex: 'quero um produto com hidroxila de 180' retornar os produtos que têm essa hidroxila"; e, de forma geral, entender o contexto da pergunta quando ele pede algo específico sobre o produto — características e vantagens, reatividade, segurança e armazenamento, embalagens. Durante a implementação o usuário perguntou se a busca por **tempo de reação** também estava prevista; estava no vocabulário, mas o formato real do acervo não era lido corretamente (ver abaixo).
@@ -31,7 +49,15 @@ Ver visão geral de fases em [CRONOGRAMA.md](CRONOGRAMA.md).
 
 **Testes:** 77 testes novos (`test_spec_search.py`, `test_doc_sections.py`, `test_rag_por_atributo.py`, `test_mcp_spec_tool.py`), todos com amostras de texto REAL extraídas da coleção `pu_products_catalog` em produção. Suíte de RAG/MCP: **178/178**. As 78 falhas restantes da suíte completa são pré-existentes e ambientais (PostgreSQL fora do ar nesta sessão — Docker Desktop parado), idênticas antes e depois da mudança.
 
-**Validação pendente:** não foi possível validar ao vivo contra o Qdrant/LLM reais — o Docker Desktop estava parado nesta sessão. A leitura dos formatos de tabela foi feita direto sobre os segmentos da coleção em `data/qdrant_storage`, então os layouts cobertos são os reais, mas a execução ponta a ponta (pergunta → varredura → resposta do LLM) precisa ser repetida com a stack no ar antes de considerar a entrega fechada.
+**Validação ao vivo (stack completa no ar, 10.499 trechos indexados, `gpt-4o-mini` real):** a varredura leva ~5 s sobre o acervo inteiro. "Quero um produto com hidroxila de 180" devolve o FLEXX ADR 204 (158 a 178 mgKOH/g, Boletim Técnico) marcado como "atende dentro da tolerância", com a faixa real na tabela. "Quais as vantagens do FLEXX AG 2032" respondeu com a seção certa (pré-polímero base TDI, mistura manual com estanho, ótima adesão entre flocos). "Como armazenar o FLEXX CAT 136 e qual a validade" trouxe validade de 3 meses e armazenagem de 15 a 25 °C — dados que antes o agente não alcançava porque o chunk recuperado era o da tabela de especificação.
+
+**A validação real achou 4 bugs que os testes sintéticos não pegavam** — todos corrigidos com regressão:
+- **Faixa absurda gerando falso positivo.** Quando a janela atravessa a coluna vizinha sem ponto de corte, sai "hidroxila 60 a 16500 mgKOH/g" — e o produto passa a casar com QUALQUER valor dentro dessa faixa. Era o caso de 4 dos 5 resultados de "hidroxila 180". Leitura com razão máx/mín acima de 10 agora é descartada: sem leitura é melhor que leitura inventada.
+- **Rótulo casando em prosa.** O boletim do FLEXX AG 20103 diz "densidade do bloco desejada ... pesar a quantidade de FLEXX A G 20 103 necessária" — e a extração de PDF ainda parte o código do produto. O parser lia "densidade de 20 a 103" a partir do NOME DO PRODUTO, e o mesmo acontecia em toda a família AG (20106, 20108, 20133...). Agora a leitura exige formato de célula de tabela: entre o rótulo e o número só pode haver unidade e pontuação, nunca palavra de frase.
+- **Separador de milhar partindo o número.** "Viscosidade 20.000,00 ± 6.000,00" era lido a partir do meio ("000,00 ± 6.000"), virando a faixa -6000 a 6000 para uma viscosidade real de 14.000 a 26.000 cPs.
+- **`A ± B` com B ≥ A.** "Teor de NCO 21 ± 21" virava "0 a 42 %", faixa que casa com quase tudo. Não é tolerância, é ruído de extração — descartado.
+
+**Ajuste de redação apanhado na validação:** para "hidroxila de 180" o agente abriu com "Nenhum produto do acervo atende" e, na linha seguinte, listou o ADR 204. O bloco de contexto agora diz explicitamente que quem está na lista ATENDE, e que faixa sem cobrir o número exato se apresenta como "atende dentro da tolerância" — nunca como ausência de resultado.
 
 ---
 

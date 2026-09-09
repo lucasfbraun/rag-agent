@@ -664,7 +664,11 @@ def _montar_bloco_busca_por_especificacao(query: str) -> str:
     ]
     if resultado["produtos"]:
         linhas.append(
-            "Esta lista veio de uma varredura do acervo INTEIRO (não de um top-k) — use estes "
+            "Estes produtos ATENDEM ao critério — a tolerância já foi aplicada na varredura, "
+            "então NÃO diga que não encontrou nada e depois liste um deles. Quando a faixa do "
+            "produto não cobre exatamente o número pedido, apresente-o como atendendo DENTRO DA "
+            "TOLERÂNCIA e mostre a faixa real do documento, para o vendedor decidir. "
+            "A lista veio de uma varredura do acervo INTEIRO (não de um top-k) — use estes "
             "números e estes nomes, não os do texto corrido:"
         )
         for item in resultado["produtos"]:
