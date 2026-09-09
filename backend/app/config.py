@@ -10,7 +10,15 @@ import os
 
 QDRANT_HOST = os.getenv("QDRANT_HOST", "localhost")
 QDRANT_PORT = int(os.getenv("QDRANT_PORT", 6333))
-COLLECTION_NAME = "pu_products_catalog"
+
+# Nome da coleção no Qdrant. Configurável desde 2026-09-09 por um motivo
+# concreto: restaurar um snapshot cria a coleção com o nome que ela tinha na
+# ORIGEM, e o Qdrant não renomeia coleção. Com o nome fixo no código, um
+# snapshot restaurado sob outro nome deixava a aplicação reportando "base
+# vetorial vazia" — tudo saudável, o dado ali do lado, e nenhuma indicação de
+# que era só divergência de nome. Também permite mais de um projeto no mesmo
+# Qdrant, que é o caso quando a instância é compartilhada.
+COLLECTION_NAME = os.getenv("COLLECTION_NAME", "pu_products_catalog")
 
 # text-embedding-3-small (OpenAI) = 1536 dims | gemini-embedding-001 = 3072 dims.
 # VECTOR_SIZE PRECISA bater com a dimensão do modelo escolhido, e o modelo precisa
