@@ -19,10 +19,13 @@ ME_URL = f"{API_BASE}/api/auth/me"
 FEEDBACK_URL = f"{API_BASE}/api/feedback"
 CONVERSATIONS_URL = f"{API_BASE}/api/conversations"
 USERS_URL = f"{API_BASE}/api/auth/users"
+MODELS_URL = f"{API_BASE}/api/models"
 
+# `page_icon` aceita caminho de arquivo além de emoji — o símbolo da marca
+# substitui o 🎯 placeholder na aba do navegador e no atalho do PWA.
 st.set_page_config(
     page_title="PU Matcher - Consultor Técnico de Produtos",
-    page_icon="🎯",
+    page_icon=os.path.join(STATIC_DIR, "favicon.png"),
     layout="wide"
 )
 
@@ -367,6 +370,39 @@ def _renderizar_feedback(idx: int, msg: dict):
 
 
 # ---------------------------------------------------------------------------
+# Modelos de IA disponíveis
+# ---------------------------------------------------------------------------
+# Lista mantida pelo BACKEND (GET /api/models), não escrita aqui. Manter as
+# duas em paralelo já quebrou a tela: os modelos Ollama saíram da allowlist do
+# servidor, a imagem do frontend não foi reconstruída junto, e toda pergunta
+# passou a devolver 422 — a tela oferecendo um modelo que o backend recusava,
+# sem nenhuma pista do motivo para quem estava usando.
+_MODELOS_DE_EMERGENCIA = ["gpt-4o-mini"]
+
+
+@st.cache_data(ttl=300, show_spinner=False)
+def _buscar_modelos_disponiveis():
+    """Modelos aceitos pelo backend, na ordem em que ele os oferece.
+
+    Em cache por 5 minutos: a lista muda de release em release, não de
+    interação em interação, e sem cache seria uma chamada HTTP a cada rerun do
+    Streamlit — que acontece a cada tecla digitada.
+
+    Se o backend estiver fora do ar, cai num único modelo conhecido em vez de
+    lista vazia: `st.selectbox([])` quebraria a sidebar inteira, e aí a pessoa
+    perderia também o histórico e o status, não só a escolha de modelo."""
+    try:
+        resposta = requests.get(MODELS_URL, headers=_auth_headers(), timeout=10)
+        if resposta.status_code == 200:
+            modelos = resposta.json().get("models") or []
+            if modelos:
+                return modelos
+    except requests.exceptions.RequestException:
+        pass
+    return _MODELOS_DE_EMERGENCIA
+
+
+# ---------------------------------------------------------------------------
 # Administração de usuários (Admin TI)
 #
 # O backend já expunha tudo em /api/auth/users desde a Fase 5, tarefa 7 — mas
@@ -564,7 +600,9 @@ if not st.session_state.access_token:
     _, login_col, _ = st.columns([1, 1.3, 1])
     with login_col:
         with st.container(border=True):
-            st.image(os.path.join(STATIC_DIR, "icon.svg"), width=72)
+            # Logo horizontal (com o nome da marca) na entrada; o símbolo
+            # sozinho fica para a sidebar, onde não há espaço para o nome.
+            st.image(os.path.join(STATIC_DIR, "logo.png"), width=240)
             st.markdown("## PU Matcher")
             st.caption("Consultor Técnico de Vendas & Match de Produtos de Poliuretano")
             _render_pwa_install_card()
@@ -600,9 +638,9 @@ if not st.session_state.access_token:
 # Sidebar
 # ---------------------------------------------------------------------------
 with st.sidebar:
-    # Ícone placeholder na paleta da marca (verde-petróleo + monograma "PU"),
-    # até termos o logo.png real do Grupo Flexível — ver IDENTIDADE_VISUAL.md.
-    st.image(os.path.join(STATIC_DIR, "icon.svg"), width=60)
+    # Símbolo da marca (o "X" do Grupo Flexível). Substituiu em 2026-09-09 o
+    # ícone placeholder que existia até os arquivos oficiais serem fornecidos.
+    st.image(os.path.join(STATIC_DIR, "icon-192.png"), width=52)
     st.title("PU Matcher")
     st.caption("Agente Investigativo para Match de Produtos de Poliuretano")
 
@@ -726,21 +764,14 @@ with st.sidebar:
     st.divider()
 
     # --- Modelo de IA ---
+    # A lista vem do backend (GET /api/models), não escrita aqui. Manter as
+    # duas em paralelo já quebrou a tela: os modelos Ollama saíram da allowlist
+    # do servidor, a imagem do frontend não foi reconstruída junto, e toda
+    # pergunta passou a devolver 422 oferecendo um modelo que o backend
+    # recusava — sem nenhuma pista do motivo para quem estava usando.
     st.subheader("⚙️ Motor de Inteligência Artificial")
-    selected_model = st.selectbox(
-        "Provedor / Modelo:",
-        [
-            "gemini/gemini-flash-latest",
-            "gemini/gemini-3.6-flash",
-            "gemini/gemini-pro-latest",
-            "gpt-4o",
-            "gpt-4o-mini",
-            "claude-sonnet-5",
-            "claude-haiku-4-5-20251001",
-            "groq/llama-3.3-70b-versatile"
-        ],
-        index=0
-    )
+    modelos = _buscar_modelos_disponiveis()
+    selected_model = st.selectbox("Provedor / Modelo:", modelos, index=0)
 
     # --- Modo streaming ---
     use_streaming = st.toggle("⚡ Streaming de resposta", value=True,

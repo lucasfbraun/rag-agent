@@ -253,11 +253,25 @@ Gera um snapshot da coleção do Qdrant (`data/backups/qdrant/`, via API HTTP do
 
 A paleta e a tipografia vêm de [IDENTIDADE_VISUAL.md](IDENTIDADE_VISUAL.md) (originalmente escrito pro projeto FIDC, em Next.js/Tailwind) — a seção final desse documento ("Aplicação no PU Matcher") explica onde cada cor vive aqui: `.streamlit/config.toml` para os widgets nativos, CSS injetado em `frontend/app.py` pro resto (tipografia Roboto, cards).
 
-**Logo:** ainda não foi fornecido o arquivo real do Grupo Flexível. `frontend/static/icon.svg` é um monograma placeholder ("PU" em verde-petróleo) usado na sidebar e no ícone do manifest até o arquivo real chegar — troca é local, ver a tabela em `IDENTIDADE_VISUAL.md`.
+**Marca:** os arquivos oficiais do Grupo Flexível foram aplicados em 2026-09-09, substituindo o monograma placeholder. Os originais em alta resolução ficam em `frontend/static/brand/` e os derivados de web são gerados por script:
+
+```bash
+python frontend/static/gerar_assets_marca.py
+```
+
+| Arquivo | Onde aparece |
+|---|---|
+| `logo.png` (427×120) | topo da tela de login — logo horizontal, com o nome |
+| `icon-192.png` | sidebar (o símbolo "X", onde não cabe o nome) |
+| `favicon.png` (64×64) | aba do navegador e atalho do app |
+| `icon-192/512.png` | ícones do PWA — os dois tamanhos que o Chrome exige para considerar o app instalável |
+| `icon-maskable-512.png` | versão com 20% de folga, para o recorte circular do Android não cortar o símbolo |
+
+Os derivados ficam versionados porque a imagem do frontend não tem Pillow; rode o script novamente se os originais mudarem. O ícone original é 4191×4500 (quase quadrado, mas não exatamente) — o script centraliza numa tela quadrada em vez de redimensionar direto, que distorceria a marca.
 
 **Instalar como app (PWA):** a tela de login mostra um card "Instalar aplicativo" quando o navegador permite (Chrome/Edge desktop ou Android, critérios de instalabilidade atendidos). Isso exigiu um proxy reverso (Caddy, serviço `proxy` no Compose) na frente do Streamlit — o Service Worker precisa ser servido em `/` pra controlar a página inteira, e o Streamlit só serve estático em `/app/static/*`. Sem o proxy (ex: `frontend/run_local.py`), o card aparece desabilitado com uma dica em vez de simular sucesso.
 
-> **Não testado em navegador real** — este ambiente não tem Chrome/Chromium disponível pra automação. O que foi verificado: os 3 arquivos (`manifest.json`, `icon.svg`, `service-worker.js`) são servidos com o `Content-Type` e no caminho certos através do proxy (`docker compose up` + `curl`), e a suíte `frontend/tests/test_pwa_assets.py` trava se alguém quebrar essa forma no futuro. O comportamento de instalação em si (o Chrome de fato mostrar o prompt) precisa de verificação manual num navegador real antes de considerar a Fase 6 fechada.
+> **Não testado em navegador real** — este ambiente não tem Chrome/Chromium disponível pra automação. O que foi verificado: os arquivos (`manifest.json`, os 3 PNGs de ícone, `service-worker.js`) são servidos com o `Content-Type` e no caminho certos através do proxy (`docker compose up` + `curl`), e a suíte `frontend/tests/test_pwa_assets.py` trava se alguém quebrar essa forma no futuro. O comportamento de instalação em si (o Chrome de fato mostrar o prompt) precisa de verificação manual num navegador real antes de considerar a Fase 6 fechada.
 
 ## Status
 

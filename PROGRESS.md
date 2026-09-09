@@ -5,6 +5,42 @@ Ver visão geral de fases em [CRONOGRAMA.md](CRONOGRAMA.md).
 
 ---
 
+## 2026-09-09 — Sessão 35d: marca oficial aplicada e o bug de 422 que a duplicação causou
+
+**Dois pedidos do usuário nesta parte:** "adicione o ícone do nosso projeto e a logo também" e, antes disso, um relato de erro real testando a tela: `❌ Erro inesperado: 422 Client Error: Unprocessable Entity for url: http://backend:8000/api/match/stream`.
+
+### O 422 — e a causa raiz que já estava prevista no código
+
+**Diagnóstico:** eu havia removido os modelos `ollama/*` de `ALLOWED_CHAT_MODELS` no backend e reconstruído **só a imagem do backend**. O frontend continuou rodando a imagem antiga, oferecendo `ollama/qwen2.5:3b` como **primeiro item do seletor** — portanto o selecionado por padrão. O servidor recusava, e toda pergunta virava 422 sem nenhuma pista do motivo para quem estava usando.
+
+Atrás do 422 havia um segundo erro, não relacionado: com o modelo corrigido, o Gemini devolveu **503 "This model is currently experiencing high demand"** — indisponibilidade do lado do Google, não do projeto. Com `gpt-4o-mini` a mesma pergunta respondeu na hora.
+
+**A causa raiz não era o rebuild esquecido, era a duplicação** — e ela estava documentada como risco na própria docstring de `app.config`: *"Espelha as opções do selectbox em frontend/app.py; duplicação conhecida, mesma categoria de risco que já causou bugs de divergência neste projeto"*. Foi exatamente o que aconteceu, pela segunda vez.
+
+**Corrigido eliminando a duplicação:**
+- `MODELOS_DE_CHAT_EM_ORDEM` (tupla, nova) é a fonte única; `ALLOWED_CHAT_MODELS` passou a ser **derivada** dela, não escrita em paralelo.
+- `GET /api/models` (novo) serve a lista e o padrão; o frontend busca de lá em vez de manter a sua cópia. Cache de 5 minutos, porque sem isso seria uma chamada HTTP a cada rerun do Streamlit — que acontece a cada tecla digitada. Se o backend cair, cai num modelo conhecido em vez de lista vazia: `st.selectbox([])` derrubaria a sidebar inteira, e a pessoa perderia também o histórico e o status.
+- A ordem passou a ser deliberada: `gpt-4o-mini` primeiro, por ser o que está validado em uso contínuo; os Gemini depois, porque a chave está em quota restrita e o endpoint já devolveu 503 em horário comercial.
+- 6 testes novos, sendo o central `test_todo_modelo_oferecido_e_aceito_por_match_request` — o contrato inteiro numa asserção: se a tela oferece, o servidor aceita.
+
+### Marca oficial
+
+Os arquivos vieram em resolução de identidade visual, não de web: ícone 4191×4500 e logo 8913×2502, ~790 KB somados. Servir isso a cada carregamento de tela seria desperdício e quebraria a instalação do PWA, que exige ícones em tamanhos específicos.
+
+`frontend/static/gerar_assets_marca.py` (novo) gera os derivados a partir dos originais versionados em `frontend/static/brand/`. Decisões que valem registro:
+- **O ícone é centralizado numa tela quadrada, não redimensionado direto.** 4191×4500 é quase quadrado — um resize para 512×512 distorceria a marca.
+- **Versão `maskable` com 20% de folga:** o Android recorta o ícone em círculo, e sem a zona segura o símbolo perderia pedaço.
+- **192 e 512:** são os dois tamanhos que o Chrome exige para considerar o app instalável. O manifest antigo tinha só um SVG com `sizes: "any"`.
+- **Derivados versionados** em vez de gerados no build: a imagem do frontend não tem Pillow, e adicionar uma dependência de imagem só para isso seria pior que versionar 5 PNGs pequenos (o maior tem 36 KB).
+
+Aplicados: logo horizontal (com o nome) no topo do login, símbolo na sidebar, favicon na aba do navegador — o `page_icon="🎯"` placeholder saiu. O `icon.svg` do monograma "PU" foi removido, junto com as referências no manifest e no `APP_SHELL` do Service Worker.
+
+**Testes:** 6 novos de marca, entre eles a checagem de que cada ícone é realmente quadrado e do tamanho que o manifest declara (o passo de centralização é fácil de pular sem ninguém notar) e de que nenhum derivado passa de 100 KB.
+
+**Estado:** **349/349 backend** e **27/27 frontend**. Os 6 assets verificados servindo 200 pelo proxy Caddy.
+
+---
+
 ## 2026-09-09 — Sessão 35c: reingestão completa concluída (a primeira desde o incidente da Sessão 30)
 
 **Pedido do usuário:** "consegue continuar com a reingestão?" — seguido, no meio do caminho, da decisão de abandonar o Ollama ("a ideia é que eu use os motores pagos, gpt, gemini, claude") e de autorizar a limpeza de disco e a recriação da coleção.

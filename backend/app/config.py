@@ -22,23 +22,37 @@ VECTOR_SIZE = int(os.getenv("VECTOR_SIZE", "1536"))
 # Alias sempre-atual do Gemini — resistente a descontinuações de versão pontuais
 DEFAULT_CHAT_MODEL = "gemini/gemini-flash-latest"
 
-# Allowlist de modelos aceitos em MatchRequest.model_name (AUD-005, ticket 4
-# do plano de correção) — sem isso, o cliente podia mandar qualquer string de
+# Modelos de chat oferecidos ao usuário (AUD-005, ticket 4 do plano de
+# correção): sem uma allowlist, o cliente podia mandar qualquer string de
 # modelo/provedor pro litellm.completion(), sem controle de custo/quota.
-# Espelha as opções do selectbox em frontend/app.py; duplicação conhecida,
-# mesma categoria de risco que já causou bugs de divergência neste projeto
-# (ver docstring do módulo) — não unificado agora porque o frontend roda num
-# processo Python separado, sem import de app.config.
-ALLOWED_CHAT_MODELS = frozenset({
+#
+# A duplicação que existia aqui — esta lista mantida à mão em paralelo ao
+# selectbox de frontend/app.py — foi eliminada em 2026-09-09: o frontend
+# agora busca em GET /api/models. Ela chegou a cobrar o preço previsto na
+# docstring do módulo: remover os modelos Ollama daqui sem reconstruir a
+# imagem do frontend deixou a tela oferecendo um modelo que o servidor
+# recusava, e toda pergunta virava 422 sem pista do motivo.
+#
+# A ORDEM importa: é a ordem do seletor na tela, e o primeiro é o que o
+# usuário pega por padrão. `gpt-4o-mini` vem primeiro por ser o que está
+# validado em uso contínuo neste projeto; os modelos Gemini vêm depois porque
+# a chave atual está num tier de quota restrito e o endpoint já devolveu 503
+# por sobrecarga em horário comercial.
+MODELOS_DE_CHAT_EM_ORDEM = (
+    "gpt-4o-mini",
+    "gpt-4o",
     "gemini/gemini-flash-latest",
     "gemini/gemini-3.6-flash",
     "gemini/gemini-pro-latest",
-    "gpt-4o",
-    "gpt-4o-mini",
     "claude-sonnet-5",
     "claude-haiku-4-5-20251001",
     "groq/llama-3.3-70b-versatile",
-})
+)
+
+# Allowlist de modelos aceitos em MatchRequest.model_name — DERIVADA da tupla
+# acima, nunca escrita à mão em paralelo. O frontend também não repete a
+# lista: busca em GET /api/models (ver app.main.list_models).
+ALLOWED_CHAT_MODELS = frozenset(MODELOS_DE_CHAT_EM_ORDEM)
 
 # Banco relacional (Fase 5 — RBAC & Governança). Usuários/perfis, separado do Qdrant (vetorial).
 POSTGRES_HOST = os.getenv("POSTGRES_HOST", "localhost")

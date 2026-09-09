@@ -46,6 +46,8 @@ def _response(status_code, data=None):
 def _fake_get(url, **_kwargs):
     if url.endswith("/api/health"):
         return _response(200, {"qdrant": "online", "collection": {"points_count": 10}})
+    if url.endswith("/api/models"):
+        return _response(200, {"models": ["gpt-4o-mini", "gpt-4o"], "default": "gpt-4o-mini"})
     if url.endswith("/api/conversations"):
         return _response(200, [])
     if url.endswith("/api/auth/users"):

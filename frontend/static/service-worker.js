@@ -13,7 +13,7 @@
 // Worker com handler de fetch pra considerar o app instalável — sem isso o
 // evento beforeinstallprompt nunca dispara.
 const CACHE_NAME = "pu-matcher-shell-v1";
-const APP_SHELL = ["/app/static/manifest.json", "/app/static/icon.svg"];
+const APP_SHELL = ["/app/static/manifest.json", "/app/static/icon-192.png", "/app/static/icon-512.png"];
 
 self.addEventListener("install", (event) => {
   event.waitUntil(

@@ -8,7 +8,7 @@ from app.rag.engine import run_pu_matcher_agent, stream_pu_matcher_agent, Retrie
 from app.templates import TEMPLATES_DISPONIVEIS
 from app.config import (
     QDRANT_HOST, QDRANT_PORT, COLLECTION_NAME, EMBEDDING_MODEL,
-    DEFAULT_CHAT_MODEL, ALLOWED_CHAT_MODELS,
+    DEFAULT_CHAT_MODEL, ALLOWED_CHAT_MODELS, MODELOS_DE_CHAT_EM_ORDEM,
 )
 from app.auth.router import router as auth_router
 from app.auth.admin_router import router as admin_router
@@ -159,6 +159,23 @@ def _history_as_dicts(req: MatchRequest) -> list[dict]:
 def list_templates():
     """Lista todos os templates cadastrados no sistema."""
     return TEMPLATES_DISPONIVEIS
+
+
+@app.get("/api/models", dependencies=[Depends(require_permission(Permission.VIEW_CATALOG))])
+def list_models():
+    """Modelos de chat aceitos, na ordem em que devem aparecer para o usuário.
+
+    Existe para acabar com uma duplicação que já cobrou o preço duas vezes: a
+    lista do selectbox do frontend era mantida à mão em paralelo a
+    `ALLOWED_CHAT_MODELS`, e as duas divergiam. Na última vez, remover os
+    modelos Ollama do backend sem reconstruir a imagem do frontend deixou a
+    tela oferecendo um modelo que o servidor passou a recusar — toda pergunta
+    virava `422 Unprocessable Entity`, sem nenhuma pista do motivo para quem
+    estava usando.
+
+    O frontend roda em outro processo e não importa `app.config`; buscar por
+    HTTP é o que torna o backend a fonte única da verdade."""
+    return {"models": MODELOS_DE_CHAT_EM_ORDEM, "default": DEFAULT_CHAT_MODEL}
 
 
 @app.post("/api/match")
