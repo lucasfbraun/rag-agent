@@ -48,14 +48,21 @@ A mudança quebrou **90 testes** de imediato — todos passando `Role.X` onde ag
 
 **399/400 no backend.** A única falha é artefato de ambiente conhecido (`test_ingest_admin_com_token_retorna_200` usa `/app/data/raw_documents`, caminho que só existe dentro do container). 20 testes novos em `test_perfis.py`.
 
-**PENDENTE — a tela.** O backend está completo e commitado (`417af72`), mas a interface de perfis ainda não existe. O que falta:
+### A tela (concluída)
 
-1. `_render_pagina_perfis()` — lista, criação, edição de permissões por checkbox, exclusão com as guardas.
-2. Abas "Usuários" / "Perfis" dentro da página de administração.
-3. **Substituir o dicionário `PERFIS` fixo do frontend por uma busca em `GET /api/auth/perfis`.** Isso é obrigatório, não cosmético: é exatamente a mesma classe de duplicação que causou o bug do 422 na Sessão 35d (lista de modelos mantida à mão nos dois lados). Com perfis criáveis pela tela, um dicionário fixo no frontend ficaria desatualizado no primeiro perfil novo.
-4. Testes de tela (`AppTest`).
+A área de administração virou **duas abas — "Usuários" e "Perfis e permissões"** — numa tela só, porque as duas coisas se olham o tempo todo: ao criar um perfil você quer ver quem usa, e ao mover alguém de perfil quer conferir o que aquele perfil permite.
 
-> **Não puxar no Ubuntu antes disso.** A migration roda no boot, então o backend migraria e ficaria sem interface para gerenciar os perfis criados.
+Na aba de perfis: lista com selo de *administrador* e *do sistema*, contagem de usuários por perfil, edição de nome/descrição e das permissões por checkbox, criação e exclusão.
+
+**A tela não oferece o que vai falhar.** O botão de excluir simplesmente não aparece em perfil protegido nem em perfil com usuários vinculados — no lugar dele vai a explicação ("2 usuários usam este perfil. Mova essas pessoas antes de excluí-lo"). As regras continuam aplicadas no servidor; a interface só evita prometer o impossível.
+
+**O dicionário `PERFIS` fixo do frontend foi eliminado**, substituído por `GET /api/auth/perfis`. Não era cosmético: é a mesma classe de duplicação que causou o bug do 422 na Sessão 35d, e com perfis criáveis pela tela ela ficaria desatualizada no primeiro perfil novo. Há um teste que prova o elo — um perfil que só existe na resposta da API precisa aparecer no seletor de perfil do usuário.
+
+O catálogo de permissões também vem do backend, com **rótulo legível**: um checkbox chamado `manage_ingestion` não diz a ninguém o que libera.
+
+Cache curto (60s) na lista de perfis, porque cada cartão de usuário monta um selectbox e o Streamlit reexecuta o script a cada interação — mas **toda mutação limpa o cache explicitamente**, senão um perfil recém-criado sumiria da lista por até um minuto e a pessoa acharia que a ação não funcionou.
+
+**Testes:** 6 novos de tela. **44/44 no frontend**, 399/400 no backend.
 
 ---
 

@@ -21,6 +21,7 @@ FEEDBACK_URL = f"{API_BASE}/api/feedback"
 CONVERSATIONS_URL = f"{API_BASE}/api/conversations"
 USERS_URL = f"{API_BASE}/api/auth/users"
 MODELS_URL = f"{API_BASE}/api/models"
+PERFIS_URL = f"{API_BASE}/api/auth/perfis"
 
 # `page_icon` aceita caminho de arquivo além de emoji — o símbolo da marca
 # substitui o 🎯 placeholder na aba do navegador e no atalho do PWA.
@@ -461,17 +462,45 @@ def _buscar_modelos_disponiveis():
 # desativar" continuam decididos no servidor. O frontend esconde o que o
 # usuário não pode fazer; ele não é quem autoriza.
 # ---------------------------------------------------------------------------
-PERFIS = {
-    "vendedor": "Vendedor",
-    "tecnico": "Técnico de Aplicação",
-    "gestor": "Gestor Comercial",
-    "quimico_pd": "Químico / P&D",
-    "admin_ti": "Admin TI",
-}
+# Os perfis vêm do BACKEND, não de um dicionário aqui.
+#
+# Até 2026-09-10 esta lista era fixa, o que fazia sentido enquanto perfil era
+# um enum. Com perfis criáveis pela tela, um dicionário fixo ficaria
+# desatualizado no primeiro perfil novo — e é exatamente a duplicação que já
+# custou caro neste projeto: a lista de modelos mantida à mão nos dois lados
+# fez toda pergunta virar 422 sem pista do motivo (Sessão 35d).
+def _api_perfis(metodo: str, caminho: str = "", **kwargs):
+    """Chamada às rotas de perfis. Mesmo contrato de `_api_usuarios`."""
+    return _chamar_api(f"{PERFIS_URL}{caminho}", metodo, **kwargs)
+
+
+@st.cache_data(ttl=60, show_spinner=False)
+def _perfis_disponiveis() -> list:
+    """Perfis cadastrados, do backend.
+
+    Cache curto porque a lista é lida várias vezes por render (cada cartão de
+    usuário monta um selectbox) e o Streamlit reexecuta o script a cada
+    interação. Toda mutação de perfil limpa o cache explicitamente — sem isso,
+    um perfil recém-criado sumiria da lista por até um minuto."""
+    ok, retorno = _api_perfis("GET")
+    return retorno if ok and isinstance(retorno, list) else []
+
+
+def _mapa_de_perfis() -> dict:
+    return {p["slug"]: p for p in _perfis_disponiveis()}
+
+
+def _slugs_de_perfis() -> list:
+    return [p["slug"] for p in _perfis_disponiveis()]
 
 
 def _rotulo_perfil(perfil: str) -> str:
-    return PERFIS.get(perfil, perfil.replace("_", " ").title())
+    encontrado = _mapa_de_perfis().get(perfil)
+    if encontrado:
+        return encontrado["nome"]
+    # Perfil que sumiu da lista (excluído por outro administrador enquanto esta
+    # tela estava aberta): mostra o slug em vez de quebrar a renderização.
+    return perfil.replace("_", " ").title()
 
 
 def _pode_administrar_usuarios() -> bool:
@@ -480,16 +509,21 @@ def _pode_administrar_usuarios() -> bool:
 
 
 def _api_usuarios(metodo: str, caminho: str = "", **kwargs):
-    """Chamada às rotas de administração. Devolve (ok, dados_ou_mensagem).
+    """Chamada às rotas de administração de usuários."""
+    return _chamar_api(f"{USERS_URL}{caminho}", metodo, **kwargs)
+
+
+def _chamar_api(url: str, metodo: str, **kwargs):
+    """Chamada autenticada à API. Devolve (ok, dados_ou_mensagem).
 
     Centraliza as três coisas que se repetiriam em cada botão da tela: header
     de autenticação, expiração de sessão (401 derruba o login em vez de virar
     um erro genérico) e a tradução do corpo de erro do FastAPI, que traz o
     motivo real em `detail` — é ali que chegam "email já usado", "senha fraca"
-    e "não é possível desativar o último Admin TI ativo"."""
+    e "esta mudança deixaria o sistema sem nenhum administrador ativo"."""
     try:
         resposta = requests.request(
-            metodo, f"{USERS_URL}{caminho}", headers=_auth_headers(), timeout=15, **kwargs
+            metodo, url, headers=_auth_headers(), timeout=15, **kwargs
         )
     except requests.exceptions.RequestException:
         return False, "Não foi possível falar com o backend."
@@ -660,7 +694,7 @@ def _render_cadastro_pelo_ad():
         col_c, col_d = st.columns(2)
         email = col_c.text_input("E-mail", value=escolhida.get("email") or "")
         perfil = col_d.selectbox(
-            "Perfil", options=list(PERFIS), format_func=_rotulo_perfil, key="ad_novo_perfil"
+            "Perfil", options=_slugs_de_perfis(), format_func=_rotulo_perfil, key="ad_novo_perfil"
         )
         st.caption(
             "Sem campo de senha: esta pessoa entra com a **senha da rede**. "
@@ -705,7 +739,7 @@ def _render_form_novo_usuario():
         col_c, col_d = st.columns(2)
         email = col_c.text_input("E-mail", placeholder="nome@grupoflexivel.com.br")
         perfil = col_d.selectbox(
-            "Perfil", options=list(PERFIS), format_func=_rotulo_perfil,
+            "Perfil", options=_slugs_de_perfis(), format_func=_rotulo_perfil,
             help="Define o que a pessoa enxerga: custo industrial e laudo completo, "
                  "por exemplo, só aparecem para os perfis autorizados.",
         )
@@ -767,8 +801,9 @@ def _render_cartao_usuario(usuario: dict, eu_mesmo: bool):
                 nome = col_a.text_input("Nome", value=usuario["nome"], key=f"n_{usuario['id']}")
                 email = col_b.text_input("E-mail", value=usuario["email"], key=f"e_{usuario['id']}")
                 perfil = col_c.selectbox(
-                    "Perfil", options=list(PERFIS), format_func=_rotulo_perfil,
-                    index=list(PERFIS).index(usuario["perfil"]) if usuario["perfil"] in PERFIS else 0,
+                    "Perfil", options=_slugs_de_perfis(), format_func=_rotulo_perfil,
+                    index=(_slugs_de_perfis().index(usuario["perfil"])
+                           if usuario["perfil"] in _slugs_de_perfis() else 0),
                     key=f"p_{usuario['id']}",
                 )
                 if st.form_submit_button("Salvar alterações"):
@@ -807,8 +842,160 @@ def _render_cartao_usuario(usuario: dict, eu_mesmo: bool):
                             st.error(retorno)
 
 
-def _render_pagina_usuarios():
+@st.cache_data(ttl=300, show_spinner=False)
+def _catalogo_de_permissoes() -> list:
+    """Permissões que o sistema conhece, com rótulo legível.
+
+    Vem do backend pelo mesmo motivo dos perfis e dos modelos: a lista muda a
+    cada release que acrescenta uma permissão, e um checkbox chamado
+    "manage_ingestion" não diz a ninguém o que libera."""
+    ok, retorno = _api_perfis("GET", "/permissoes")
+    return retorno if ok and isinstance(retorno, list) else []
+
+
+def _limpar_cache_de_perfis():
+    """Chamar depois de QUALQUER mutação de perfil — sem isso a lista fica
+    até um minuto desatualizada e a pessoa acha que a ação não funcionou."""
+    _perfis_disponiveis.clear()
+
+
+def _checkboxes_de_permissoes(prefixo: str, marcadas: set) -> list:
+    """Grade de permissões em duas colunas. Devolve as chaves marcadas."""
+    catalogo = _catalogo_de_permissoes()
+    if not catalogo:
+        st.warning("Não foi possível carregar a lista de permissões.")
+        return sorted(marcadas)
+
+    escolhidas = []
+    colunas = st.columns(2)
+    for indice, permissao in enumerate(catalogo):
+        with colunas[indice % 2]:
+            if st.checkbox(
+                permissao["rotulo"], value=permissao["chave"] in marcadas,
+                key=f"{prefixo}_{permissao['chave']}",
+            ):
+                escolhidas.append(permissao["chave"])
+    return escolhidas
+
+
+def _render_cartao_perfil(perfil: dict):
+    with st.container(border=True):
+        cabecalho, contagem = st.columns([4, 1])
+        with cabecalho:
+            selos = []
+            if perfil["administra"]:
+                selos.append(":green[administrador]")
+            if perfil["protegido"]:
+                selos.append(":grey[do sistema]")
+            st.markdown(f"**{perfil['nome']}**" + (f" · {' · '.join(selos)}" if selos else ""))
+            st.caption(f"`{perfil['slug']}` · {perfil['descricao'] or 'sem descrição'}")
+        with contagem:
+            st.metric("usuários", perfil["usuarios"], label_visibility="visible")
+
+        with st.expander(f"Editar permissões ({len(perfil['permissoes'])})"):
+            with st.form(f"form_perfil_{perfil['id']}", border=False):
+                col_a, col_b = st.columns([1, 2])
+                nome = col_a.text_input("Nome", value=perfil["nome"], key=f"pn_{perfil['id']}")
+                descricao = col_b.text_input(
+                    "Descrição", value=perfil["descricao"] or "", key=f"pd_{perfil['id']}"
+                )
+                st.caption(
+                    "O identificador (`slug`) não é editável: ele é usado por integração e "
+                    "pelos testes, e renomeá-lo quebraria referências sem aviso."
+                )
+                st.divider()
+                permissoes = _checkboxes_de_permissoes(
+                    f"perm_{perfil['id']}", set(perfil["permissoes"])
+                )
+                if st.form_submit_button("Salvar", type="primary"):
+                    ok, retorno = _api_perfis("PATCH", f"/{perfil['id']}", json={
+                        "nome": nome, "descricao": descricao, "permissoes": permissoes,
+                    })
+                    if ok:
+                        _limpar_cache_de_perfis()
+                        st.rerun()
+                    st.error(retorno)
+
+            # Excluir fica FORA do formulário: dentro dele, o Streamlit só
+            # reexecuta no submit, e o botão não teria efeito.
+            if perfil["protegido"]:
+                st.caption("Perfil do sistema — não pode ser excluído. As permissões acima continuam editáveis.")
+            elif perfil["usuarios"]:
+                st.caption(
+                    f"{perfil['usuarios']} usuário(s) usam este perfil. "
+                    "Mova essas pessoas para outro perfil antes de excluí-lo."
+                )
+            elif st.button("Excluir perfil", key=f"px_{perfil['id']}"):
+                ok, retorno = _api_perfis("DELETE", f"/{perfil['id']}")
+                if ok:
+                    _limpar_cache_de_perfis()
+                    st.rerun()
+                st.error(retorno)
+
+
+def _render_form_novo_perfil():
+    with st.form("form_novo_perfil", border=False, clear_on_submit=True):
+        col_a, col_b = st.columns([1, 2])
+        slug = col_a.text_input("Identificador", placeholder="ex: supervisor")
+        nome = col_b.text_input("Nome do perfil", placeholder="ex: Supervisor de Vendas")
+        descricao = st.text_input("Descrição (opcional)")
+        st.caption(
+            "O identificador só aceita letras minúsculas, números e `_`, e **não pode ser "
+            "alterado depois** — ele é a referência estável do perfil."
+        )
+        st.divider()
+        st.markdown("**Permissões**")
+        permissoes = _checkboxes_de_permissoes("novo_perfil", set())
+
+        if st.form_submit_button("Criar perfil", type="primary", use_container_width=True):
+            if not (slug and nome):
+                st.error("Preencha o identificador e o nome.")
+                return
+            ok, retorno = _api_perfis("POST", json={
+                "slug": slug.strip().lower(), "nome": nome.strip(),
+                "descricao": descricao.strip() or None, "permissoes": permissoes,
+            })
+            if ok:
+                _limpar_cache_de_perfis()
+                st.success(f"Perfil **{nome}** criado.")
+                st.rerun()
+            else:
+                st.error(retorno)
+
+
+def _render_pagina_perfis():
+    st.caption(
+        "Perfis definem o que cada pessoa pode fazer. O sistema impede qualquer mudança "
+        "que o deixe sem nenhum administrador ativo."
+    )
+    perfis = _perfis_disponiveis()
+    if not perfis:
+        st.error("Não foi possível carregar os perfis.")
+        return
+
+    aba_lista, aba_novo = st.tabs([f"Perfis ({len(perfis)})", "Criar perfil"])
+    with aba_novo:
+        _render_form_novo_perfil()
+    with aba_lista:
+        for perfil in perfis:
+            _render_cartao_perfil(perfil)
+
+
+def _render_pagina_administracao():
+    """Área de administração: usuários e perfis, em abas.
+
+    Uma tela só porque as duas coisas se olham o tempo todo — ao criar um
+    perfil você quer ver quem usa, e ao mover alguém de perfil quer conferir o
+    que aquele perfil permite."""
     st.markdown("### 👥 Usuários e perfis")
+    aba_usuarios, aba_perfis = st.tabs(["Usuários", "Perfis e permissões"])
+    with aba_usuarios:
+        _render_pagina_usuarios()
+    with aba_perfis:
+        _render_pagina_perfis()
+
+
+def _render_pagina_usuarios():
     st.caption(
         "Cadastre quem vai acessar o PU Matcher e defina o perfil de cada um. "
         "Desativar preserva o histórico da pessoa — a conta nunca é apagada."
@@ -1038,7 +1225,7 @@ if st.session_state.pagina == "usuarios":
     if not _pode_administrar_usuarios():
         st.session_state.pagina = "chat"
         st.rerun()
-    _render_pagina_usuarios()
+    _render_pagina_administracao()
     st.stop()
 
 _titulo_com_icone("Assistente de Vendas Técnicas &amp; Match de Produtos")

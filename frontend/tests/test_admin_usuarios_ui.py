@@ -49,6 +49,24 @@ USUARIOS = [
 ]
 
 
+# Perfis vêm da API desde 2026-09-10 (antes era um dicionário fixo no
+# frontend) — o fake precisa devolvê-los, senão a tela não monta nenhum
+# selectbox de perfil.
+PERFIS_FAKE = [
+    {"id": "11111111-1111-1111-1111-111111111111", "slug": "admin_ti",
+     "nome": "Admin TI", "descricao": "Administração do sistema.", "protegido": True,
+     "permissoes": ["view_catalog", "view_costs", "manage_users"], "usuarios": 1,
+     "administra": True},
+    {"id": "22222222-2222-2222-2222-222222222222", "slug": "vendedor",
+     "nome": "Vendedor", "descricao": "Vendas técnicas.", "protegido": True,
+     "permissoes": ["view_catalog"], "usuarios": 1, "administra": False},
+    {"id": "33333333-3333-3333-3333-333333333333", "slug": "supervisor",
+     "nome": "Supervisor", "descricao": None, "protegido": False,
+     "permissoes": ["view_catalog", "view_costs"], "usuarios": 0,
+     "administra": False},
+]
+
+
 def _response(status_code, data=None):
     response = Mock()
     response.status_code = status_code
@@ -62,6 +80,14 @@ def _fake_get(url, **_kwargs):
         return _response(200, {"qdrant": "online", "collection": {"points_count": 10}})
     if url.endswith("/ldap/status"):
         return _response(200, {"configurado": True})
+    if url.endswith("/perfis/permissoes"):
+        return _response(200, [
+            {"chave": "view_catalog", "rotulo": "Consultar o catálogo e conversar com o agente"},
+            {"chave": "view_costs", "rotulo": "Ver custos e fórmulas (dado sensível)"},
+            {"chave": "manage_users", "rotulo": "Administrador do sistema (usuários e perfis)"},
+        ])
+    if url.endswith("/api/auth/perfis"):
+        return _response(200, PERFIS_FAKE)
     if url.endswith("/api/models"):
         return _response(200, {"models": ["gpt-4o-mini", "gpt-4o"], "default": "gpt-4o-mini"})
     if url.endswith("/api/conversations"):
@@ -324,3 +350,81 @@ def test_sem_ad_o_cadastro_cai_direto_no_formulario_local():
     assert not app.exception
     assert not any(r.key == "ad_novo_origem" for r in app.radio)
     assert "Senha inicial" in [t.label for t in app.text_input]
+
+
+# --- tela de perfis (Sessão 37) --------------------------------------------
+
+def test_area_de_administracao_tem_aba_de_perfis():
+    """Uma tela só, em abas: ao criar um perfil você quer ver quem usa, e ao
+    mover alguém de perfil quer conferir o que aquele perfil permite."""
+    app = _app()
+    with patch("requests.get", side_effect=_fake_get), \
+         patch("requests.request", side_effect=_fake_request):
+        app.run(timeout=15)
+
+    assert not app.exception
+    rotulos = [rotulo for aba in app.tabs for rotulo in [aba.label]]
+    assert any("Perfis" in r for r in rotulos), f"aba de perfis ausente: {rotulos}"
+
+
+def test_perfil_do_sistema_nao_oferece_botao_de_excluir():
+    """Excluir o "admin_ti" deixaria o sistema sem administração. O backend
+    recusa; a tela nem oferece, para não prometer o que vai falhar."""
+    app = _app()
+    with patch("requests.get", side_effect=_fake_get), \
+         patch("requests.request", side_effect=_fake_request):
+        app.run(timeout=15)
+
+    protegido = PERFIS_FAKE[0]["id"]
+    assert not any(b.key == f"px_{protegido}" for b in app.button)
+
+
+def test_perfil_com_usuarios_nao_oferece_botao_de_excluir():
+    """A FK deixaria usuários órfãos. A tela avisa quantos são, em vez de
+    deixar a pessoa descobrir pelo erro."""
+    app = _app()
+    with patch("requests.get", side_effect=_fake_get), \
+         patch("requests.request", side_effect=_fake_request):
+        app.run(timeout=15)
+
+    com_usuarios = PERFIS_FAKE[1]["id"]  # vendedor, 1 usuário
+    assert not any(b.key == f"px_{com_usuarios}" for b in app.button)
+
+
+def test_perfil_livre_e_sem_usuarios_pode_ser_excluido():
+    """A guarda não pode ser um "nunca deixa": perfil sem vínculo e sem
+    proteção é exclusão legítima."""
+    app = _app()
+    with patch("requests.get", side_effect=_fake_get), \
+         patch("requests.request", side_effect=_fake_request):
+        app.run(timeout=15)
+
+    livre = PERFIS_FAKE[2]["id"]  # supervisor, 0 usuários, não protegido
+    assert any(b.key == f"px_{livre}" for b in app.button)
+
+
+def test_permissoes_aparecem_com_rotulo_legivel_e_nao_com_a_chave():
+    """Um checkbox chamado "manage_users" não diz a ninguém o que libera."""
+    app = _app()
+    with patch("requests.get", side_effect=_fake_get), \
+         patch("requests.request", side_effect=_fake_request):
+        app.run(timeout=15)
+
+    rotulos = [c.label for c in app.checkbox]
+    assert any("Administrador do sistema" in r for r in rotulos), rotulos[:5]
+    assert not any(r == "manage_users" for r in rotulos)
+
+
+def test_selectbox_de_perfil_usa_a_lista_da_api_e_nao_uma_fixa():
+    """O perfil "Supervisor" só existe no fake da API. Se ele aparecer no
+    seletor, é porque a tela deixou de usar o dicionário fixo — a mesma
+    duplicação que causou o bug do 422 na Sessão 35d."""
+    app = _app()
+    with patch("requests.get", side_effect=_fake_get), \
+         patch("requests.request", side_effect=_fake_request):
+        app.run(timeout=15)
+
+    # `AppTest` expõe as opções já passadas pelo `format_func`, ou seja, o NOME
+    # de exibição — não o slug.
+    opcoes = {rotulo for s in app.selectbox for rotulo in (s.options or [])}
+    assert "Supervisor" in opcoes, f"perfil criado na API não chegou ao seletor: {opcoes}"

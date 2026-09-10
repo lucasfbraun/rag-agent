@@ -15,6 +15,24 @@ APP_PATH = os.path.join(
 CONVERSATION_ID = "11111111-1111-1111-1111-111111111111"
 
 
+# Perfis vêm da API desde 2026-09-10 (antes era um dicionário fixo no
+# frontend) — o fake precisa devolvê-los, senão a tela não monta nenhum
+# selectbox de perfil.
+PERFIS_FAKE = [
+    {"id": "11111111-1111-1111-1111-111111111111", "slug": "admin_ti",
+     "nome": "Admin TI", "descricao": "Administração do sistema.", "protegido": True,
+     "permissoes": ["view_catalog", "view_costs", "manage_users"], "usuarios": 1,
+     "administra": True},
+    {"id": "22222222-2222-2222-2222-222222222222", "slug": "vendedor",
+     "nome": "Vendedor", "descricao": "Vendas técnicas.", "protegido": True,
+     "permissoes": ["view_catalog"], "usuarios": 1, "administra": False},
+    {"id": "33333333-3333-3333-3333-333333333333", "slug": "supervisor",
+     "nome": "Supervisor", "descricao": None, "protegido": False,
+     "permissoes": ["view_catalog", "view_costs"], "usuarios": 0,
+     "administra": False},
+]
+
+
 def _response(status_code, data=None):
     response = Mock()
     response.status_code = status_code
@@ -28,6 +46,14 @@ def _fake_get(url, **_kwargs):
             200,
             {"qdrant": "online", "collection": {"points_count": 10}},
         )
+    if url.endswith("/perfis/permissoes"):
+        return _response(200, [
+            {"chave": "view_catalog", "rotulo": "Consultar o catálogo e conversar com o agente"},
+            {"chave": "view_costs", "rotulo": "Ver custos e fórmulas (dado sensível)"},
+            {"chave": "manage_users", "rotulo": "Administrador do sistema (usuários e perfis)"},
+        ])
+    if url.endswith("/api/auth/perfis"):
+        return _response(200, PERFIS_FAKE)
     if url.endswith("/api/models"):
         return _response(200, {"models": ["gpt-4o-mini", "gpt-4o"], "default": "gpt-4o-mini"})
     if url.endswith("/api/conversations"):
