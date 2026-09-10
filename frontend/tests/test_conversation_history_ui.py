@@ -148,3 +148,21 @@ def test_cabecalho_principal_usa_o_simbolo_da_marca_e_nao_um_emoji():
     assert cabecalhos, "cabeçalho da área principal não foi renderizado"
     assert '<img src="/app/static/favicon.png"' in cabecalhos[0]
     assert "🎯" not in cabecalhos[0]
+
+
+def test_mensagens_do_chat_usam_os_avatares_da_marca():
+    """Regressão do visual: sem `avatar=`, o Streamlit desenha o boneco
+    vermelho/amarelo padrão."""
+    app = _authenticated_app()
+    app.session_state.active_conversation_id = CONVERSATION_ID
+    app.session_state.messages = [
+        {"role": "user", "content": "pergunta"},
+        {"role": "assistant", "content": "resposta"},
+    ]
+    with patch("requests.get", side_effect=_fake_get):
+        app.run(timeout=10)
+
+    assert not app.exception
+    avatares = [bloco.avatar for bloco in app.chat_message]
+    assert avatares, "nenhuma mensagem de chat renderizada"
+    assert all(a for a in avatares), "alguma mensagem ficou com o avatar padrão"

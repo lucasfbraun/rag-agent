@@ -73,7 +73,43 @@ def gerar() -> list:
     logo.resize((largura, altura_alvo), Image.LANCZOS).save(destino, optimize=True)
     gerados.append(destino)
 
+    gerados.append(_gerar_avatar_usuario())
     return gerados
+
+
+# Verde-petróleo da marca (`brand-petrol` em IDENTIDADE_VISUAL.md) — o mesmo
+# tom dos títulos e da barra de navegação.
+_VERDE_PETROLEO = (12, 59, 56, 255)
+
+
+def _gerar_avatar_usuario() -> str:
+    """Avatar do vendedor no chat, na paleta da marca.
+
+    Existe porque os avatares padrão do `st.chat_message` são um boneco
+    VERMELHO para o usuário e um AMARELO para o assistente — as duas únicas
+    cores fortes da tela que não têm nada a ver com a identidade visual, que é
+    verde. O avatar do agente é o próprio símbolo da marca; este aqui é a
+    contraparte de quem pergunta.
+
+    Desenhado 4x maior e reduzido no fim: o Pillow não faz antialiasing em
+    `ellipse`, então a borda do círculo sairia serrilhada se desenhada direto
+    no tamanho final."""
+    from PIL import ImageDraw
+
+    escala, lado = 4, 128
+    tela = Image.new("RGBA", (lado * escala, lado * escala), (0, 0, 0, 0))
+    desenho = ImageDraw.Draw(tela)
+    d = lado * escala
+
+    desenho.ellipse([0, 0, d, d], fill=_VERDE_PETROLEO)
+    # Cabeça e ombros em proporções de ícone: cabeça no terço superior, ombros
+    # como um arco largo cortado pela borda do círculo.
+    desenho.ellipse([d * 0.34, d * 0.20, d * 0.66, d * 0.52], fill=(255, 255, 255, 255))
+    desenho.ellipse([d * 0.20, d * 0.60, d * 0.80, d * 1.22], fill=(255, 255, 255, 255))
+
+    destino = os.path.join(STATIC, "avatar-usuario.png")
+    tela.resize((lado, lado), Image.LANCZOS).save(destino, optimize=True)
+    return destino
 
 
 if __name__ == "__main__":

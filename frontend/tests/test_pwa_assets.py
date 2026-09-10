@@ -155,3 +155,21 @@ def test_favicon_e_pequeno_o_bastante_para_o_cabecalho_e_a_aba():
     mandar 9x mais bytes para o mesmo resultado visual."""
     kb = os.path.getsize(os.path.join(STATIC_DIR, "favicon.png")) / 1024
     assert kb < 10, f"favicon.png tem {kb:.1f} KB — pesado demais para embutir no HTML"
+
+
+def test_avatares_do_chat_existem_e_sao_da_marca():
+    """Os avatares padrão do `st.chat_message` são um boneco VERMELHO para o
+    usuário e um AMARELO para o assistente — as duas únicas cores fortes da
+    tela sem relação com a identidade visual, que é verde. Caminho de arquivo
+    inexistente aqui derruba a renderização da conversa inteira."""
+    for nome in ("avatar-usuario.png", "favicon.png"):
+        assert os.path.isfile(os.path.join(STATIC_DIR, nome)), f"falta {nome}"
+
+
+def test_avatar_do_usuario_e_quadrado():
+    """O Streamlit recorta o avatar em círculo; uma imagem não quadrada sairia
+    achatada."""
+    from PIL import Image
+
+    with Image.open(os.path.join(STATIC_DIR, "avatar-usuario.png")) as im:
+        assert im.size[0] == im.size[1], f"avatar não é quadrado: {im.size}"

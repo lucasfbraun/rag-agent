@@ -78,6 +78,23 @@ _inject_brand_css()
 # pelo navegador e dispensa ler e codificar o arquivo a cada execução.
 _URL_ICONE = "/app/static/favicon.png"
 
+# Avatares do chat. Os padrões do `st.chat_message` são um boneco VERMELHO para
+# o usuário e um AMARELO para o assistente — as duas únicas cores fortes da
+# tela sem relação com a identidade visual, que é verde. O agente usa o próprio
+# símbolo da marca; o vendedor, a contraparte em verde-petróleo.
+# Aqui é caminho de arquivo (o `avatar` do chat_message aceita qualquer coisa
+# que o `st.image` aceite), não a URL estática usada no cabeçalho.
+_AVATARES = {
+    "user": os.path.join(STATIC_DIR, "avatar-usuario.png"),
+    "assistant": os.path.join(STATIC_DIR, "favicon.png"),
+}
+
+
+def _avatar(papel: str):
+    """Avatar do papel, ou None para o Streamlit decidir — um papel novo no
+    futuro não pode quebrar a renderização da conversa."""
+    return _AVATARES.get(papel)
+
 
 def _titulo_com_icone(texto: str) -> None:
     """Cabeçalho de seção com o símbolo do Grupo Flexível no lugar do emoji.
@@ -831,7 +848,7 @@ st.caption(
 
 # Exibe histórico de mensagens
 for idx, msg in enumerate(st.session_state.messages):
-    with st.chat_message(msg["role"]):
+    with st.chat_message(msg["role"], avatar=_avatar(msg["role"])):
         st.markdown(msg["content"])
         if "sources" in msg and msg["sources"]:
             st.caption(f"📚 **Boletins Técnicos (TDS) Consultados:** {', '.join(msg['sources'])}")
@@ -845,7 +862,7 @@ for idx, msg in enumerate(st.session_state.messages):
 # ---------------------------------------------------------------------------
 if prompt := st.chat_input("Digite a demanda ou responda às perguntas do agente..."):
     st.session_state.messages.append({"role": "user", "content": prompt})
-    with st.chat_message("user"):
+    with st.chat_message("user", avatar=_avatar("user")):
         st.markdown(prompt)
 
     payload = {
@@ -859,7 +876,7 @@ if prompt := st.chat_input("Digite a demanda ou responda às perguntas do agente
         ]
     }
 
-    with st.chat_message("assistant"):
+    with st.chat_message("assistant", avatar=_avatar("assistant")):
         if use_streaming:
             _stream_state = {
                 "sources": [],
