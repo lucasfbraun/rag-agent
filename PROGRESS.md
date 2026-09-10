@@ -52,6 +52,27 @@ O que vira embedding é a **pergunta** (ou o título), não a resposta: o item p
 
 Migration `d4a91c37e2b8` aplicada (reaproveita o enum `status_documento` da fila de documentos: os estados são idênticos, e dois enums iguais com nomes diferentes seriam duas coisas para manter em sincronia sem ganho). **437/438 no backend.** 19 testes novos.
 
+### Validação ao vivo (após o reboot)
+
+Rodada dentro do container, com Qdrant e `gpt-4o-mini` reais — o `qdrant-client` do host é 1.19 (sem `.search()`), enquanto a imagem pina `<1.10`. Itens de teste criados e removidos no fim.
+
+| Checagem | Resultado |
+|---|---|
+| Conhecimento **pendente** não influencia | ✅ o agente respondeu sobre o CAT 90 normalmente |
+| Conhecimento **aprovado** aparece | ✅ "O FLEXX CAT 90 foi descontinuado em 2025 e substituído pelo FLEXX CAT 136" |
+| Aparece como orientação interna, com data e autor | ✅ "📌 ORIENTAÇÃO INTERNA (09/2026, por ...)" |
+| Exemplo não vaza números | ✅ o valor-armadilha 99,9 mgKOH/g não apareceu |
+
+**O exemplo funcionou exatamente como desenhado:** a resposta sobre o AG 2032 adotou a ESTRUTURA do exemplo (Produto / Índice de hidroxila / Fonte) e NÃO o número dele — e ainda disse que o boletim não informa hidroxila, em vez de inventar um valor. Forma transferida, conteúdo não.
+
+**Ressalva honesta sobre a terceira checagem:** a resposta aprovada abre com a substituição como afirmação solta ("⚠️ ATENÇÃO: O FLEXX CAT 90 foi descontinuado...") e só no parágrafo seguinte a rotula como orientação interna. Não a atribuiu a um boletim — que era o risco principal —, mas a manchete fica sem fonte. A checagem passou porque procurava o rótulo em qualquer lugar da resposta: ela é mais frouxa que o comportamento pedido. Ajustar exige mais uma iteração no prompt, validada de novo com o LLM.
+
+### Incidente: backend em loop de reinicialização
+
+Depois do reboot, o backend entrou em `Restarting (1)`. Causa: eu havia migrado o banco **pelo host** até `d4a91c37e2b8`, mas o rebuild da imagem nunca concluiu (disco cheio) — a imagem em execução só conhecia as 3 primeiras migrations. No boot, `alembic upgrade head` não achava a revisão do banco e o container morria. Resolvido reconstruindo a imagem.
+
+**Lição para o projeto:** não migrar o banco por fora do container à frente da imagem. A migration deve rodar pelo boot da imagem nova — senão banco e código ficam dessincronizados e o backend não sobe. No Ubuntu isso não ocorre, porque lá a migration roda dentro do container a partir da imagem já atualizada.
+
 **PENDENTE — a tela** e o botão *"escrever a resposta certa"* no feedback negativo. O backend está completo: `/api/treinamento` com `GET /tipos`, criar, listar, `/aprovar`, `/recusar` e excluir.
 
 ---
