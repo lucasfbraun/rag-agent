@@ -56,7 +56,7 @@ Migration `d4a91c37e2b8` aplicada (reaproveita o enum `status_documento` da fila
 
 ---
 
-## 2026-09-10 — Sessão 38: fila de aprovação de documentos (backend concluído, tela pendente)
+## 2026-09-10 — Sessão 38: fila de aprovação de documentos
 
 **Item 3 de 4.** Pedido do usuário: "no perfil, dar permissão para dizer se este perfil pode fazer upload de arquivos (pdf, word, imagem etc) para inserir o dado no Qdrant". Entre as três opções que apresentei — entra direto, entra marcado e reversível, ou fila de aprovação — ele escolheu **fila de aprovação**.
 
@@ -108,7 +108,7 @@ Corrigido com `_tem_permissao()`, que lê as permissões efetivas de `/api/auth/
 
 ---
 
-## 2026-09-10 — Sessão 37: perfis dinâmicos (backend concluído, tela pendente)
+## 2026-09-10 — Sessão 37: perfis dinâmicos (criar, editar e excluir pela tela)
 
 **Pedido do usuário:** "hoje você está trazendo fixo os perfis, eu quero poder ter autonomia de criar, editar e excluir. eu também quero poder marcar quais perfis são admin."
 

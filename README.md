@@ -190,6 +190,55 @@ LDAP_VALIDAR_CERTIFICADO=false
 
 > **Débito consciente:** `LDAP_VALIDAR_CERTIFICADO=false` é o padrão porque AD corporativo costuma usar certificado de CA interna, ausente do truststore do container. Isso protege contra escuta passiva, **não** contra man-in-the-middle dentro da rede. Ligue a validação quando a CA interna estiver instalada na imagem do backend.
 
+### Perfis e permissões
+
+Na mesma área de administração, aba **Perfis e permissões**. Perfis não são fixos: você cria, edita e exclui pela tela, sem migration nem deploy.
+
+O que você marca são **permissões** — cada uma corresponde a algo que o servidor realmente verifica. A lista de permissões possíveis vem do código (uma permissão só existe porque algum endpoint a checa); o que é dado é quem tem o quê. *Administrador do sistema* é a permissão que libera a própria tela de administração.
+
+O sistema **impede que você se tranque para fora**. Não é possível excluir o perfil que administra, tirar a permissão de administração do último perfil que a tem, mover o último administrador para outro perfil, nem desativá-lo. A checagem conta **usuários ativos que administram** — um perfil com a permissão e sem ninguém ativo não abre a porta de ninguém.
+
+Os cinco perfis originais (`vendedor`, `tecnico`, `gestor`, `quimico_pd`, `admin_ti`) são marcados como *do sistema*: não podem ser excluídos, mas as permissões deles continuam editáveis. O identificador (`slug`) de qualquer perfil não muda depois de criado — ele é a referência estável usada por integração e pelos testes.
+
+> **Perfis criados por você não recebem permissões novas automaticamente.** Quando uma versão acrescenta uma permissão (upload, treinamento), a migration só a concede aos cinco perfis originais. Só você sabe o que um perfil que você criou deveria poder fazer.
+
+### Enviar documentos para o acervo
+
+Quem tem a permissão *Enviar documentos* vê o atalho **Documentos** na barra lateral. O arquivo **não entra direto**: ele fica numa fila até alguém com *Aprovar documentos* revisar.
+
+A fila existe porque o acervo é a fonte que o agente cita como verdade para toda a equipe. Um PDF errado entrando sozinho contamina as respostas de todo mundo, e o estrago só aparece quando alguém desconfia de uma recomendação — muito depois, e sem ligação óbvia com o upload.
+
+- **Formatos aceitos:** PDF, Word e texto. **Imagens e PDFs digitalizados são recusados** — sem OCR o texto não é extraível, e o arquivo não acrescentaria nada às respostas. *(OCR é pendência conhecida.)*
+- **Limite:** 25 MB por arquivo.
+- **A observação importa:** é o que o aprovador lê para decidir. Sem ela, ele recebe um PDF sem contexto.
+- **Recusar exige motivo** — senão quem enviou reenvia o mesmo arquivo.
+- **Aprovar tem volta:** um documento aprovado pode ser removido do acervo depois, e só os trechos dele saem do índice.
+
+### Treinar o agente
+
+> **Backend pronto, tela ainda não.** Hoje só pela API — ver `docs/spec_treinamento.md`.
+
+Quem tem a permissão *Treinar o agente* pode registrar conhecimento que melhora as respostas. **Não é fine-tuning:** o aprendizado fica em dado, o que o torna legível, editável e removível apagando uma linha — e mantém o projeto livre para trocar de modelo de IA.
+
+Três modalidades, com papéis diferentes:
+
+| Modalidade | Para quê | Aprovação |
+|---|---|---|
+| **Correção** | O agente respondeu errado e você escreve a resposta certa | sim |
+| **Conhecimento** | Um fato ou regra que a equipe sabe e não está em boletim nenhum | sim |
+| **Exemplo** | Um par pergunta/resposta modelo — ensina a **forma** de responder | não |
+
+Correção e conhecimento passam por aprovação porque afirmam **fatos** que o agente vai repetir como verdade da empresa. Exemplo afeta só a forma, e forma ruim é visível na primeira resposta.
+
+O que o agente faz com cada um:
+
+- **Correção** tem prioridade sobre a formulação dele — mas ele confere se o caso é mesmo o mesmo, porque perguntas parecidas podem diferir em densidade, norma ou aplicação.
+- **Conhecimento** é apresentado como *orientação interna*, com a data, nunca como se fosse conteúdo de um boletim.
+- **Exemplo** vale só como modelo de forma: os números dele não são usados como fato.
+- Se uma orientação interna **contradisser um boletim**, o agente mostra os dois lados com as fontes e encaminha para a equipe técnica — não escolhe sozinho.
+
+O treinamento fica numa coleção separada do acervo, então **reindexar o acervo não apaga o que a equipe ensinou**.
+
 ## Estrutura do projeto
 
 ```
