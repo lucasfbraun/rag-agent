@@ -37,7 +37,21 @@ O arquivo fica em disco (volume novo `./data/uploads`), não em `bytea`: são PD
 
 Migration `c2f8a05b71d4` aplicada. **418/419 no backend** (a falha conhecida de ambiente). 19 testes novos.
 
-**PENDENTE — a tela.** Falta a página de envio/fila no Streamlit e os testes de `AppTest`. O backend está completo: `POST /api/documentos`, `GET /api/documentos`, e `/aprovar`, `/recusar`, `/remover`.
+### A tela
+
+Página **Documentos**, com duas abas cuja ORDEM depende de quem está olhando: quem aprova vê a fila primeiro (é o que veio fazer), quem só envia vê o formulário primeiro.
+
+Na fila, cada documento mostra o nome, o tamanho, quem enviou e a observação de contexto. Aprovado mostra também quantos trechos entraram no acervo — é o número que permite conferir depois se a remoção apagou tudo. Recusar e remover exigem motivo, num popover.
+
+**O aviso sobre imagem/PDF digitalizado ficou VISÍVEL, não no tooltip do uploader:** quem está prestes a mandar um arquivo digitalizado precisa ler aquilo sem passar o mouse em nada.
+
+### Um bug meu, da Sessão 37, corrigido aqui
+
+A interface ainda decidia quem é administrador comparando o slug do perfil com `"admin_ti"`. Isso **ficou errado no instante em que perfis viraram dinâmicos**: um perfil criado pela tela com a permissão de administrar não veria a tela de administração. O backend autorizava corretamente o tempo todo; era só a interface escondendo o caminho.
+
+Corrigido com `_tem_permissao()`, que lê as permissões efetivas de `/api/auth/me` (o campo já existia no schema desde a Sessão 37). Todos os atalhos da sidebar passaram a aparecer por permissão. Há teste com um perfil chamado `"qualquer"` — nome que não existe no catálogo original — provando que o atalho aparece mesmo assim.
+
+**Testes:** 13 de tela. **55/55 no frontend**, 418/419 no backend.
 
 **Pendência registrada:** OCR para PDF digitalizado e imagem. Hoje esses arquivos são recusados na entrada com a explicação.
 

@@ -105,6 +105,7 @@ def _authenticated_app():
     app.session_state.current_user = {
         "nome": "Vendedor Teste",
         "perfil": "vendedor",
+        "permissoes": ["view_catalog", "upload_documents"],
     }
     return app
 

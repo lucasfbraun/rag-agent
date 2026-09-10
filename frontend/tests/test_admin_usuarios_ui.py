@@ -109,6 +109,12 @@ def _app(perfil="admin_ti", user_id=ID_ADMIN, pagina="usuarios"):
     app.session_state.access_token = "token-de-teste"
     app.session_state.current_user = {
         "id": user_id, "nome": "Lucas Braun", "perfil": perfil,
+        # A tela decide por PERMISSÃO desde a Sessão 38, não pelo slug do
+        # perfil — com perfis dinâmicos, o slug deixou de ser confiável.
+        "permissoes": (
+            ["view_catalog", "upload_documents", "approve_uploads", "manage_users"]
+            if perfil == "admin_ti" else ["view_catalog", "upload_documents"]
+        ),
     }
     app.session_state.pagina = pagina
     return app

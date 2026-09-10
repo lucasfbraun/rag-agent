@@ -21,6 +21,7 @@ FEEDBACK_URL = f"{API_BASE}/api/feedback"
 CONVERSATIONS_URL = f"{API_BASE}/api/conversations"
 USERS_URL = f"{API_BASE}/api/auth/users"
 MODELS_URL = f"{API_BASE}/api/models"
+DOCUMENTOS_URL = f"{API_BASE}/api/documentos"
 PERFIS_URL = f"{API_BASE}/api/auth/perfis"
 
 # `page_icon` aceita caminho de arquivo além de emoji — o símbolo da marca
@@ -503,9 +504,31 @@ def _rotulo_perfil(perfil: str) -> str:
     return perfil.replace("_", " ").title()
 
 
+def _tem_permissao(chave: str) -> bool:
+    """Checagem por PERMISSÃO, vinda de `/api/auth/me`.
+
+    Antes isto comparava o slug do perfil com "admin_ti" — o que ficou ERRADO
+    no instante em que perfis viraram dinâmicos (Sessão 37): um perfil criado
+    pela tela com a permissão de administrar não veria a tela de
+    administração. O backend já autorizava corretamente; era só a interface
+    que escondia o caminho.
+
+    Isto é conveniência de interface, não autorização: quem forjar a chamada
+    esbarra em `require_permission` no servidor."""
+    user = st.session_state.current_user or {}
+    return chave in (user.get("permissoes") or [])
+
+
 def _pode_administrar_usuarios() -> bool:
-    user = st.session_state.current_user
-    return bool(user) and user.get("perfil") == "admin_ti"
+    return _tem_permissao("manage_users")
+
+
+def _pode_enviar_documentos() -> bool:
+    return _tem_permissao("upload_documents")
+
+
+def _pode_aprovar_documentos() -> bool:
+    return _tem_permissao("approve_uploads")
 
 
 def _api_usuarios(metodo: str, caminho: str = "", **kwargs):
@@ -981,6 +1004,151 @@ def _render_pagina_perfis():
             _render_cartao_perfil(perfil)
 
 
+def _api_documentos(metodo: str, caminho: str = "", **kwargs):
+    return _chamar_api(f"{DOCUMENTOS_URL}{caminho}", metodo, **kwargs)
+
+
+_ROTULO_STATUS = {
+    "pendente": ":orange[aguardando aprovação]",
+    "aprovado": ":green[no acervo]",
+    "rejeitado": ":red[recusado]",
+}
+
+
+def _render_form_envio():
+    st.caption(
+        "Envie boletins, fichas técnicas ou certificados que faltam no acervo. "
+        "O arquivo **não entra direto**: alguém com permissão de aprovação revisa antes, "
+        "porque o que entra aqui vira fonte que o agente cita como verdade para toda a equipe."
+    )
+    with st.form("form_envio_documento", border=False, clear_on_submit=True):
+        arquivo = st.file_uploader("Arquivo", type=["pdf", "docx", "doc", "txt"])
+        # Aviso VISÍVEL, não no tooltip do uploader: quem está prestes a mandar
+        # um PDF digitalizado precisa ler isso sem passar o mouse em nada.
+        st.caption(
+            "PDF, Word ou texto. **Imagens e PDFs digitalizados não são aceitos** — sem "
+            "OCR o texto não é extraível, e o arquivo não acrescentaria nada às respostas "
+            "do agente."
+        )
+        observacao = st.text_area(
+            "O que é este documento?", max_chars=1000,
+            placeholder="ex: boletim do FLEXX AG 2032, revisão 03 — substitui a rev 02 do acervo",
+        )
+        st.caption("A observação é o que o aprovador lê para decidir. Sem ela, ele recebe um PDF sem contexto.")
+
+        if st.form_submit_button("Enviar para aprovação", type="primary", use_container_width=True):
+            if arquivo is None:
+                st.error("Escolha um arquivo.")
+                return
+            ok, retorno = _api_documentos(
+                "POST",
+                files={"arquivo": (arquivo.name, arquivo.getvalue())},
+                data={"observacao": observacao or ""},
+            )
+            if ok:
+                st.success(f"**{arquivo.name}** enviado. Você será avisado quando for revisado.")
+                st.rerun()
+            else:
+                st.error(retorno)
+
+
+def _render_cartao_documento(documento: dict, pode_aprovar: bool):
+    with st.container(border=True):
+        st.markdown(
+            f"**{documento['nome_arquivo']}** · {_ROTULO_STATUS.get(documento['status'], documento['status'])}"
+        )
+        tamanho = documento["tamanho_bytes"] / 1024
+        detalhe = f"enviado por {documento['enviado_por']} · {tamanho:.0f} KB"
+        if documento["status"] == "aprovado":
+            detalhe += f" · {documento['chunks_indexados']} trechos no acervo"
+        st.caption(detalhe)
+        if documento.get("observacao"):
+            st.markdown(f"> {documento['observacao']}")
+        if documento.get("motivo_decisao"):
+            st.caption(f"Decisão de {documento['decidido_por']}: {documento['motivo_decisao']}")
+
+        if not pode_aprovar:
+            return
+
+        if documento["status"] == "pendente":
+            aprovar, recusar = st.columns(2)
+            with aprovar:
+                if st.button("Aprovar e indexar", key=f"ap_{documento['id']}",
+                             type="primary", use_container_width=True):
+                    ok, retorno = _api_documentos("POST", f"/{documento['id']}/aprovar")
+                    if ok:
+                        st.rerun()
+                    st.error(retorno)
+            with recusar:
+                with st.popover("Recusar", use_container_width=True):
+                    motivo = st.text_input("Motivo", key=f"mt_{documento['id']}")
+                    st.caption("Obrigatório: sem o motivo, quem enviou reenvia o mesmo arquivo.")
+                    if st.button("Confirmar recusa", key=f"rc_{documento['id']}"):
+                        if not motivo.strip():
+                            st.error("Informe o motivo.")
+                        else:
+                            ok, retorno = _api_documentos(
+                                "POST", f"/{documento['id']}/recusar", json={"motivo": motivo}
+                            )
+                            if ok:
+                                st.rerun()
+                            st.error(retorno)
+
+        elif documento["status"] == "aprovado":
+            with st.popover("Remover do acervo"):
+                st.caption(
+                    "Tira os trechos deste documento do índice. Use quando o arquivo "
+                    "aprovado se mostrar errado ou desatualizado."
+                )
+                motivo = st.text_input("Motivo", key=f"rmt_{documento['id']}")
+                if st.button("Confirmar remoção", key=f"rm_{documento['id']}"):
+                    if not motivo.strip():
+                        st.error("Informe o motivo.")
+                    else:
+                        ok, retorno = _api_documentos(
+                            "POST", f"/{documento['id']}/remover", json={"motivo": motivo}
+                        )
+                        if ok:
+                            st.rerun()
+                        st.error(retorno)
+
+
+def _render_pagina_documentos():
+    _titulo_com_icone("Documentos do acervo")
+    pode_aprovar = _pode_aprovar_documentos()
+
+    ok, documentos = _api_documentos("GET")
+    if not ok:
+        st.error(documentos)
+        return
+
+    pendentes = [d for d in documentos if d["status"] == "pendente"]
+    # Quem aprova vê a fila primeiro — é o que ele veio fazer. Quem só envia
+    # vê o formulário primeiro, pelo mesmo motivo.
+    rotulo_fila = (
+        f"Fila de aprovação ({len(pendentes)})" if pode_aprovar
+        else f"Meus envios ({len(documentos)})"
+    )
+    abas = st.tabs([rotulo_fila, "Enviar documento"] if pode_aprovar
+                   else ["Enviar documento", rotulo_fila])
+    aba_fila, aba_envio = (abas[0], abas[1]) if pode_aprovar else (abas[1], abas[0])
+
+    with aba_envio:
+        _render_form_envio()
+
+    with aba_fila:
+        if not documentos:
+            st.info(
+                "Nenhum documento na fila." if pode_aprovar
+                else "Você ainda não enviou nenhum documento."
+            )
+            return
+        if pode_aprovar and pendentes:
+            st.caption(f"{len(pendentes)} aguardando decisão.")
+        for documento in documentos:
+            _render_cartao_documento(documento, pode_aprovar)
+
+
 def _render_pagina_administracao():
     """Área de administração: usuários e perfis, em abas.
 
@@ -1091,19 +1259,24 @@ with st.sidebar:
     # Administração só aparece para quem pode administrar. Isto é conveniência
     # de interface, não segurança: quem forjar a chamada esbarra em
     # Permission.MANAGE_USERS no backend, que é onde a decisão mora.
-    if _pode_administrar_usuarios():
-        if st.session_state.pagina == "chat":
-            if st.button(
-                "Usuários e perfis", icon=":material/group:", use_container_width=True
-            ):
-                st.session_state.pagina = "usuarios"
+    if st.session_state.pagina != "chat":
+        if st.button(
+            "Voltar ao chat", icon=":material/arrow_back:",
+            type="primary", use_container_width=True,
+        ):
+            st.session_state.pagina = "chat"
+            st.rerun()
+    else:
+        # Cada atalho aparece conforme a PERMISSÃO, não conforme o nome do
+        # perfil: com perfis criáveis pela tela, amarrar a um slug esconderia
+        # a funcionalidade de um perfil novo que a tem de direito.
+        if _pode_enviar_documentos():
+            if st.button("Documentos", icon=":material/upload_file:", use_container_width=True):
+                st.session_state.pagina = "documentos"
                 st.rerun()
-        else:
-            if st.button(
-                "Voltar ao chat", icon=":material/arrow_back:",
-                type="primary", use_container_width=True,
-            ):
-                st.session_state.pagina = "chat"
+        if _pode_administrar_usuarios():
+            if st.button("Usuários e perfis", icon=":material/group:", use_container_width=True):
+                st.session_state.pagina = "usuarios"
                 st.rerun()
 
     st.divider()
@@ -1221,11 +1394,21 @@ with st.sidebar:
 # na sidebar: são formulários e uma lista que crescem com o número de pessoas.
 # `st.stop()` evita renderizar o chat por baixo — o histórico da conversa
 # continua em session_state e volta intacto ao clicar em "Voltar ao chat".
+# Cada página confere a própria permissão antes de desenhar: um `pagina`
+# deixado em sessão (troca de usuário no mesmo navegador) não pode renderizar
+# uma tela que aquele perfil não pode ver.
 if st.session_state.pagina == "usuarios":
     if not _pode_administrar_usuarios():
         st.session_state.pagina = "chat"
         st.rerun()
     _render_pagina_administracao()
+    st.stop()
+
+if st.session_state.pagina == "documentos":
+    if not _pode_enviar_documentos():
+        st.session_state.pagina = "chat"
+        st.rerun()
+    _render_pagina_documentos()
     st.stop()
 
 _titulo_com_icone("Assistente de Vendas Técnicas &amp; Match de Produtos")
