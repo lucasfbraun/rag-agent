@@ -5,6 +5,60 @@ Ver visão geral de fases em [CRONOGRAMA.md](CRONOGRAMA.md).
 
 ---
 
+## 2026-09-10 — Sessão 37: perfis dinâmicos (backend concluído, tela pendente)
+
+**Pedido do usuário:** "hoje você está trazendo fixo os perfis, eu quero poder ter autonomia de criar, editar e excluir. eu também quero poder marcar quais perfis são admin."
+
+Este é o **item 2 de 4** de uma fila combinada com o usuário: (1) Active Directory ✅, (2) perfis dinâmicos, (3) upload de arquivos com fila de aprovação, (4) treinamento do agente em três modalidades. A ordem foi decidida por mim a pedido dele, com o critério de minimizar retrabalho: perfis é a fundação, porque os itens 3 e 4 precisam de permissões novas — criá-las no enum estático para migrar depois seria retrabalho garantido.
+
+### O que virou dado e o que deliberadamente NÃO virou
+
+- **Virou dado:** a atribuição permissão↔perfil, nas tabelas `perfis` e `perfil_permissoes`.
+- **Continua em código:** a LISTA de permissões possíveis (o enum `Permission`). Cada permissão só existe porque algum endpoint a verifica; deixar criá-las pela tela produziria um checkbox que não protege nada. O usuário ganha autonomia real sobre perfis sem a ilusão de inventar poderes que o código desconhece.
+- **"Marcar quais perfis são admin"** foi implementado como a permissão `MANAGE_USERS`, marcável na tela com o rótulo "Administrador do sistema". Um conceito só — em vez de um `is_admin` separado que poderia divergir da permissão real que autoriza de fato.
+
+### A invariante generalizada — quatro formas de se trancar para fora
+
+Era "≥1 Admin TI ativo". Com perfis editáveis pelo próprio administrador, surgem quatro caminhos para o sistema ficar sem administração, e **cada um tem teste**:
+
+1. excluir o perfil que administra;
+2. tirar a permissão de administração do último perfil que a tem;
+3. mover o último administrador para outro perfil;
+4. desativar o último administrador.
+
+A checagem conta **gente ATIVA que administra**, nunca "sobra algum perfil admin": um perfil com a permissão mas sem nenhum usuário ativo não abre a porta de ninguém, e tratá-lo como suficiente seria uma falsa garantia.
+
+### A migration (`b7e1c4d92f30`) — a mais arriscada do projeto
+
+Converte `users.perfil` (enum do Postgres, com dados vivos) em `users.perfil_id` (FK). Decisões:
+
+- **A matriz de `ROLE_PERMISSIONS` foi copiada LITERALMENTE** para a semente. Migration é história: não pode mudar de resultado porque alguém editou a matriz em código no ano que vem.
+- **Cria a coluna nullable, preenche, e só então põe NOT NULL.** FK NOT NULL de cara falharia com a tabela populada — e migration que falha no meio deixa o schema num estado que ninguém sabe descrever.
+- **Interrompe se sobrar usuário com perfil fora do catálogo**, em vez de atribuir o mais restritivo em silêncio. Dado assim precisa de decisão humana.
+- **O tipo `user_role` é mantido no banco de propósito:** é o que o `downgrade` usa para reconstruir a coluna. Enum órfão custa nada; downgrade que não funciona custa uma restauração de backup. (É o problema catalogado como AUD-009, aqui evitado deliberadamente.)
+- **O ciclo `downgrade → upgrade` foi EXERCITADO contra o banco real**, com usuário e perfil preservados nos dois sentidos. Backup do Postgres tirado antes. Downgrade não testado é rede de segurança falsa.
+
+### O custo da refatoração, e como foi pago
+
+A mudança quebrou **90 testes** de imediato — todos passando `Role.X` onde agora se espera um registro de `Perfil`. Em vez de editar 90 arquivos, criei `resolver_perfil()`, que aceita o registro, o slug ou o enum `Role`: a API tem slug, a semente e os testes têm `Role`, o serviço tem o registro. Resolver num lugar só evita que cada chamador faça a própria consulta e esqueça do caso "perfil não existe". Restaram 12 falhas, todas de testes que construíam `User(...)` direto, sem passar pelo serviço.
+
+`test_permissions.py` foi **reescrito**: antes conferia a constante `ROLE_PERMISSIONS` célula por célula contra a spec; agora confere os perfis SEMEADOS no banco. É mais forte, não mais fraco — passou a verificar o que o sistema realmente usa para autorizar, em vez de uma tabela paralela que poderia divergir dele.
+
+### Estado
+
+**399/400 no backend.** A única falha é artefato de ambiente conhecido (`test_ingest_admin_com_token_retorna_200` usa `/app/data/raw_documents`, caminho que só existe dentro do container). 20 testes novos em `test_perfis.py`.
+
+**PENDENTE — a tela.** O backend está completo e commitado (`417af72`), mas a interface de perfis ainda não existe. O que falta:
+
+1. `_render_pagina_perfis()` — lista, criação, edição de permissões por checkbox, exclusão com as guardas.
+2. Abas "Usuários" / "Perfis" dentro da página de administração.
+3. **Substituir o dicionário `PERFIS` fixo do frontend por uma busca em `GET /api/auth/perfis`.** Isso é obrigatório, não cosmético: é exatamente a mesma classe de duplicação que causou o bug do 422 na Sessão 35d (lista de modelos mantida à mão nos dois lados). Com perfis criáveis pela tela, um dicionário fixo no frontend ficaria desatualizado no primeiro perfil novo.
+4. Testes de tela (`AppTest`).
+
+> **Não puxar no Ubuntu antes disso.** A migration roda no boot, então o backend migraria e ficaria sem interface para gerenciar os perfis criados.
+
+---
+
 ## 2026-09-10 — Sessão 36: vínculo de usuário com o Active Directory
 
 **Pedido do usuário:** "quero poder vincular um usuário criado a um usuário do Active Directory", com as credenciais do domínio da Flexível.
