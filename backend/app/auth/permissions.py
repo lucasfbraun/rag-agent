@@ -40,6 +40,11 @@ class Permission(str, enum.Enum):
     # e não podia ficar sem nenhuma permissão associada. Só Admin TI, por ser a leitura
     # mais conservadora (mesmo padrão já usado nas pendências da matriz original).
     MANAGE_INGESTION = "manage_ingestion"
+    # Sessão 38: o vendedor em campo tem o boletim que o acervo não tem. Enviar
+    # e APROVAR são permissões separadas de propósito — quem contribui não é
+    # necessariamente quem decide o que entra na base que todos consultam.
+    UPLOAD_DOCUMENTS = "upload_documents"
+    APPROVE_UPLOADS = "approve_uploads"
 
 
 # Rótulo de cada permissão na tela de perfis. Fica aqui, junto do enum, porque
@@ -54,6 +59,8 @@ ROTULOS_DE_PERMISSAO: dict[Permission, str] = {
     Permission.VIEW_COSTS: "Ver custos e fórmulas (dado sensível)",
     Permission.MANAGE_USERS: "Administrador do sistema (usuários e perfis)",
     Permission.MANAGE_INGESTION: "Disparar reindexação do acervo",
+    Permission.UPLOAD_DOCUMENTS: "Enviar documentos para o acervo (entram na fila)",
+    Permission.APPROVE_UPLOADS: "Aprovar ou recusar documentos enviados",
 }
 
 # A permissão que caracteriza um perfil "administrador". Quem a tem enxerga a

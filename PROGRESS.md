@@ -5,6 +5,44 @@ Ver visão geral de fases em [CRONOGRAMA.md](CRONOGRAMA.md).
 
 ---
 
+## 2026-09-10 — Sessão 38: fila de aprovação de documentos (backend concluído, tela pendente)
+
+**Item 3 de 4.** Pedido do usuário: "no perfil, dar permissão para dizer se este perfil pode fazer upload de arquivos (pdf, word, imagem etc) para inserir o dado no Qdrant". Entre as três opções que apresentei — entra direto, entra marcado e reversível, ou fila de aprovação — ele escolheu **fila de aprovação**.
+
+### Por que a fila, e não indexação direta
+
+O acervo é a fonte que o agente cita como verdade para a equipe inteira. Um PDF errado entrando sozinho contamina as respostas de todo mundo, e o estrago só aparece quando alguém desconfia de uma recomendação — muito depois, e sem ligação óbvia com o upload.
+
+**Enviar e aprovar são permissões SEPARADAS** (`UPLOAD_DOCUMENTS` e `APPROVE_UPLOADS`): quem está em campo é quem tem o boletim que falta, mas não é necessariamente quem responde pelo que a base passa a afirmar. A migration concede o envio a todos os perfis semeados e a aprovação só ao Admin TI. **Perfis criados pela tela não recebem nada automaticamente** — só o Admin TI sabe o que um perfil novo deveria poder fazer, e adivinhar concederia acesso que ninguém pediu.
+
+### Decisões que valem registro
+
+**Indexa PRIMEIRO, marca depois.** Se marcasse antes e a indexação falhasse, o documento apareceria como aprovado sem estar no índice — e ninguém descobriria até reparar que o agente ignora um boletim que "está lá". Falha ao indexar devolve 422 (não 500) e deixa o documento PENDENTE: a causa quase sempre é o conteúdo do arquivo, e quem aprovou precisa saber disso para recusar em vez de tentar de novo.
+
+**`indexar_arquivo()` é separado de `ingest_catalog_directory()` por causa da RECONCILIAÇÃO.** Aquela função apaga tudo que está indexado e não apareceu na varredura — comportamento certo para "reindexar o acervo" e catastrófico para "somar um arquivo". Foi exatamente esse padrão que zerou a coleção na Sessão 30.
+
+**A procedência vai para o payload** (`origem`, `documento_id`, `enviado_por`), e é o que permite `remover_arquivo_do_indice()` tirar exatamente aqueles pontos depois. Sem a volta, aprovar um arquivo errado exigiria reindexar o acervo inteiro.
+
+**Imagem é recusada na entrada, com explicação.** O usuário pediu "pdf, word, imagem etc", mas sem OCR instalado um JPG entraria na fila, seria aprovado e não acrescentaria nada ao índice — um arquivo inútil que ninguém entenderia por que não aparece nas respostas. Recusar dizendo o motivo é mais honesto que criar um cemitério de arquivos. **OCR fica registrado como pendência.**
+
+**Recusa exige motivo.** Sem ele, quem enviou reenvia o mesmo arquivo.
+
+**Quem só envia vê apenas os próprios envios.** Sem esse recorte, um vendedor enxergaria o que os colegas mandaram e a empresa ainda não validou.
+
+**Nome de arquivo do cliente passa por allowlist de caracteres** — um `../../etc/passwd` ou um nome com barra escreveria fora da pasta de uploads.
+
+O arquivo fica em disco (volume novo `./data/uploads`), não em `bytea`: são PDFs de MB, e guardá-los no Postgres transformaria cada listagem da fila numa leitura de tudo.
+
+### Estado
+
+Migration `c2f8a05b71d4` aplicada. **418/419 no backend** (a falha conhecida de ambiente). 19 testes novos.
+
+**PENDENTE — a tela.** Falta a página de envio/fila no Streamlit e os testes de `AppTest`. O backend está completo: `POST /api/documentos`, `GET /api/documentos`, e `/aprovar`, `/recusar`, `/remover`.
+
+**Pendência registrada:** OCR para PDF digitalizado e imagem. Hoje esses arquivos são recusados na entrada com a explicação.
+
+---
+
 ## 2026-09-10 — Sessão 37: perfis dinâmicos (backend concluído, tela pendente)
 
 **Pedido do usuário:** "hoje você está trazendo fixo os perfis, eu quero poder ter autonomia de criar, editar e excluir. eu também quero poder marcar quais perfis são admin."

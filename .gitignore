@@ -5,6 +5,8 @@ __pycache__/
 venv/
 data/raw_documents/*
 !data/raw_documents/.gitkeep
+data/uploads/*
+!data/uploads/.gitkeep
 data/qdrant_storage/*
 !data/qdrant_storage/.gitkeep
 data/postgres_storage/*

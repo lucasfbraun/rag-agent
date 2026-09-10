@@ -59,6 +59,9 @@ services:
         condition: service_healthy
     volumes:
       - ./data/raw_documents:/app/data/raw_documents
+      # Fila de aprovação (Sessão 38). Sem este volume, tudo que estivesse
+      # pendente sumiria no primeiro rebuild da imagem.
+      - ./data/uploads:/app/data/uploads
     healthcheck:
       # python:3.11-slim tem Python nativo — sem dependência de curl/wget
       test: ["CMD", "python", "-c", "import urllib.request, sys; urllib.request.urlopen('http://localhost:8000/').read() or sys.exit(1)"]

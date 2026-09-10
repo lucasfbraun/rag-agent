@@ -7,7 +7,7 @@ import enum
 import uuid
 from datetime import datetime, timezone
 
-from sqlalchemy import String, Text, DateTime, Boolean, ForeignKey, Enum as SAEnum
+from sqlalchemy import String, Text, DateTime, Boolean, Integer, ForeignKey, Enum as SAEnum
 from sqlalchemy.dialects.postgresql import UUID, JSONB
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
@@ -205,3 +205,58 @@ class Feedback(Base):
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, default=_utcnow, index=True
     )
+
+
+class StatusDocumento(str, enum.Enum):
+    PENDENTE = "pendente"
+    APROVADO = "aprovado"
+    REJEITADO = "rejeitado"
+
+
+class DocumentoEnviado(Base):
+    """Documento enviado por um usuário, aguardando decisão de um aprovador.
+
+    Fila de aprovação, e não indexação direta, por decisão do usuário: o acervo
+    é a fonte que o agente cita como verdade para toda a equipe. Um PDF errado
+    entrando sozinho contamina as respostas de todo mundo, e o estrago só
+    aparece quando alguém desconfia de uma recomendação.
+
+    O arquivo fica em disco (`caminho`), não no Postgres: são PDFs de MB, e
+    bytea transformaria cada listagem da fila numa leitura de tudo. A linha
+    guarda o rastro — quem enviou, quem decidiu, quando, e quantos trechos
+    entraram no índice.
+    """
+    __tablename__ = "documentos_enviados"
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    nome_arquivo: Mapped[str] = mapped_column(String(255), nullable=False)
+    caminho: Mapped[str] = mapped_column(String(500), nullable=False)
+    tamanho_bytes: Mapped[int] = mapped_column(Integer, nullable=False)
+
+    status: Mapped[StatusDocumento] = mapped_column(
+        SAEnum(StatusDocumento, name="status_documento"),
+        nullable=False, default=StatusDocumento.PENDENTE, index=True,
+    )
+    # Contexto que o enviador escreve: "boletim novo do AG 2032, revisão 03".
+    # Sem isso o aprovador recebe um PDF sem saber por que ele deveria entrar.
+    observacao: Mapped[str | None] = mapped_column(Text, nullable=True)
+    motivo_decisao: Mapped[str | None] = mapped_column(Text, nullable=True)
+
+    enviado_por_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("users.id"), nullable=False, index=True
+    )
+    decidido_por_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("users.id"), nullable=True
+    )
+
+    # Quantos trechos foram para o Qdrant na aprovação — é o que permite dizer
+    # se a remoção depois apagou tudo.
+    chunks_indexados: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, default=_utcnow, index=True
+    )
+    decidido_em: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+    enviado_por: Mapped["User"] = relationship(foreign_keys=[enviado_por_id], lazy="joined")
+    decidido_por: Mapped["User | None"] = relationship(foreign_keys=[decidido_por_id], lazy="joined")

@@ -401,3 +401,84 @@ def ingest_catalog_directory(dir_path: str, embedding_model: str = EMBEDDING_MOD
         f"{len(descartados_formato)} duplicata(s) de formato ignorada(s) antes de processar. "
         f"{removed_chunks} chunk(s) obsoleto(s) removido(s)."
     )
+
+
+# --- indexação de UM arquivo (fila de aprovação, Sessão 38) -----------------
+
+def indexar_arquivo(
+    file_path: str,
+    embedding_model: str = EMBEDDING_MODEL,
+    metadados_extra: Dict[str, str] | None = None,
+) -> int:
+    """Indexa um único arquivo e devolve quantos trechos entraram.
+
+    Existe separado de `ingest_catalog_directory` por causa da RECONCILIAÇÃO:
+    aquela função apaga tudo que está indexado e não apareceu na varredura —
+    comportamento certo para "reindexar o acervo", e catastrófico para "somar
+    um arquivo" (foi o que zerou a coleção na Sessão 30). Aqui não há
+    reconciliação nenhuma: só acrescenta.
+
+    `metadados_extra` marca a procedência no payload (quem enviou, qual
+    documento da fila) — é o que permite REMOVER depois exatamente estes
+    pontos, sem tocar no resto do acervo.
+    """
+    client = get_qdrant_client()
+    init_qdrant_collection(client)
+
+    texto = extract_text_from_file(file_path)
+    if not texto.strip():
+        raise ValueError(
+            "Nenhum texto pôde ser extraído deste arquivo. "
+            "PDFs de imagem escaneada precisam de OCR, que não está instalado."
+        )
+
+    chunks = chunk_text(texto)
+    if not chunks:
+        raise ValueError("O arquivo tem texto, mas curto demais para virar um trecho útil.")
+
+    vetores = get_embeddings(chunks, embedding_model)
+    filename = os.path.basename(file_path)
+    pontos = []
+    for indice, (chunk, vetor) in enumerate(zip(chunks, vetores)):
+        payload = {
+            "filename": filename,
+            "filepath": file_path,
+            "chunk_index": indice,
+            "content": chunk,
+            "sensivel": _e_conteudo_sensivel(chunk),
+        }
+        payload.update(metadados_extra or {})
+        pontos.append(
+            qmodels.PointStruct(
+                id=str(uuid.uuid5(uuid.NAMESPACE_URL, f"{file_path}::{indice}")),
+                vector=vetor,
+                payload=payload,
+            )
+        )
+
+    client.upsert(collection_name=COLLECTION_NAME, points=pontos)
+    return len(pontos)
+
+
+def remover_arquivo_do_indice(file_path: str) -> int:
+    """Apaga do índice todos os pontos de um arquivo. Devolve quantos foram.
+
+    Contrapartida obrigatória de `indexar_arquivo`: aprovar um documento errado
+    precisa ter volta, senão a única saída seria reindexar o acervo inteiro."""
+    client = get_qdrant_client()
+    filtro = qmodels.Filter(
+        must=[qmodels.FieldCondition(key="filepath", match=qmodels.MatchValue(value=file_path))]
+    )
+    ids = []
+    offset = None
+    while True:
+        pontos, offset = client.scroll(
+            collection_name=COLLECTION_NAME, scroll_filter=filtro,
+            with_payload=False, with_vectors=False, limit=500, offset=offset,
+        )
+        ids.extend(str(p.id) for p in pontos)
+        if offset is None:
+            break
+    if ids:
+        _apagar_pontos(client, COLLECTION_NAME, set(ids))
+    return len(ids)
