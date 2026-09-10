@@ -87,3 +87,27 @@ if not SECRET_KEY:
         "(sem isso os tokens de sessão seriam assinados com uma chave previsível)."
     )
 ACCESS_TOKEN_EXPIRE_MINUTES = int(os.getenv("ACCESS_TOKEN_EXPIRE_MINUTES", 480))  # 8h, um turno
+
+# ---------------------------------------------------------------------------
+# Active Directory / LDAP (vínculo de usuário — ver app/auth/ldap_service.py)
+# ---------------------------------------------------------------------------
+# Opcional: sem LDAP_SERVER a aplicação funciona igual, só sem a opção de
+# vincular conta ao AD. `ldap_configurado()` é quem decide se a funcionalidade
+# aparece, para a tela não oferecer algo que não existe naquela instalação.
+LDAP_SERVER = os.getenv("LDAP_SERVER", "")
+LDAP_DOMAIN = os.getenv("LDAP_DOMAIN", "")
+LDAP_BASE_DN = os.getenv("LDAP_BASE_DN", "")
+LDAP_BIND_USER = os.getenv("LDAP_BIND_USER", "")
+LDAP_BIND_PASSWORD = os.getenv("LDAP_BIND_PASSWORD", "")
+
+# 636 (LDAPS) por padrão, não 389: no bind de login a senha do usuário atravessa
+# a rede, e em 389 ela vai em TEXTO CLARO. Verificado em 2026-09-10 que o
+# controlador de domínio da Flexível atende em 636.
+LDAP_PORT = int(os.getenv("LDAP_PORT", "636"))
+LDAP_USE_SSL = os.getenv("LDAP_USE_SSL", "true").lower() == "true"
+
+# AD corporativo costuma usar certificado de CA interna, ausente do truststore
+# do container — daí o padrão ser não validar. É um débito consciente: protege
+# contra escuta passiva, não contra man-in-the-middle dentro da rede. Ligue
+# quando a CA interna estiver instalada na imagem.
+LDAP_VALIDAR_CERTIFICADO = os.getenv("LDAP_VALIDAR_CERTIFICADO", "false").lower() == "true"

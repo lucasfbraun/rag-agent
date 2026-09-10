@@ -3,6 +3,7 @@ import streamlit.components.v1 as components
 import requests
 import json
 import os
+from urllib.parse import quote
 
 STATIC_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "static")
 
@@ -509,6 +510,94 @@ def _api_usuarios(metodo: str, caminho: str = "", **kwargs):
     return False, detalhe or f"Erro {resposta.status_code}."
 
 
+@st.cache_data(ttl=300, show_spinner=False)
+def _ldap_disponivel() -> bool:
+    """Se esta instalação tem Active Directory configurado.
+
+    Em cache porque a resposta não muda entre cliques e o Streamlit reexecuta
+    o script inteiro a cada interação. Na dúvida (backend fora, erro), assume
+    NÃO: melhor esconder o recurso do que oferecer algo que vai falhar."""
+    ok, retorno = _api_usuarios("GET", "/ldap/status")
+    return bool(ok and isinstance(retorno, dict) and retorno.get("configurado"))
+
+
+def _render_vinculo_ldap(usuario: dict):
+    """Vínculo da conta local com uma conta do Active Directory.
+
+    Vincular APAGA a senha local — o aviso na tela existe porque, sem ele, o
+    administrador não tem como saber que a senha que ele acabou de definir vai
+    deixar de valer. A regra em si é aplicada no servidor
+    (user_service.vincular_ldap), aqui só é comunicada."""
+    vinculado = usuario.get("origem") == "ldap"
+
+    if vinculado:
+        st.success(
+            f"Autentica pelo **Active Directory** — a senha é a da rede. "
+            f"Conta vinculada: `{usuario.get('external_id')}`"
+        )
+        with st.form(f"form_desvincular_{usuario['id']}", border=False, clear_on_submit=True):
+            st.caption(
+                "Desvincular devolve o login para senha local. A senha nova é "
+                "obrigatória: sem ela o usuário ficaria sem forma nenhuma de entrar."
+            )
+            senha = st.text_input("Senha local nova", type="password", key=f"du_{usuario['id']}")
+            if st.form_submit_button("Desvincular do AD"):
+                if not senha:
+                    st.error("Informe a senha local que passará a valer.")
+                else:
+                    ok, retorno = _api_usuarios(
+                        "POST", f"/{usuario['id']}/unlink-ldap", json={"new_password": senha}
+                    )
+                    if ok:
+                        st.rerun()
+                    st.error(retorno)
+        return
+
+    st.caption(
+        "Vincular faz o usuário entrar com a **senha da rede**. A senha local é "
+        "apagada — assim, desligar a conta no AD corta o acesso aqui também."
+    )
+    termo = st.text_input(
+        "Procurar no Active Directory", key=f"ad_busca_{usuario['id']}",
+        placeholder="nome, login ou e-mail",
+    )
+    if len(termo.strip()) < 2:
+        return
+
+    ok, retorno = _api_usuarios("GET", f"/ldap/search?q={quote(termo.strip())}")
+    if not ok:
+        st.error(retorno)
+        return
+
+    contas = retorno.get("contas", [])
+    if not contas:
+        st.info("Nenhuma conta encontrada com esse termo.")
+        return
+
+    for conta in contas:
+        coluna_dados, coluna_acao = st.columns([4, 1])
+        with coluna_dados:
+            st.markdown(f"**{conta['nome'] or conta['login']}** · `{conta['login']}`")
+            if not conta["habilitado"]:
+                st.caption(":red[Conta desabilitada no AD — não pode ser vinculada]")
+            elif conta.get("email"):
+                st.caption(conta["email"])
+        with coluna_acao:
+            # Conta desabilitada aparece na lista mas sem botão: esconder o
+            # resultado faria o administrador procurar de novo sem entender.
+            if conta["habilitado"] and st.button(
+                "Vincular", key=f"ad_link_{usuario['id']}_{conta['external_id']}",
+                use_container_width=True,
+            ):
+                ok, retorno = _api_usuarios(
+                    "POST", f"/{usuario['id']}/link-ldap",
+                    json={"external_id": conta["external_id"]},
+                )
+                if ok:
+                    st.rerun()
+                st.error(retorno)
+
+
 def _render_form_novo_usuario():
     with st.form("form_novo_usuario", border=False, clear_on_submit=True):
         col_a, col_b = st.columns(2)
@@ -547,9 +636,10 @@ def _render_cartao_usuario(usuario: dict, eu_mesmo: bool):
             marcador = "" if ativo else " · :red[desativado]"
             sufixo = " · :grey[(você)]" if eu_mesmo else ""
             st.markdown(f"**{usuario['nome']}**{sufixo}{marcador}")
+            origem = " · 🔗 AD" if usuario.get("origem") == "ldap" else ""
             st.caption(
                 f"`{usuario['username']}` · {usuario['email']} · "
-                f"{_rotulo_perfil(usuario['perfil'])}"
+                f"{_rotulo_perfil(usuario['perfil'])}{origem}"
             )
         with acao:
             if eu_mesmo:
@@ -590,6 +680,18 @@ def _render_cartao_usuario(usuario: dict, eu_mesmo: bool):
                         st.rerun()
                     st.error(retorno)
 
+            if _ldap_disponivel():
+                st.divider()
+                st.markdown("**Active Directory**")
+                _render_vinculo_ldap(usuario)
+
+            # Redefinir senha não aparece para quem autentica no AD: a senha
+            # local desse usuário é NULL e definir uma não teria efeito nenhum
+            # no login — só confundiria quem clicasse.
+            if usuario.get("origem") == "ldap":
+                return
+
+            st.divider()
             with st.form(f"form_senha_{usuario['id']}", border=False, clear_on_submit=True):
                 nova_senha = st.text_input("Nova senha", type="password", key=f"s_{usuario['id']}")
                 if st.form_submit_button("Redefinir senha"):

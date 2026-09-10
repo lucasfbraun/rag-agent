@@ -33,6 +33,11 @@ class UsuarioInativoError(ValueError):
     """Credenciais corretas, mas a conta está desativada."""
 
 
+class VinculoLDAPInvalidoError(ValueError):
+    """Vínculo com o Active Directory recusado — conta inexistente, desabilitada
+    ou já vinculada a outro usuário."""
+
+
 class UltimoAdminError(ValueError):
     """A operação deixaria zero Admin TI ativos — nenhuma mudança de perfil
     ou desativação pode zerar esse número (ver AUD-004,
@@ -154,6 +159,75 @@ def activate_user(session: Session, user_id) -> User:
     return user
 
 
+def vincular_ldap(session: Session, user_id, external_id: str) -> User:
+    """Passa o usuário a autenticar pelo Active Directory.
+
+    APAGA o `password_hash` local, e isso é o ponto principal desta função, não
+    um efeito colateral: manter a senha local viva daria à pessoa DUAS
+    credenciais válidas. A TI desligaria a conta no AD achando que cortou o
+    acesso, e ela continuaria entrando aqui com a senha antiga — exatamente o
+    risco que centralizar no AD deveria eliminar.
+
+    Recusa conta desabilitada no AD: vincular alguém já desligado criaria um
+    acesso que ninguém consegue explicar depois."""
+    from app.auth import ldap_service
+
+    user = _get_user_or_raise(session, user_id)
+    conta = ldap_service.obter_por_external_id(external_id)
+    if conta is None:
+        raise VinculoLDAPInvalidoError(
+            "Conta não encontrada no Active Directory. Refaça a busca — ela pode ter sido removida."
+        )
+    if not conta["habilitado"]:
+        raise VinculoLDAPInvalidoError(
+            f"A conta '{conta['login']}' está DESABILITADA no Active Directory e não pode ser vinculada."
+        )
+
+    user.origem = UserOrigin.LDAP
+    user.external_id = conta["external_id"]
+    user.password_hash = None
+    _flush_or_raise_duplicate(
+        session, f"a conta '{conta['login']}' do AD já está vinculada a outro usuário."
+    )
+    return user
+
+
+def desvincular_ldap(session: Session, user_id, nova_senha: str) -> User:
+    """Volta o usuário para senha local.
+
+    Exige a senha nova no mesmo passo porque um usuário de origem LDAP tem
+    `password_hash` NULL: desvincular sem definir senha o deixaria sem
+    NENHUMA forma de entrar — conta viva, dono trancado do lado de fora."""
+    user = _get_user_or_raise(session, user_id)
+    if user.origem != UserOrigin.LDAP:
+        raise VinculoLDAPInvalidoError("Este usuário não está vinculado ao Active Directory.")
+
+    user.password_hash = hash_password(nova_senha)  # valida a política de senha
+    user.origem = UserOrigin.MANUAL
+    user.external_id = None
+    session.flush()
+    return user
+
+
+def _autenticar_no_ldap(user: User, password: str) -> bool:
+    """Confere a senha de um usuário de origem LDAP contra o diretório.
+
+    O login do AD é resolvido pelo objectGUID a cada autenticação, em vez de
+    guardado aqui: é isso que faz um usuário RENOMEADO no AD continuar
+    entrando. Guardar o `sAMAccountName` seria mais rápido e quebraria em
+    silêncio no dia em que a TI corrigisse a grafia de um nome."""
+    from app.auth import ldap_service
+
+    if not user.external_id:
+        return False
+    conta = ldap_service.obter_por_external_id(user.external_id)
+    if conta is None or not conta["habilitado"]:
+        # Conta apagada ou desligada no AD: nega aqui também, sem depender de
+        # alguém lembrar de desativar o usuário nos dois lugares.
+        return False
+    return ldap_service.autenticar(conta["login"], password)
+
+
 def authenticate(session: Session, username: str, password: str) -> User:
     """Confere username+senha. Levanta AutenticacaoInvalidaError (credencial errada
     ou usuário inexistente — mesma mensagem pros dois casos, para não revelar quais
@@ -164,10 +238,21 @@ def authenticate(session: Session, username: str, password: str) -> User:
     quando o username existia, e o tempo de resposta virava um canal de
     enumeração de usuário mesmo com a mensagem de erro sendo uniforme."""
     user = get_user_by_username(session, username)
-    password_hash = user.password_hash if user and user.password_hash else DUMMY_PASSWORD_HASH
-    senha_confere = verify_password(password, password_hash)
-    if user is None or user.password_hash is None or not senha_confere:
-        raise AutenticacaoInvalidaError("Usuário ou senha incorretos.")
+
+    if user is not None and user.origem == UserOrigin.LDAP:
+        # A senha vai ao Active Directory; nada é conferido localmente, porque
+        # `password_hash` é NULL para este usuário por construção (vincular_ldap
+        # apaga a senha local justamente para não existirem duas credenciais).
+        if not _autenticar_no_ldap(user, password):
+            raise AutenticacaoInvalidaError("Usuário ou senha incorretos.")
+    else:
+        password_hash = user.password_hash if user and user.password_hash else DUMMY_PASSWORD_HASH
+        senha_confere = verify_password(password, password_hash)
+        if user is None or user.password_hash is None or not senha_confere:
+            raise AutenticacaoInvalidaError("Usuário ou senha incorretos.")
+
+    # A checagem de status vale para as duas origens: desativar aqui corta o
+    # acesso mesmo de quem continua ativo no AD.
     if user.status != UserStatus.ATIVO:
         raise UsuarioInativoError("Esta conta está desativada. Contate o administrador.")
     return user

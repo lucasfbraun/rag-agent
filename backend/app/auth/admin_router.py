@@ -28,13 +28,16 @@ from app.auth.user_service import (
     UltimoAdminError,
     UsuarioJaExisteError,
     UsuarioNaoEncontradoError,
+    VinculoLDAPInvalidoError,
     activate_user,
     create_user,
     deactivate_user,
     get_user_by_id,
     list_users,
+    desvincular_ldap,
     set_password,
     update_user,
+    vincular_ldap,
 )
 from app.db import get_session
 from app.models import Role, User
@@ -57,6 +60,9 @@ def _commit_traduzindo_erros(session: Session):
         session.rollback()
         raise HTTPException(status.HTTP_409_CONFLICT, str(e))
     except UltimoAdminError as e:
+        session.rollback()
+        raise HTTPException(status.HTTP_409_CONFLICT, str(e))
+    except VinculoLDAPInvalidoError as e:
         session.rollback()
         raise HTTPException(status.HTTP_409_CONFLICT, str(e))
     except SenhaFracaError as e:
@@ -85,6 +91,19 @@ class RedefinirSenhaRequest(BaseModel):
     new_password: str
 
 
+class VincularLDAPRequest(BaseModel):
+    """`external_id` é o objectGUID da conta no AD, obtido em
+    GET /api/auth/ldap/search — nunca digitado à mão."""
+    external_id: str
+
+
+class DesvincularLDAPRequest(BaseModel):
+    """A senha vem junto porque usuário de origem LDAP tem `password_hash`
+    NULL: desvincular sem definir senha o deixaria sem forma nenhuma de
+    entrar."""
+    new_password: str
+
+
 @router.post(
     "", response_model=UsuarioResponse, status_code=status.HTTP_201_CREATED,
     dependencies=[Depends(require_permission(Permission.MANAGE_USERS))],
@@ -103,6 +122,45 @@ def listar_usuarios(session: Session = Depends(get_session)):
     return [UsuarioResponse.from_user(u) for u in list_users(session)]
 
 
+@router.get("/ldap/status", dependencies=[Depends(require_permission(Permission.MANAGE_USERS))])
+def status_do_ldap():
+    """Se esta instalação tem Active Directory configurado.
+
+    A tela usa isto para decidir se MOSTRA a seção de vínculo. Sem a checagem,
+    uma instalação sem AD ofereceria o recurso e só falharia no clique."""
+    from app.auth import ldap_service
+
+    return {"configurado": ldap_service.ldap_configurado()}
+
+
+@router.get("/ldap/search", dependencies=[Depends(require_permission(Permission.MANAGE_USERS))])
+def buscar_no_ldap(q: str):
+    """Procura contas no Active Directory para o administrador escolher.
+
+    Rota de LEITURA do diretório, atrás de MANAGE_USERS: a lista de
+    funcionários da empresa não é informação para qualquer perfil."""
+    from app.auth import ldap_service
+
+    if not ldap_service.ldap_configurado():
+        raise HTTPException(
+            status.HTTP_503_SERVICE_UNAVAILABLE,
+            "Integração com Active Directory não configurada nesta instalação.",
+        )
+    try:
+        return {"contas": ldap_service.buscar_usuarios(q)}
+    except ldap_service.LDAPIndisponivelError:
+        # Detalhe da falha só no log (mesma disciplina do AUD-011): a mensagem
+        # do ldap3 traz host, porta e DN da conta de serviço.
+        raise HTTPException(
+            status.HTTP_503_SERVICE_UNAVAILABLE,
+            "Não foi possível falar com o Active Directory. Verifique a rede ou a configuração.",
+        )
+
+
+# ATENÇÃO À ORDEM: esta rota precisa vir ANTES de "/{user_id}". O FastAPI casa
+# na ordem de declaração, e "/ldap/search" bate no padrão "/{user_id}" — se
+# viesse depois, o "ldap" seria lido como um UUID e a busca no diretório
+# devolveria 422 sem nunca chegar aqui.
 @router.get("/{user_id}", response_model=UsuarioResponse, dependencies=[Depends(require_permission(Permission.MANAGE_USERS))])
 def obter_usuario(user_id: uuid.UUID, session: Session = Depends(get_session)):
     user = get_user_by_id(session, user_id)
@@ -125,6 +183,42 @@ def editar_usuario(user_id: uuid.UUID, req: EditarUsuarioRequest, session: Sessi
 def redefinir_senha(user_id: uuid.UUID, req: RedefinirSenhaRequest, session: Session = Depends(get_session)):
     with _commit_traduzindo_erros(session):
         set_password(session, user_id, req.new_password)
+
+
+@router.post(
+    "/{user_id}/link-ldap", response_model=UsuarioResponse,
+    dependencies=[Depends(require_permission(Permission.MANAGE_USERS))],
+)
+def vincular_usuario_ao_ldap(
+    user_id: uuid.UUID, req: VincularLDAPRequest, session: Session = Depends(get_session)
+):
+    """Passa o usuário a autenticar pelo AD. A senha local é APAGADA — ver
+    user_service.vincular_ldap para o porquê."""
+    from app.auth import ldap_service
+
+    try:
+        with _commit_traduzindo_erros(session):
+            user = vincular_ldap(session, user_id, req.external_id)
+    except ldap_service.LDAPIndisponivelError:
+        session.rollback()
+        raise HTTPException(
+            status.HTTP_503_SERVICE_UNAVAILABLE,
+            "Não foi possível falar com o Active Directory para confirmar a conta.",
+        )
+    return UsuarioResponse.from_user(user)
+
+
+@router.post(
+    "/{user_id}/unlink-ldap", response_model=UsuarioResponse,
+    dependencies=[Depends(require_permission(Permission.MANAGE_USERS))],
+)
+def desvincular_usuario_do_ldap(
+    user_id: uuid.UUID, req: DesvincularLDAPRequest, session: Session = Depends(get_session)
+):
+    """Volta o usuário para senha local, definindo-a no mesmo passo."""
+    with _commit_traduzindo_erros(session):
+        user = desvincular_ldap(session, user_id, req.new_password)
+    return UsuarioResponse.from_user(user)
 
 
 @router.post(

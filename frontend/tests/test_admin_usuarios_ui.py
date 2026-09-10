@@ -15,7 +15,20 @@ tela real; somente a API HTTP, fronteira do frontend, é simulada.
 import os
 from unittest.mock import Mock, patch
 
+import pytest
+import streamlit as st
 from streamlit.testing.v1 import AppTest
+
+
+@pytest.fixture(autouse=True)
+def _limpar_cache_do_streamlit():
+    """`_ldap_disponivel` e `_buscar_modelos_disponiveis` usam `st.cache_data`,
+    que é GLOBAL do processo — sem limpar, a resposta de um teste vaza para o
+    seguinte e o teste de "AD não configurado" enxerga o True do teste
+    anterior."""
+    st.cache_data.clear()
+    yield
+    st.cache_data.clear()
 
 APP_PATH = os.path.join(
     os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "app.py"
@@ -27,11 +40,12 @@ ID_INATIVO = "cccccccc-cccc-cccc-cccc-cccccccccccc"
 
 USUARIOS = [
     {"id": ID_ADMIN, "username": "lucas.braun", "nome": "Lucas Braun",
-     "email": "lucas@grupoflexivel.com.br", "perfil": "admin_ti", "status": "ativo"},
+     "email": "lucas@grupoflexivel.com.br", "perfil": "admin_ti", "status": "ativo", "origem": "manual", "external_id": None},
     {"id": ID_VENDEDOR, "username": "ana.silva", "nome": "Ana Silva",
-     "email": "ana@grupoflexivel.com.br", "perfil": "vendedor", "status": "ativo"},
+     "email": "ana@grupoflexivel.com.br", "perfil": "vendedor", "status": "ativo", "origem": "ldap",
+     "external_id": "68a37cfc-caa1-46e7-a70d-a9022c27fb65"},
     {"id": ID_INATIVO, "username": "jose.antigo", "nome": "Jose Antigo",
-     "email": "jose@grupoflexivel.com.br", "perfil": "tecnico", "status": "inativo"},
+     "email": "jose@grupoflexivel.com.br", "perfil": "tecnico", "status": "inativo", "origem": "manual", "external_id": None},
 ]
 
 
@@ -46,6 +60,8 @@ def _response(status_code, data=None):
 def _fake_get(url, **_kwargs):
     if url.endswith("/api/health"):
         return _response(200, {"qdrant": "online", "collection": {"points_count": 10}})
+    if url.endswith("/ldap/status"):
+        return _response(200, {"configurado": True})
     if url.endswith("/api/models"):
         return _response(200, {"models": ["gpt-4o-mini", "gpt-4o"], "default": "gpt-4o-mini"})
     if url.endswith("/api/conversations"):
@@ -216,3 +232,52 @@ def test_erro_do_backend_aparece_com_o_motivo_real():
         next(b for b in app.button if b.key == f"off_{ID_VENDEDOR}").click().run(timeout=15)
 
     assert any("último Admin TI ativo" in e.value for e in app.error)
+
+
+# --- vínculo com o Active Directory ----------------------------------------
+
+def test_usuario_vinculado_ao_ad_aparece_marcado_na_lista():
+    """Sem o selo, um administrador não tem como saber por qual credencial
+    cada pessoa entra — e tentaria redefinir uma senha que não existe."""
+    app = _app()
+    with patch("requests.get", side_effect=_fake_get),          patch("requests.request", side_effect=_fake_request):
+        app.run(timeout=15)
+
+    legendas = " ".join(e.value for e in app.caption)
+    assert "AD" in legendas
+
+
+def test_redefinir_senha_nao_aparece_para_usuario_do_ad():
+    """A senha local de um usuário LDAP é NULL; definir uma não teria efeito
+    nenhum no login. Oferecer o campo só confundiria."""
+    app = _app()
+    with patch("requests.get", side_effect=_fake_get),          patch("requests.request", side_effect=_fake_request):
+        app.run(timeout=15)
+
+    chaves = [t.key for t in app.text_input]
+    assert f"s_{ID_VENDEDOR}" not in chaves, "campo de senha apareceu para usuário do AD"
+    assert f"s_{ID_ADMIN}" in chaves, "campo de senha sumiu para usuário local"
+
+
+def test_usuario_do_ad_ganha_opcao_de_desvincular_com_senha():
+    """Desvincular sem definir senha deixaria a pessoa sem forma de entrar."""
+    app = _app()
+    with patch("requests.get", side_effect=_fake_get),          patch("requests.request", side_effect=_fake_request):
+        app.run(timeout=15)
+
+    assert f"du_{ID_VENDEDOR}" in [t.key for t in app.text_input]
+
+
+def test_sem_ad_configurado_a_secao_nao_aparece():
+    """Instalação sem Active Directory não pode oferecer o recurso — falharia
+    só no clique."""
+    def _get_sem_ldap(url, **kw):
+        if url.endswith("/ldap/status"):
+            return _response(200, {"configurado": False})
+        return _fake_get(url, **kw)
+
+    app = _app()
+    with patch("requests.get", side_effect=_get_sem_ldap),          patch("requests.request", side_effect=lambda m, u, **k: _get_sem_ldap(u, **k) if m == "GET" else _response(200, USUARIOS[1])):
+        app.run(timeout=15)
+
+    assert not any(t.key == f"ad_busca_{ID_ADMIN}" for t in app.text_input)

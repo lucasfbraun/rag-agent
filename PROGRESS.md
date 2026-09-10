@@ -5,6 +5,42 @@ Ver visão geral de fases em [CRONOGRAMA.md](CRONOGRAMA.md).
 
 ---
 
+## 2026-09-10 — Sessão 36: vínculo de usuário com o Active Directory
+
+**Pedido do usuário:** "quero poder vincular um usuário criado a um usuário do Active Directory", com as credenciais do domínio da Flexível.
+
+**Nenhuma migration foi necessária.** O modelo já previa isto desde 2026-08-24 (`docs/spec_rbac.md`): `origem` (`manual`/`ldap`), `external_id` único e `password_hash` nullable existiam justamente para o "modelo híbrido futuro sem migração de schema". A decisão de projeto da Fase 5 se pagou aqui.
+
+**O AD foi validado ao vivo antes de qualquer código:** LDAPS na 636 aberto e credenciais aceitas. Isso mudou a qualidade da entrega — o teste de integração roda contra o diretório real, não só contra mocks.
+
+### Decisões que valem registro
+
+**`external_id` guarda o `objectGUID`, não o DN nem o `sAMAccountName`.** Os dois últimos MUDAM: o DN quando a pessoa é movida de OU (uma reorganização de TI basta), o login quando alguém é renomeado. O `objectGUID` é imutável. E o login do AD é resolvido a partir do GUID **a cada autenticação**, em vez de guardado — é isso que faz um usuário renomeado no AD continuar entrando. Guardar o `sAMAccountName` seria mais rápido e quebraria em silêncio no dia em que a TI corrigisse a grafia de um nome.
+
+**Vincular APAGA a senha local.** É o ponto principal da operação, não um efeito colateral: com a senha local viva a pessoa teria duas credenciais, e a TI desligaria a conta no AD achando que cortou o acesso enquanto ela continuaria entrando com a senha antiga — o oposto do motivo de centralizar no AD.
+
+**Desvincular exige a senha nova no mesmo passo.** Usuário LDAP tem `password_hash` NULL; desvincular sem definir senha deixaria a conta viva e o dono trancado do lado de fora.
+
+**O AD não decide perfil nem permissão.** Ele só responde "esta senha é desta pessoa?". Vincular perfil a grupo do AD amarraria a autorização da aplicação à estrutura de OUs da TI, que muda por motivos que não têm nada a ver com este sistema.
+
+**Conta desabilitada ou apagada no AD não autentica**, mesmo com o vínculo de pé — sem depender de alguém lembrar de desativar nos dois lugares.
+
+### Detalhes de protocolo que só o AD real revelaria
+
+- **`objectGUID` num filtro de busca é binário**, e precisa ir como bytes escapados com os três primeiros grupos em **little-endian**. Passar o GUID em texto não casa com nada e **não dá erro**: a busca volta vazia, o vínculo parece "conta não encontrada", e nenhum mock pegaria isso. É a razão de `test_ldap_service_real.py` existir.
+- **Bind com senha vazia é bind ANÔNIMO, e o LDAP responde SUCESSO.** Sem a guarda em `autenticar()`, qualquer pessoa entraria deixando o campo senha em branco.
+- **`(objectClass=user)` sozinho traz contas de COMPUTADOR** no AD; o filtro exige também `(objectCategory=person)`.
+- **A rota `/ldap/search` precisou vir ANTES de `/{user_id}`** no router: o FastAPI casa na ordem de declaração, e "ldap" seria lido como um UUID inválido, devolvendo 422 sem nunca chegar na busca.
+- A caixa de busca passa por allowlist de caracteres: um `*` ou `)` mudaria a **estrutura** do filtro LDAP — mesma classe de problema de uma injeção de SQL.
+
+### Segurança
+
+LDAPS (636) por padrão, não 389 — no bind de login a senha do usuário atravessa a rede, e em 389 ela vai em texto claro. `LDAP_VALIDAR_CERTIFICADO` é `false` por padrão (AD corporativo usa CA interna, ausente do truststore do container): **débito consciente**, protege contra escuta passiva, não contra man-in-the-middle interno. A senha do AD nunca é persistida, e o detalhe de erro do `ldap3` (host, porta, DN da conta de serviço) fica só no log — o cliente recebe mensagem genérica, mesma disciplina do AUD-011.
+
+**Testes:** 24 novos — 13 de vínculo/autenticação (diretório mockado) e **11 contra o AD REAL**, que pulam sozinhos onde não há AD, para não quebrar a suíte de quem roda em outra máquina. 373/374 no host (a única falha é artefato de ambiente: `test_ingest_admin_com_token_retorna_200` usa um caminho que só existe dentro do container) e 36/36 no frontend.
+
+---
+
 ## 2026-09-09 — Sessão 35d: marca oficial aplicada e o bug de 422 que a duplicação causou
 
 **Dois pedidos do usuário nesta parte:** "adicione o ícone do nosso projeto e a logo também" e, antes disso, um relato de erro real testando a tela: `❌ Erro inesperado: 422 Client Error: Unprocessable Entity for url: http://backend:8000/api/match/stream`.

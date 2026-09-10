@@ -8,7 +8,7 @@ password_hash.
 """
 from pydantic import BaseModel
 
-from app.models import Role, User, UserStatus
+from app.models import Role, User, UserOrigin, UserStatus
 
 
 class UsuarioResponse(BaseModel):
@@ -19,10 +19,16 @@ class UsuarioResponse(BaseModel):
     email: str
     perfil: Role
     status: UserStatus
+    # A tela precisa saber se o login é local ou do AD para mostrar o vínculo e
+    # esconder "redefinir senha" de quem autentica no diretório — redefinir
+    # senha de usuário LDAP não teria efeito nenhum.
+    origem: UserOrigin
+    external_id: str | None
 
     @classmethod
     def from_user(cls, user: User) -> "UsuarioResponse":
         return cls(
             id=str(user.id), username=user.username, nome=user.nome,
             email=user.email, perfil=user.perfil, status=user.status,
+            origem=user.origem, external_id=user.external_id,
         )

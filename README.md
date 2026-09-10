@@ -150,6 +150,38 @@ Desativar **não apaga** a conta: o histórico de conversas e o feedback da pess
 
 > A tela é a interface de `/api/auth/users`; a autorização continua sendo decidida no backend (`Permission.MANAGE_USERS`). O primeiro Admin TI ainda precisa ser criado pelo comando descrito acima — é ele quem cadastra os demais.
 
+### Vincular um usuário ao Active Directory
+
+Quando há AD configurado, o cartão de cada usuário (em "Usuários e perfis") ganha a seção **Active Directory**: procure a pessoa pelo nome, login ou e-mail e clique em **Vincular**. A partir daí ela entra no PU Matcher com a **senha da rede**.
+
+**Vincular apaga a senha local**, e isso é o ponto principal, não um efeito colateral: manter a senha local viva daria à pessoa duas credenciais válidas — a TI desligaria a conta no AD achando que cortou o acesso, e ela continuaria entrando aqui com a senha antiga.
+
+Outras regras que o servidor aplica (a tela apenas as comunica):
+
+- Conta **desabilitada** no AD não pode ser vinculada, e deixa de autenticar se for desabilitada depois — sem depender de alguém lembrar de desativar nos dois lugares.
+- Uma conta do AD só pode ser vinculada a **um** usuário (`external_id` é único).
+- **Desvincular exige definir a senha local no mesmo passo**: usuário de origem LDAP tem `password_hash` nulo, e desvincular sem senha o deixaria sem forma nenhuma de entrar.
+- Desativar o usuário **aqui** corta o acesso mesmo que ele siga ativo no AD.
+
+O vínculo é gravado pelo **`objectGUID`**, não pelo `distinguishedName` nem pelo `sAMAccountName`. Os dois últimos mudam — o DN quando a pessoa é movida de OU, o login quando alguém é renomeado. O `objectGUID` é imutável, e o login do AD é resolvido a partir dele a cada autenticação: **renomear alguém no AD não quebra o login aqui.**
+
+O que o AD **não** decide: perfil e permissões. A conta continua sendo criada e governada no PU Matcher; o diretório só responde "esta senha é desta pessoa?". Amarrar perfil a grupo do AD prenderia a autorização da aplicação à estrutura de OUs da TI, que muda por motivos alheios a este sistema.
+
+Configuração em `.env` (todas opcionais — sem `LDAP_SERVER` o recurso simplesmente não aparece):
+
+```bash
+LDAP_SERVER=10.1.1.205
+LDAP_DOMAIN=empresa.local
+LDAP_BASE_DN=DC=empresa,DC=local
+LDAP_BIND_USER=conta.servico@empresa.local
+LDAP_BIND_PASSWORD=...        # a conta precisa apenas de LEITURA no diretório
+LDAP_PORT=636                 # LDAPS. Em 389 a senha trafega em TEXTO CLARO
+LDAP_USE_SSL=true
+LDAP_VALIDAR_CERTIFICADO=false
+```
+
+> **Débito consciente:** `LDAP_VALIDAR_CERTIFICADO=false` é o padrão porque AD corporativo costuma usar certificado de CA interna, ausente do truststore do container. Isso protege contra escuta passiva, **não** contra man-in-the-middle dentro da rede. Ligue a validação quando a CA interna estiver instalada na imagem do backend.
+
 ## Estrutura do projeto
 
 ```
