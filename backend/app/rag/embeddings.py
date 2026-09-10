@@ -1,5 +1,25 @@
 from typing import List
+from contextlib import contextmanager
+from contextvars import ContextVar
 import litellm
+
+
+_vetores_da_consulta: ContextVar[dict | None] = ContextVar("vetores_da_consulta", default=None)
+
+
+@contextmanager
+def reutilizar_embeddings_na_consulta():
+    """Reutiliza vetores só durante a preparação de UMA consulta.
+
+    Catálogo e treinamento pesquisam a mesma pergunta com o mesmo modelo.
+    O contexto é descartado inclusive em falhas e não armazena documentos,
+    respostas ou resultados sujeitos a permissões/alterações do acervo.
+    """
+    token = _vetores_da_consulta.set({})
+    try:
+        yield
+    finally:
+        _vetores_da_consulta.reset(token)
 
 
 def get_embedding(text: str, model: str) -> List[float]:
@@ -10,7 +30,13 @@ def get_embedding(text: str, model: str) -> List[float]:
     foi removido em 2026-09-09: o projeto passou a usar só motores pagos, por
     decisão do usuário. Está no histórico do git se o Ollama voltar.
     """
-    return get_embeddings([text], model)[0]
+    cache = _vetores_da_consulta.get()
+    if cache is None:
+        return get_embeddings([text], model)[0]
+    key = (model, text)
+    if key not in cache:
+        cache[key] = tuple(get_embeddings([text], model)[0])
+    return list(cache[key])
 
 
 def get_embeddings(texts: List[str], model: str) -> List[List[float]]:

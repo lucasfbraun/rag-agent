@@ -2,6 +2,7 @@ import json
 import logging
 import re
 import unicodedata
+from concurrent.futures import ThreadPoolExecutor
 from typing import List, Dict, Any, Optional
 import litellm
 from qdrant_client.http import models as qmodels
@@ -14,7 +15,7 @@ from app.rag.doc_sections import (
     montar_instrucao_de_secao,
     termos_de_indice,
 )
-from app.rag.embeddings import get_embedding
+from app.rag.embeddings import get_embedding, reutilizar_embeddings_na_consulta
 from app.rag.treinamento import montar_bloco as montar_bloco_de_treinamento
 from app.rag.exceptions import RetrievalIndisponivelError
 from app.rag.spec_search import (
@@ -799,6 +800,48 @@ DIRETRIZ DE PADRONIZAÇÃO DE RESPOSTA:
 """
 
 
+def _preparar_contexto(query: str, incluir_sensivel: bool):
+    # O escopo termina antes de qualquer yield do streaming: não deixa estado
+    # de uma requisição ativo enquanto outra é atendida na mesma thread.
+    with reutilizar_embeddings_na_consulta():
+        docs = retrieve_products_context(query, incluir_sensivel=incluir_sensivel)
+        return docs, _montar_context_str(query, docs)
+
+
+_FERRAMENTAS_DE_LEITURA_PARALELAS = frozenset({
+    "consultar_estatisticas_catalogo",
+    "consultar_produtos_por_aplicacao",
+    "consultar_produtos_por_especificacao",
+})
+
+
+def _executar_tool_calls(tool_calls, *, ver_custos: bool, ver_laudo_completo: bool):
+    """Consultas independentes concorrem; mensagens mantêm a ordem do modelo.
+
+    A lista explícita impede que uma futura ferramenta de escrita herde
+    paralelismo sem revisão. Cada consulta cria seu próprio cliente Qdrant.
+    """
+    def executar(tool_call):
+        name = tool_call.function.name
+        try:
+            args = json.loads(tool_call.function.arguments)
+        except json.JSONDecodeError as e:
+            logger.warning("Argumentos inválidos da tool_call %s (%s): %s", tool_call.id, name, e)
+            result = json.dumps({"erro": "argumentos JSON inválidos, tente novamente"})
+        else:
+            result = execute_mcp_tool(
+                name, args, ver_custos=ver_custos, ver_laudo_completo=ver_laudo_completo
+            )
+        return {"role": "tool", "tool_call_id": tool_call.id, "name": name, "content": result}
+
+    if len(tool_calls) > 1 and all(
+        call.function.name in _FERRAMENTAS_DE_LEITURA_PARALELAS for call in tool_calls
+    ):
+        with ThreadPoolExecutor(max_workers=min(4, len(tool_calls))) as executor:
+            return list(executor.map(executar, tool_calls))
+    return [executar(call) for call in tool_calls]
+
+
 def run_pu_matcher_agent(
     query: str,
     template_id: str = "proposta_tecnica_completa",
@@ -823,8 +866,7 @@ def run_pu_matcher_agent(
         }
 
     query_recuperacao = _montar_query_recuperacao(query, history)
-    docs = retrieve_products_context(query_recuperacao, incluir_sensivel=ver_custos)
-    context_str = _montar_context_str(query_recuperacao, docs)
+    docs, context_str = _preparar_contexto(query_recuperacao, ver_custos)
     system_instruction = _montar_system_instruction(template_id)
 
     messages = [{"role": "system", "content": system_instruction}]
@@ -856,30 +898,10 @@ MENSAGEM / DEMANDA DO VENDEDOR OU CLIENTE:
         # mesma mensagem assistant repetida entre as respostas das tools,
         # sequência inválida pro protocolo de tool calling com 2+ chamadas).
         messages.append(choice.message)
-        for tool_call in choice.message.tool_calls:
-            fn_name = tool_call.function.name
-            try:
-                fn_args = json.loads(tool_call.function.arguments)
-            except json.JSONDecodeError as e:
-                logger.warning(
-                    "Argumentos inválidos da tool_call %s (%s): %s", tool_call.id, fn_name, e
-                )
-                messages.append({
-                    "role": "tool",
-                    "tool_call_id": tool_call.id,
-                    "name": fn_name,
-                    "content": json.dumps({"erro": "argumentos JSON inválidos, tente novamente"}),
-                })
-                continue
-            tool_result = execute_mcp_tool(
-                fn_name, fn_args, ver_custos=ver_custos, ver_laudo_completo=ver_laudo_completo
-            )
-            messages.append({
-                "role": "tool",
-                "tool_call_id": tool_call.id,
-                "name": fn_name,
-                "content": tool_result
-            })
+        messages.extend(_executar_tool_calls(
+            choice.message.tool_calls,
+            ver_custos=ver_custos, ver_laudo_completo=ver_laudo_completo,
+        ))
         final_response = litellm.completion(model=model_name, messages=messages, temperature=0.2, num_retries=3)
         answer = final_response.choices[0].message.content
     else:
@@ -899,23 +921,16 @@ def stream_pu_matcher_agent(
     ver_laudo_completo: bool = False,
 ):
     """
-    Versão streaming do agente: gera chunks de texto à medida que o LLM responde.
-    Usa Server-Sent Events (SSE) — cada chunk é um JSON com campo 'delta' ou 'done'.
+    Entrega eventos NDJSON, validando a resposta inteira antes de expor texto.
 
     `ver_custos`/`ver_laudo_completo` (AUD-002, ticket 6 + tool calling em
     streaming): repassados ao RAG (`incluir_sensivel`) e às ferramentas MCP,
     mesmo contrato de `run_pu_matcher_agent`. Default False, fail-closed.
 
-    Tool calling: streaming e "decidir chamar uma ferramenta" não dá pra
-    fazer ao mesmo tempo (não dá pra streamar uma resposta que ainda depende
-    de uma tool_call não resolvida) — por isso o protocolo é: 1ª chamada ao
-    LLM SEM stream, só pra ver se ele quer chamar ferramenta; se quiser,
-    resolve e injeta o resultado nas mensagens; a resposta final aí sim é
-    streamada. Antes desta sessão o streaming simplesmente não suportava tool
-    calling (só o RAG rodava aqui) — gap real: o frontend só usa o endpoint
-    de streaming, então nenhuma ferramenta MCP (incluindo
-    `consultar_estatisticas_catalogo`, ver app.mcp.pu_mcp_server) era
-    alcançável de verdade pela tela que o usuário usa.
+    A primeira chamada pode resolver a pergunta diretamente ou pedir tools.
+    Só o segundo caso precisa de outra geração. Em ambos, os guardrails são
+    aplicados antes do primeiro delta; a resposta direta não é descartada e
+    gerada de novo apenas para obter chunks.
     """
     import json as _json
 
@@ -931,7 +946,7 @@ def stream_pu_matcher_agent(
 
     try:
         query_recuperacao = _montar_query_recuperacao(query, history)
-        docs = retrieve_products_context(query_recuperacao, incluir_sensivel=ver_custos)
+        docs, context_str = _preparar_contexto(query_recuperacao, ver_custos)
     except RetrievalIndisponivelError:
         logger.error("Catálogo indisponível — abortando stream sem chamar o LLM.")
         yield _json.dumps({
@@ -941,7 +956,6 @@ def stream_pu_matcher_agent(
         yield _json.dumps({"type": "done"}) + "\n"
         return
 
-    context_str = _montar_context_str(query_recuperacao, docs)
     system_instruction = _montar_system_instruction(template_id)
 
     messages = [{"role": "system", "content": system_instruction}]
@@ -974,43 +988,24 @@ MENSAGEM / DEMANDA DO VENDEDOR OU CLIENTE:
             # Mesma disciplina de run_pu_matcher_agent (AUD-006): 1 mensagem
             # assistant com TODAS as tool_calls, seguida de N mensagens tool.
             messages.append(choice.message)
-            for tool_call in choice.message.tool_calls:
-                fn_name = tool_call.function.name
-                try:
-                    fn_args = json.loads(tool_call.function.arguments)
-                except json.JSONDecodeError as e:
-                    logger.warning(
-                        "Argumentos inválidos da tool_call %s (%s): %s", tool_call.id, fn_name, e
-                    )
-                    messages.append({
-                        "role": "tool",
-                        "tool_call_id": tool_call.id,
-                        "name": fn_name,
-                        "content": json.dumps({"erro": "argumentos JSON inválidos, tente novamente"}),
-                    })
-                    continue
-                tool_result = execute_mcp_tool(
-                    fn_name, fn_args, ver_custos=ver_custos, ver_laudo_completo=ver_laudo_completo
-                )
-                messages.append({
-                    "role": "tool",
-                    "tool_call_id": tool_call.id,
-                    "name": fn_name,
-                    "content": tool_result,
-                })
-
-        response = litellm.completion(
-            model=model_name,
-            messages=messages,
-            temperature=0.2,
-            stream=True,
-            num_retries=3
-        )
-        partes = []
-        for chunk in response:
-            delta = chunk.choices[0].delta.content
-            if delta:
-                partes.append(delta)
+            messages.extend(_executar_tool_calls(
+                choice.message.tool_calls,
+                ver_custos=ver_custos, ver_laudo_completo=ver_laudo_completo,
+            ))
+            response = litellm.completion(
+                model=model_name,
+                messages=messages,
+                temperature=0.2,
+                stream=True,
+                num_retries=3
+            )
+            partes = []
+            for chunk in response:
+                delta = chunk.choices[0].delta.content
+                if delta:
+                    partes.append(delta)
+        else:
+            partes = [choice.message.content or ""]
         resposta_original = "".join(partes)
         resposta_validada = _aplicar_guardrails_resposta(query, resposta_original, history)
         if resposta_validada == resposta_original:

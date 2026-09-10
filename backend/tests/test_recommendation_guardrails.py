@@ -7,6 +7,7 @@ validação e entrega da resposta continuam reais.
 import json
 from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
+import pytest
 
 from app.conversation_service import history_for_agent
 from app.rag.engine import run_pu_matcher_agent, stream_pu_matcher_agent
@@ -56,17 +57,24 @@ def test_run_bloqueia_recomendacao_de_familia_rejeitada(mock_completion, _mock_r
 
 @patch("app.rag.engine.retrieve_products_context", return_value=[])
 @patch("app.rag.engine.litellm.completion")
-def test_stream_nao_vaza_resposta_insegura_em_nenhum_delta(mock_completion, _mock_retrieve):
-    initial = MagicMock()
-    initial.choices = [MagicMock()]
-    initial.choices[0].message.tool_calls = None
+@pytest.mark.parametrize("usa_ferramenta", [False, True])
+def test_stream_nao_vaza_resposta_insegura_em_nenhum_delta(mock_completion, _mock_retrieve, usa_ferramenta):
+    initial = _completion(RESPOSTA_INSEGURA)
+    if usa_ferramenta:
+        initial.choices[0].message.tool_calls = [SimpleNamespace(
+            id="consulta_1", function=SimpleNamespace(
+                name="consultar_estatisticas_catalogo", arguments="{}",
+            ),
+        )]
     mock_completion.side_effect = [initial, _stream(RESPOSTA_INSEGURA)]
 
-    events = [json.loads(line) for line in stream_pu_matcher_agent(query=REJEICAO)]
+    with patch("app.rag.engine.execute_mcp_tool", return_value='{"produtos_catalogados": 1}'):
+        events = [json.loads(line) for line in stream_pu_matcher_agent(query=REJEICAO)]
     answer = "".join(event.get("content", "") for event in events if event["type"] == "delta")
 
     assert "Produto Recomendado: FLEXX ADT" not in answer
     assert "foi descartada" in answer
+    assert mock_completion.call_count == (2 if usa_ferramenta else 1)
 
 
 @patch("app.rag.engine.retrieve_products_context", return_value=[])
@@ -101,10 +109,7 @@ def test_followup_recupera_com_demanda_anterior_e_correcao_atual(mock_completion
 @patch("app.rag.engine.retrieve_products_context", return_value=[])
 @patch("app.rag.engine.litellm.completion")
 def test_stream_followup_tambem_recupera_com_demanda_anterior(mock_completion, mock_retrieve):
-    initial = MagicMock()
-    initial.choices = [MagicMock()]
-    initial.choices[0].message.tool_calls = None
-    mock_completion.side_effect = [initial, _stream("Vou procurar outra família.")]
+    mock_completion.return_value = _completion("Vou procurar outra família.")
 
     list(stream_pu_matcher_agent(
         query=REJEICAO,

@@ -48,10 +48,7 @@ def test_run_pu_matcher_agent_sem_ver_custos_nao_inclui_sensivel(mock_completion
 @patch("app.rag.engine.retrieve_products_context", return_value=[])
 @patch("app.rag.engine.litellm.completion")
 def test_stream_pu_matcher_agent_aceita_e_repassa_ver_custos(mock_completion, mock_retrieve):
-    # streaming agora resolve tool calling antes de streamar: 1ª chamada
-    # (sem stream) decide se há tool_call, 2ª chamada (stream=True) gera a
-    # resposta final — precisa mockar as duas etapas.
-    mock_completion.side_effect = [_final_completion("ok"), iter([])]
+    mock_completion.return_value = _final_completion("ok")
 
     list(stream_pu_matcher_agent(query="teste", ver_custos=True))
 

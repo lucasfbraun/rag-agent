@@ -22,9 +22,8 @@ Também cobre `stream_pu_matcher_agent()`: até esta sessão o streaming não
 suportava tool calling (só o RAG rodava ali) — gap real, já que o frontend
 só usa o endpoint de streaming, então nenhuma ferramenta MCP (nem a
 `consultar_estatisticas_catalogo` nova) era alcançável de verdade pela tela
-que o usuário usa. Streaming resolve a tool call numa 1ª chamada SEM stream,
-só a resposta final é streamada — não dá pra streamar uma resposta que
-ainda depende de decidir chamar ferramenta.
+que o usuário usa. Quando há tool calls, elas são resolvidas antes da geração
+final. Quando a primeira chamada já traz a resposta, ela é validada e entregue.
 """
 import json
 from unittest.mock import MagicMock, patch
@@ -174,14 +173,12 @@ def test_stream_resolve_tool_call_antes_de_streamar_resposta_final(
 @patch("app.rag.engine.retrieve_products_context", return_value=[])
 @patch("app.rag.engine.execute_mcp_tool")
 @patch("app.rag.engine.litellm.completion")
-def test_stream_sem_tool_call_vai_direto_pro_streaming(mock_completion, mock_execute, mock_retrieve):
-    resp_sem_tool_call = MagicMock()
-    resp_sem_tool_call.choices = [MagicMock()]
-    resp_sem_tool_call.choices[0].message.tool_calls = None
-    mock_completion.side_effect = [resp_sem_tool_call, _stream_delta_chunks(["ok"])]
+def test_stream_sem_tool_call_reutiliza_resposta_pronta(mock_completion, mock_execute, mock_retrieve):
+    mock_completion.return_value = _final_completion("ok")
 
     eventos = [json.loads(linha) for linha in stream_pu_matcher_agent(query="teste")]
 
     mock_execute.assert_not_called()
+    mock_completion.assert_called_once()
     deltas = [e["content"] for e in eventos if e["type"] == "delta"]
     assert deltas == ["ok"]
