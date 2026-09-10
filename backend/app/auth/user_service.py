@@ -14,7 +14,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from app.auth.security import DUMMY_PASSWORD_HASH, hash_password, verify_password
-from app.models import Role, User, UserOrigin, UserStatus
+from app.models import Perfil, PerfilPermissao, Role, User, UserOrigin, UserStatus
 
 
 class UsuarioJaExisteError(ValueError):
@@ -38,10 +38,33 @@ class VinculoLDAPInvalidoError(ValueError):
     ou já vinculada a outro usuário."""
 
 
+class PerfilInexistenteError(ValueError):
+    """O perfil informado não existe no catálogo."""
+
+
 class UltimoAdminError(ValueError):
     """A operação deixaria zero Admin TI ativos — nenhuma mudança de perfil
     ou desativação pode zerar esse número (ver AUD-004,
     docs/auditoria_2026-08-25.md)."""
+
+
+def resolver_perfil(session: Session, perfil) -> Perfil:
+    """Aceita o registro de `Perfil`, o slug em texto, ou o enum `Role`.
+
+    Os chamadores naturalmente têm coisas diferentes em mãos: a API recebe
+    slug, a semente e os testes usam o enum `Role` (que sobrevive como catálogo
+    dos perfis semeados), e o serviço de perfis já tem o registro. Resolver num
+    lugar só evita que cada chamador faça a própria consulta — e que um deles
+    esqueça de tratar "perfil não existe"."""
+    if isinstance(perfil, Perfil):
+        return perfil
+    slug = perfil.value if isinstance(perfil, Role) else str(perfil)
+    encontrado = session.execute(
+        select(Perfil).where(Perfil.slug == slug)
+    ).scalar_one_or_none()
+    if encontrado is None:
+        raise PerfilInexistenteError(f"Perfil '{slug}' não existe.")
+    return encontrado
 
 
 def _get_user_or_raise(session: Session, user_id) -> User:
@@ -59,31 +82,50 @@ def _flush_or_raise_duplicate(session: Session, mensagem: str) -> None:
         raise UsuarioJaExisteError(mensagem) from e
 
 
+def _usuario_administra(user: User) -> bool:
+    from app.auth.permissions import PERMISSAO_DE_ADMINISTRACAO
+
+    return (
+        user.perfil is not None
+        and PERMISSAO_DE_ADMINISTRACAO.value in user.perfil.nomes_de_permissoes()
+    )
+
+
 def _contar_admins_ativos_exceto(session: Session, user_id) -> int:
+    """Usuários ATIVOS cujo perfil administra, ignorando um id.
+
+    Desde 2026-09-10 a checagem é por PERMISSÃO, não pelo perfil "admin_ti":
+    com perfis editáveis pela tela, o administrador pode ser um perfil criado
+    hoje de manhã, e amarrar a invariante a um slug fixo a tornaria mentira."""
+    from app.auth.permissions import PERMISSAO_DE_ADMINISTRACAO
+
     return session.execute(
-        select(func.count()).select_from(User).where(
-            User.perfil == Role.ADMIN_TI,
+        select(func.count())
+        .select_from(User)
+        .join(Perfil, User.perfil_id == Perfil.id)
+        .join(PerfilPermissao, PerfilPermissao.perfil_id == Perfil.id)
+        .where(
             User.status == UserStatus.ATIVO,
             User.id != user_id,
+            PerfilPermissao.permissao == PERMISSAO_DE_ADMINISTRACAO.value,
         )
     ).scalar_one()
 
 
 def _garantir_que_nao_zera_admins_ativos(session: Session, user: User) -> None:
     """Chamar ANTES de aplicar uma mudança que tire `user` da condição
-    "Admin TI ativo" (rebaixar perfil ou desativar). Só levanta erro se `user`
-    é hoje um admin ativo E não sobra nenhum outro — editar/desativar
-    qualquer outro perfil, ou um admin já inativo, não aciona isto."""
-    if user.perfil != Role.ADMIN_TI or user.status != UserStatus.ATIVO:
+    "administrador ativo" (mudar de perfil ou desativar). Só levanta erro se
+    `user` administra hoje E não sobra nenhum outro."""
+    if not _usuario_administra(user) or user.status != UserStatus.ATIVO:
         return
     if _contar_admins_ativos_exceto(session, user.id) == 0:
         raise UltimoAdminError(
-            "Esta operação deixaria o sistema sem nenhum Admin TI ativo — "
-            "promova outro usuário a Admin TI antes de continuar."
+            "Esta operação deixaria o sistema sem nenhum administrador ativo — "
+            "dê perfil de administração a outro usuário antes de continuar."
         )
 
 
-def create_user(session: Session, *, username: str, nome: str, email: str, password: str, perfil: Role) -> User:
+def create_user(session: Session, *, username: str, nome: str, email: str, password: str, perfil) -> User:
     """Cria um usuário de origem manual. Levanta SenhaFracaError (ver security.py)
     se a senha não atender ao mínimo, ou UsuarioJaExisteError se username/email já existem."""
     user = User(
@@ -91,7 +133,7 @@ def create_user(session: Session, *, username: str, nome: str, email: str, passw
         nome=nome,
         email=email,
         password_hash=hash_password(password),
-        perfil=perfil,
+        perfil=resolver_perfil(session, perfil),
         origem=UserOrigin.MANUAL,
     )
     session.add(user)
@@ -112,14 +154,16 @@ def list_users(session: Session) -> list[User]:
 
 
 def update_user(session: Session, user_id, *, nome: str | None = None, email: str | None = None,
-                 perfil: Role | None = None) -> User:
+                 perfil=None) -> User:
     """Atualiza campos mutáveis de negócio. NÃO mexe em senha/origem/external_id —
     troca de senha é set_password(); origem/external_id não são editáveis por aqui
     (mudar a origem de um usuário depois de criado é uma decisão que ainda não tem
     requisito definido — ver docs/spec_rbac.md)."""
     user = _get_user_or_raise(session, user_id)
-    if perfil is not None and perfil != user.perfil:
-        _garantir_que_nao_zera_admins_ativos(session, user)
+    if perfil is not None:
+        perfil = resolver_perfil(session, perfil)
+        if perfil.id != user.perfil_id:
+            _garantir_que_nao_zera_admins_ativos(session, user)
     if nome is not None:
         user.nome = nome
     if email is not None:
@@ -160,7 +204,7 @@ def activate_user(session: Session, user_id) -> User:
 
 
 def create_user_ldap(
-    session: Session, *, external_id: str, perfil: Role,
+    session: Session, *, external_id: str, perfil,
     username: str | None = None, nome: str | None = None, email: str | None = None,
 ) -> User:
     """Cria um usuário já vinculado ao Active Directory, sem senha local.
@@ -195,7 +239,7 @@ def create_user_ldap(
         nome=(nome or conta["nome"] or conta["login"]).strip(),
         email=email_final,
         password_hash=None,  # nunca há senha local para usuário de AD
-        perfil=perfil,
+        perfil=resolver_perfil(session, perfil),
         origem=UserOrigin.LDAP,
         external_id=conta["external_id"],
     )

@@ -38,6 +38,67 @@ class UserOrigin(str, enum.Enum):
     LDAP = "ldap"
 
 
+class Perfil(Base):
+    """Perfil de acesso — o que antes era o enum `Role` fixo em código.
+
+    Virou tabela em 2026-09-10 para o Admin TI criar, editar e excluir perfis
+    pela tela, sem migration nem deploy.
+
+    O que NÃO virou dado: a lista de permissões possíveis, que segue sendo o
+    enum `Permission` em código. Cada permissão só existe porque algum endpoint
+    a verifica — deixar criar permissão pela tela produziria um checkbox que
+    não protege nada. O que é dado é a ATRIBUIÇÃO permissão↔perfil.
+    """
+    __tablename__ = "perfis"
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+
+    # Identificador estável, usado na API e nos testes ("vendedor", "admin_ti").
+    # O `nome` é rótulo de tela e pode ser reescrito sem quebrar integração.
+    slug: Mapped[str] = mapped_column(String(50), unique=True, nullable=False, index=True)
+    nome: Mapped[str] = mapped_column(String(100), nullable=False)
+    descricao: Mapped[str | None] = mapped_column(String(300), nullable=True)
+
+    # Perfis semeados pela migration inicial. Protegido impede EXCLUIR e
+    # renomear o slug — as permissões continuam editáveis. Sem isso, apagar o
+    # "admin_ti" por engano deixaria o sistema sem administração e sem um
+    # caminho óbvio de volta pela tela.
+    protegido: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, default=_utcnow
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, default=_utcnow, onupdate=_utcnow
+    )
+
+    permissoes: Mapped[list["PerfilPermissao"]] = relationship(
+        back_populates="perfil", cascade="all, delete-orphan", lazy="selectin"
+    )
+    usuarios: Mapped[list["User"]] = relationship(back_populates="perfil")
+
+    def nomes_de_permissoes(self) -> set[str]:
+        return {p.permissao for p in self.permissoes}
+
+
+class PerfilPermissao(Base):
+    """Uma permissão concedida a um perfil.
+
+    `permissao` é string, não enum do banco: a lista de permissões muda com o
+    código (cada release pode acrescentar uma), e um enum do Postgres exigiria
+    migration a cada vez. Valor desconhecido é ignorado na checagem, em vez de
+    quebrar — assim um downgrade da aplicação não derruba o login de ninguém.
+    """
+    __tablename__ = "perfil_permissoes"
+
+    perfil_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("perfis.id", ondelete="CASCADE"), primary_key=True
+    )
+    permissao: Mapped[str] = mapped_column(String(60), primary_key=True)
+
+    perfil: Mapped["Perfil"] = relationship(back_populates="permissoes")
+
+
 class User(Base):
     __tablename__ = "users"
 
@@ -52,7 +113,15 @@ class User(Base):
     status: Mapped[UserStatus] = mapped_column(
         SAEnum(UserStatus, name="user_status"), nullable=False, default=UserStatus.ATIVO
     )
-    perfil: Mapped[Role] = mapped_column(SAEnum(Role, name="user_role"), nullable=False)
+    # Perfil deixou de ser enum do Postgres em 2026-09-10: virou linha na tabela
+    # `perfis`, para o Admin TI poder criar/editar/excluir perfis pela tela sem
+    # migration nem deploy. O enum `Role` continua existindo só como catálogo
+    # dos perfis que o sistema semeia (ver Perfil.slug).
+    perfil_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("perfis.id"), nullable=False, index=True
+    )
+    perfil: Mapped["Perfil"] = relationship(back_populates="usuarios", lazy="joined")
+
     origem: Mapped[UserOrigin] = mapped_column(
         SAEnum(UserOrigin, name="user_origin"), nullable=False, default=UserOrigin.MANUAL
     )

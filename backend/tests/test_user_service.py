@@ -112,7 +112,7 @@ def test_update_user_altera_nome_e_perfil(session):
                        password="senha_segura_123", perfil=Role.VENDEDOR)
     updated = update_user(session, user.id, nome="Nome Novo", perfil=Role.GESTOR)
     assert updated.nome == "Nome Novo"
-    assert updated.perfil == Role.GESTOR
+    assert updated.perfil.slug == Role.GESTOR.value
 
 
 def test_update_user_inexistente_levanta_erro(session):

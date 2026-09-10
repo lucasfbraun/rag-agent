@@ -56,9 +56,18 @@ def test_endpoint_devolve_a_lista_na_ordem_e_o_padrao(client, monkeypatch):
     """A ordem importa: é a ordem do seletor, e o primeiro item é o que o
     usuário pega sem escolher nada."""
     from app.auth import dependencies
-    from app.models import Role, User
+    from app.auth.perfil_service import obter_por_slug
+    from app.db import SessionLocal
+    from app.models import User
 
-    usuario = User(username="v", nome="V", email="v@x.com", perfil=Role.VENDEDOR)
+    # Perfil real do banco: `perfil` deixou de ser enum e virou registro, e a
+    # autorização lê as permissões dele.
+    sessao = SessionLocal()
+    try:
+        perfil = obter_por_slug(sessao, "vendedor")
+        usuario = User(username="v", nome="V", email="v@x.com", perfil=perfil)
+    finally:
+        sessao.close()
     app.dependency_overrides[dependencies.get_current_user] = lambda: usuario
     try:
         resposta = client.get("/api/models")

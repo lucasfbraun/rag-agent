@@ -35,6 +35,7 @@ from app.auth.user_service import (
     UltimoAdminError,
     create_user,
     deactivate_user,
+    resolver_perfil,
     update_user,
 )
 from app.main import app
@@ -71,7 +72,7 @@ def _make_admin(session, created_user_ids, **overrides):
     defaults = dict(
         username=f"admin_{unique}", nome="Admin Teste",
         email=f"admin_{unique}@teste.local", password="senha_segura_123",
-        perfil=Role.ADMIN_TI,
+        perfil=resolver_perfil(session, Role.ADMIN_TI),
     )
     defaults.update(overrides)
     user = create_user(session, **defaults)
@@ -93,7 +94,7 @@ def test_rebaixar_o_unico_admin_ativo_e_bloqueado(session, created_user_ids):
 
     session.rollback()
     ainda_admin = session.get(User, admin.id)
-    assert ainda_admin.perfil == Role.ADMIN_TI
+    assert ainda_admin.perfil.slug == Role.ADMIN_TI.value
 
 
 def test_desativar_o_unico_admin_ativo_e_bloqueado(session, created_user_ids):
@@ -119,7 +120,7 @@ def test_rebaixar_um_admin_quando_existe_outro_admin_ativo_e_permitido(session, 
     session.commit()
 
     rebaixado = session.get(User, admin_a.id)
-    assert rebaixado.perfil == Role.VENDEDOR
+    assert rebaixado.perfil.slug == Role.VENDEDOR.value
 
 
 def test_rebaixar_admin_ja_inativo_nao_e_bloqueado_pela_invariante(session, created_user_ids):
@@ -145,7 +146,7 @@ def test_editar_nome_de_admin_sem_mexer_no_perfil_nao_aciona_a_invariante(sessio
 
     atualizado = session.get(User, admin.id)
     assert atualizado.nome == "Novo Nome"
-    assert atualizado.perfil == Role.ADMIN_TI
+    assert atualizado.perfil.slug == Role.ADMIN_TI.value
 
 
 # --- camada HTTP (admin_router.py) -----------------------------------------

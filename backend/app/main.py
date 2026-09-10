@@ -12,6 +12,7 @@ from app.config import (
 )
 from app.auth.router import router as auth_router
 from app.auth.admin_router import router as admin_router
+from app.auth.perfil_router import router as perfil_router
 from app.conversation_router import router as conversation_router
 from app.auth.permissions import Permission, has_permission, require_permission
 from app.models import User
@@ -37,6 +38,7 @@ app = FastAPI(
 )
 app.include_router(auth_router)
 app.include_router(admin_router)
+app.include_router(perfil_router)
 app.include_router(conversation_router)
 
 # ---------------------------------------------------------------------------

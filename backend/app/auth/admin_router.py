@@ -41,7 +41,7 @@ from app.auth.user_service import (
     vincular_ldap,
 )
 from app.db import get_session
-from app.models import Role, User
+from app.models import User
 
 router = APIRouter(prefix="/api/auth/users", tags=["admin-usuarios"])
 
@@ -76,7 +76,7 @@ class CriarUsuarioRequest(BaseModel):
     nome: str
     email: str
     password: str
-    perfil: Role
+    perfil: str
 
 
 class EditarUsuarioRequest(BaseModel):
@@ -85,7 +85,7 @@ class EditarUsuarioRequest(BaseModel):
     documentado em user_service.update_user()."""
     nome: str | None = None
     email: str | None = None
-    perfil: Role | None = None
+    perfil: str | None = None
 
 
 class RedefinirSenhaRequest(BaseModel):
@@ -96,7 +96,7 @@ class CriarUsuarioLDAPRequest(BaseModel):
     """Cadastro já vinculado ao AD. Sem campo de senha, de propósito: usuário
     de origem LDAP não tem senha local."""
     external_id: str
-    perfil: Role
+    perfil: str
     username: str | None = None
     nome: str | None = None
     email: str | None = None
@@ -115,6 +115,23 @@ class DesvincularLDAPRequest(BaseModel):
     new_password: str
 
 
+
+
+def _perfil_por_slug(session: Session, slug: str):
+    """Traduz o slug vindo da API no registro de perfil.
+
+    Erro explícito em vez de deixar a FK estourar: "perfil 'gerente' não
+    existe" é acionável; um erro de integridade do Postgres não é."""
+    from app.auth.user_service import PerfilInexistenteError, resolver_perfil
+
+    try:
+        return resolver_perfil(session, slug)
+    except PerfilInexistenteError:
+        raise HTTPException(
+            status.HTTP_422_UNPROCESSABLE_ENTITY,
+            f"Perfil '{slug}' não existe. Consulte GET /api/auth/perfis.",
+        )
+
 @router.post(
     "", response_model=UsuarioResponse, status_code=status.HTTP_201_CREATED,
     dependencies=[Depends(require_permission(Permission.MANAGE_USERS))],
@@ -123,7 +140,7 @@ def criar_usuario(req: CriarUsuarioRequest, session: Session = Depends(get_sessi
     with _commit_traduzindo_erros(session):
         user = create_user(
             session, username=req.username, nome=req.nome, email=req.email,
-            password=req.password, perfil=req.perfil,
+            password=req.password, perfil=_perfil_por_slug(session, req.perfil),
         )
     return UsuarioResponse.from_user(user)
 
@@ -144,7 +161,8 @@ def criar_usuario_do_ldap(req: CriarUsuarioLDAPRequest, session: Session = Depen
     try:
         with _commit_traduzindo_erros(session):
             user = create_user_ldap(
-                session, external_id=req.external_id, perfil=req.perfil,
+                session, external_id=req.external_id,
+                perfil=_perfil_por_slug(session, req.perfil),
                 username=req.username, nome=req.nome, email=req.email,
             )
     except ldap_service.LDAPIndisponivelError:
@@ -206,7 +224,8 @@ def obter_usuario(user_id: uuid.UUID, session: Session = Depends(get_session)):
 @router.patch("/{user_id}", response_model=UsuarioResponse, dependencies=[Depends(require_permission(Permission.MANAGE_USERS))])
 def editar_usuario(user_id: uuid.UUID, req: EditarUsuarioRequest, session: Session = Depends(get_session)):
     with _commit_traduzindo_erros(session):
-        user = update_user(session, user_id, nome=req.nome, email=req.email, perfil=req.perfil)
+        perfil = _perfil_por_slug(session, req.perfil) if req.perfil else None
+        user = update_user(session, user_id, nome=req.nome, email=req.email, perfil=perfil)
     return UsuarioResponse.from_user(user)
 
 

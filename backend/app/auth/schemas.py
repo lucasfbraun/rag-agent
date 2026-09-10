@@ -8,7 +8,7 @@ password_hash.
 """
 from pydantic import BaseModel
 
-from app.models import Role, User, UserOrigin, UserStatus
+from app.models import User, UserOrigin, UserStatus
 
 
 class UsuarioResponse(BaseModel):
@@ -17,7 +17,14 @@ class UsuarioResponse(BaseModel):
     username: str
     nome: str
     email: str
-    perfil: Role
+    # `perfil` é o SLUG do perfil, não mais um enum: perfis viraram dado em
+    # 2026-09-10 e podem ser criados pela tela. O slug é o identificador
+    # estável; `perfil_nome` é o rótulo para exibir.
+    perfil: str
+    perfil_nome: str
+    # Permissões efetivas do usuário — a tela usa para decidir o que mostrar,
+    # em vez de deduzir do nome do perfil (que agora é livre).
+    permissoes: list[str]
     status: UserStatus
     # A tela precisa saber se o login é local ou do AD para mostrar o vínculo e
     # esconder "redefinir senha" de quem autentica no diretório — redefinir
@@ -29,6 +36,41 @@ class UsuarioResponse(BaseModel):
     def from_user(cls, user: User) -> "UsuarioResponse":
         return cls(
             id=str(user.id), username=user.username, nome=user.nome,
-            email=user.email, perfil=user.perfil, status=user.status,
+            email=user.email,
+            perfil=user.perfil.slug, perfil_nome=user.perfil.nome,
+            permissoes=sorted(user.perfil.nomes_de_permissoes()),
+            status=user.status,
             origem=user.origem, external_id=user.external_id,
+        )
+
+
+class PermissaoResponse(BaseModel):
+    """Uma permissão que o sistema conhece, com o rótulo que a tela mostra —
+    "manage_ingestion" não diz nada a quem está montando um perfil."""
+    chave: str
+    rotulo: str
+
+
+class PerfilResponse(BaseModel):
+    id: str
+    slug: str
+    nome: str
+    descricao: str | None
+    protegido: bool
+    permissoes: list[str]
+    # Quantos usuários usam este perfil: a tela precisa avisar ANTES de alguém
+    # tentar excluir, e não depois do erro.
+    usuarios: int
+    administra: bool
+
+    @classmethod
+    def from_perfil(cls, perfil, usuarios: int = 0) -> "PerfilResponse":
+        from app.auth.permissions import PERMISSAO_DE_ADMINISTRACAO
+
+        permissoes = sorted(perfil.nomes_de_permissoes())
+        return cls(
+            id=str(perfil.id), slug=perfil.slug, nome=perfil.nome,
+            descricao=perfil.descricao, protegido=perfil.protegido,
+            permissoes=permissoes, usuarios=usuarios,
+            administra=PERMISSAO_DE_ADMINISTRACAO.value in permissoes,
         )
