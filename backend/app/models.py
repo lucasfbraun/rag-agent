@@ -260,3 +260,64 @@ class DocumentoEnviado(Base):
 
     enviado_por: Mapped["User"] = relationship(foreign_keys=[enviado_por_id], lazy="joined")
     decidido_por: Mapped["User | None"] = relationship(foreign_keys=[decidido_por_id], lazy="joined")
+
+
+class TipoTreinamento(str, enum.Enum):
+    """As três modalidades escolhidas pelo usuário (docs/spec_treinamento.md).
+
+    Não são variações do mesmo recurso: cada uma responde a uma pergunta
+    diferente e entra num lugar diferente do prompt."""
+    CORRECAO = "correcao"        # "para esta pergunta, a resposta certa é aquela"
+    CONHECIMENTO = "conhecimento"  # "isto é verdade e não está em boletim nenhum"
+    EXEMPLO = "exemplo"          # "responda perguntas assim DESTA FORMA"
+
+
+class ItemTreinamento(Base):
+    """Conhecimento curado pela equipe, recuperado junto com o acervo.
+
+    NÃO é fine-tuning: o aprendizado fica em DADO, não em pesos do modelo.
+    Isso é o que o torna legível, editável e removível — uma correção errada
+    se desfaz apagando uma linha, em vez de exigir uma nova rodada de
+    treinamento. E o projeto continua trocando de LLM por configuração, o que
+    um modelo ajustado impediria.
+
+    Vai para uma coleção Qdrant SEPARADA do acervo — ver
+    `app.rag.treinamento` e a seção 3 de docs/spec_treinamento.md.
+    """
+    __tablename__ = "itens_treinamento"
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    tipo: Mapped[TipoTreinamento] = mapped_column(
+        SAEnum(TipoTreinamento, name="tipo_treinamento"), nullable=False, index=True
+    )
+
+    # Para CORRECAO e EXEMPLO: a pergunta. Para CONHECIMENTO: o título.
+    # Um campo só porque é ele que vira embedding nos três casos — é por ele
+    # que o item é encontrado quando alguém pergunta algo parecido.
+    pergunta: Mapped[str] = mapped_column(Text, nullable=False)
+    # A resposta certa (correção), o fato (conhecimento) ou a resposta modelo.
+    resposta: Mapped[str] = mapped_column(Text, nullable=False)
+    # Só em CORRECAO: o que o agente respondeu errado. Guardado para auditoria
+    # — sem isso não dá para entender depois por que a correção foi criada.
+    resposta_original: Mapped[str | None] = mapped_column(Text, nullable=True)
+
+    status: Mapped[StatusDocumento] = mapped_column(
+        SAEnum(StatusDocumento, name="status_documento"),
+        nullable=False, default=StatusDocumento.PENDENTE, index=True,
+    )
+    motivo_decisao: Mapped[str | None] = mapped_column(Text, nullable=True)
+
+    criado_por_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("users.id"), nullable=False, index=True
+    )
+    decidido_por_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("users.id"), nullable=True
+    )
+
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, default=_utcnow, index=True
+    )
+    decidido_em: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+    criado_por: Mapped["User"] = relationship(foreign_keys=[criado_por_id], lazy="joined")
+    decidido_por: Mapped["User | None"] = relationship(foreign_keys=[decidido_por_id], lazy="joined")

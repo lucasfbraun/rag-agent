@@ -5,6 +5,57 @@ Ver visão geral de fases em [CRONOGRAMA.md](CRONOGRAMA.md).
 
 ---
 
+## 2026-09-10 — Sessão 38 (item 4): treinamento do agente — backend concluído
+
+**Fecha a fila de 4 itens combinada com o usuário.** Ele autorizou a execução (*"pode fazer o item 4"*) antes de responder às perguntas de governança do documento de arquitetura — **as recomendações foram adotadas como decisão e marcadas como tal** em `docs/spec_treinamento.md`, seção 7, para poderem ser revistas.
+
+### Começa pelo que NÃO é
+
+**Não há fine-tuning.** Ajustar pesos exigiria milhares de exemplos, tornaria difícil REMOVER uma informação errada, e prenderia o projeto a um fornecedor — o agente troca de modelo por configuração. O aprendizado fica em **dado**: legível, editável e removível apagando uma linha.
+
+### As três modalidades, e por que a assimetria entre elas
+
+| | Papel | Aprovação |
+|---|---|---|
+| **Correção** | "para esta pergunta, a resposta certa é aquela" | sim |
+| **Conhecimento** | "isto é verdade e não está em boletim nenhum" | sim |
+| **Exemplo** | "responda perguntas assim DESTA FORMA" | não, entra direto |
+
+A assimetria não é arbitrária: correção e conhecimento afirmam **fatos** que o agente repete como verdade da empresa, e um erro ali circula sem ninguém notar. Exemplo afeta só a **forma**, e forma ruim é visível na primeira resposta — não justifica a fricção de uma fila.
+
+### Coleção Qdrant separada (`pu_treinamento`) — três razões concretas
+
+1. A reingestão completa do acervo apagaria o treinamento junto (**aconteceu** na Sessão 35c) — e, ao contrário de um boletim, o treinamento não tem arquivo de origem para ser reindexado a partir de nada: seria perda definitiva.
+2. `catalog_stats` varre a coleção inteira contando produtos. Itens de treinamento entrariam nessas contagens, e a resposta "temos N produtos catalogados" passaria a mentir.
+3. Precedência e limites são diferentes dos do acervo.
+
+O que vira embedding é a **pergunta** (ou o título), não a resposta: o item precisa ser achado quando alguém pergunta algo parecido, e é a pergunta que se parece com a pergunta.
+
+**Teto por consulta:** 2 correções, 3 conhecimentos, 2 exemplos, com corte de similaridade mínima. Sem teto, uma base grande empurraria o acervo para fora do contexto e o agente passaria a responder de memória curada em vez de documento — o oposto do projeto. Sem corte de similaridade, o Qdrant devolve sempre os N mais próximos mesmo quando o mais próximo é distante, e uma correção sobre cortiça apareceria numa pergunta sobre colchão.
+
+### O que o prompt faz com cada tipo — a parte que mais importa
+
+- **Correção** tem a maior precedência, mas **não substitui** a resposta: ela casa por similaridade, e duas perguntas parecidas podem diferir em densidade, norma ou aplicação. O prompt manda CONFERIR se o caso é o mesmo.
+- **Conhecimento** entra como *orientação interna*, nunca como conteúdo de documento — o agente precisa poder dizer "segundo orientação interna" em vez de atribuir aquilo a um boletim que não diz isso. Com a **data**, para pesar a idade.
+- **Exemplo** é marcado como modelo de FORMA, com aviso explícito de que os números dele não valem como fato. Sem essa marcação o LLM copia os valores do exemplo para a resposta real: é o modo de falha clássico de few-shot com conteúdo técnico.
+- **Contradição entre orientação interna e boletim:** o agente não escolhe lado nem esconde — mostra os dois com as fontes e encaminha para P&D. Coerente com os guardrails da Sessão 34.
+
+### Modos de falha cobertos por teste
+
+- Item **pendente** influenciando resposta (só aprovado vai ao índice — senão a aprovação seria decorativa).
+- Item **aprovado que não está no índice**: falha ao indexar DESFAZ a aprovação. Um item marcado como ativo que não influencia nada é pior que um pendente, porque ninguém percebe.
+- Exemplo apresentado como fonte de fato.
+- Orientação interna apresentada como se fosse boletim.
+- Busca de treinamento indisponível **não derruba a consulta** — é complemento, e o acervo responde sozinho.
+
+### Estado
+
+Migration `d4a91c37e2b8` aplicada (reaproveita o enum `status_documento` da fila de documentos: os estados são idênticos, e dois enums iguais com nomes diferentes seriam duas coisas para manter em sincronia sem ganho). **437/438 no backend.** 19 testes novos.
+
+**PENDENTE — a tela** e o botão *"escrever a resposta certa"* no feedback negativo. O backend está completo: `/api/treinamento` com `GET /tipos`, criar, listar, `/aprovar`, `/recusar` e excluir.
+
+---
+
 ## 2026-09-10 — Sessão 38: fila de aprovação de documentos (backend concluído, tela pendente)
 
 **Item 3 de 4.** Pedido do usuário: "no perfil, dar permissão para dizer se este perfil pode fazer upload de arquivos (pdf, word, imagem etc) para inserir o dado no Qdrant". Entre as três opções que apresentei — entra direto, entra marcado e reversível, ou fila de aprovação — ele escolheu **fila de aprovação**.

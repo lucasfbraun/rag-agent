@@ -15,6 +15,7 @@ from app.rag.doc_sections import (
     termos_de_indice,
 )
 from app.rag.embeddings import get_embedding
+from app.rag.treinamento import montar_bloco as montar_bloco_de_treinamento
 from app.rag.exceptions import RetrievalIndisponivelError
 from app.rag.spec_search import (
     buscar_produtos_por_especificacao,
@@ -181,6 +182,13 @@ D) PEDIDO POR ESPECIFICAÇÃO TÉCNICA (o usuário descreve um NÚMERO que o pro
    - RESPONDA COM O TOTAL REAL primeiro, depois a prévia (nome do produto, o valor lido e o documento de origem, 1 linha cada), e então pergunte se ele quer a lista completa ou a ficha de algum item.
    - SE NÃO ENCONTRAR NENHUM: diga claramente que nenhum produto do acervo atende, informe a FAIXA que existe no acervo para aquela propriedade (`faixa_no_acervo`) e pergunte se o valor pedido está correto. NUNCA ofereça um produto de valor diferente como se atendesse ao pedido.
    - Boletim Técnico é a especificação de REFERÊNCIA do produto; Certificado/Laudo vale para o lote analisado. Diga de qual dos dois veio o número que você está usando.
+
+CONHECIMENTO TREINADO PELA EQUIPE — COMO USAR:
+   - Quando o contexto trouxer o bloco "🎓 CONHECIMENTO TREINADO PELA EQUIPE", ele foi escrito por PESSOAS da empresa, não extraído de documento. Trate cada tipo conforme a etiqueta dele:
+   - "⭐ CORREÇÃO REGISTRADA": a equipe já corrigiu a resposta para uma pergunta praticamente igual. Use com prioridade sobre a sua própria formulação — mas CONFIRA se o caso é o mesmo. Se a pergunta atual difere em densidade, norma, aplicação ou produto, diga isso em vez de repetir a correção como se coubesse.
+   - "📌 ORIENTAÇÃO INTERNA": é conhecimento da equipe que NÃO está em boletim nenhum. Apresente como "orientação interna", nunca como se fosse conteúdo de um documento. Cite a data — orientação de 2024 e de 2026 não pesam igual.
+   - "✍️ EXEMPLOS DE COMO RESPONDER": são modelo de FORMA (estrutura, tom, nível de detalhe). Os números e produtos deles são ilustrativos e NÃO valem como fato — nunca os reaproveite na resposta real.
+   - SE A ORIENTAÇÃO INTERNA CONTRADIZER UM BOLETIM do contexto: não escolha um lado nem esconda a divergência. Mostre os dois com as fontes e encaminhe para a equipe técnica/P&D decidir.
 
 REGRAS DE EVIDÊNCIA E CORREÇÃO — OBRIGATÓRIAS:
    - Uma CORREÇÃO EXPLÍCITA DO USUÁRIO é uma restrição obrigatória para o restante da conversa. Se ele disser que uma família não pertence à classe pedida, não serve ou deve ser descartada, NÃO volte a recomendar nenhum produto dessa família.
@@ -733,6 +741,11 @@ def _montar_context_str(query: str, docs: List[Dict[str, Any]]) -> str:
     # original — o agente precisa poder conferir a evidência bruta.
     context_str += resumir_especificacoes_dos_documentos(docs)
     context_str += bloco_especificacao
+    # Conhecimento curado pela equipe (Sessão 38, item 4). Vem DEPOIS dos
+    # documentos de propósito: o que a equipe registrou tem precedência sobre a
+    # formulação do próprio modelo, mas continua sendo lido junto do acervo, e
+    # não no lugar dele. Nunca derruba a consulta — ver treinamento.buscar().
+    context_str += montar_bloco_de_treinamento(query)
     context_str += montar_instrucao_de_secao(detectar_secoes(query))
     return context_str
 

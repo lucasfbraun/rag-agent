@@ -45,6 +45,11 @@ class Permission(str, enum.Enum):
     # necessariamente quem decide o que entra na base que todos consultam.
     UPLOAD_DOCUMENTS = "upload_documents"
     APPROVE_UPLOADS = "approve_uploads"
+    # Sessão 38, item 4: contribuir com o aprendizado do agente. Treinar e
+    # APROVAR treinamento são separados pela mesma razão do upload — correção e
+    # conhecimento afirmam fatos que o agente repete como verdade da empresa.
+    TRAIN_AGENT = "train_agent"
+    APPROVE_TRAINING = "approve_training"
 
 
 # Rótulo de cada permissão na tela de perfis. Fica aqui, junto do enum, porque
@@ -61,6 +66,8 @@ ROTULOS_DE_PERMISSAO: dict[Permission, str] = {
     Permission.MANAGE_INGESTION: "Disparar reindexação do acervo",
     Permission.UPLOAD_DOCUMENTS: "Enviar documentos para o acervo (entram na fila)",
     Permission.APPROVE_UPLOADS: "Aprovar ou recusar documentos enviados",
+    Permission.TRAIN_AGENT: "Treinar o agente (corrigir respostas, registrar conhecimento)",
+    Permission.APPROVE_TRAINING: "Aprovar correções e conhecimento antes de valerem",
 }
 
 # A permissão que caracteriza um perfil "administrador". Quem a tem enxerga a
