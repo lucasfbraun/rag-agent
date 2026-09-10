@@ -598,7 +598,106 @@ def _render_vinculo_ldap(usuario: dict):
                 st.error(retorno)
 
 
+def _render_cadastro_pelo_ad():
+    """Cadastro a partir de uma conta do Active Directory.
+
+    É o caminho preferencial quando há AD: os dados da pessoa já existem no
+    diretório, então digitá-los de novo só cria oportunidade de erro de grafia
+    — e um nome divergente entre os dois sistemas atrapalha auditoria depois.
+
+    A busca fica FORA do formulário de propósito: dentro de um `st.form`, o
+    Streamlit só reexecuta o script no submit, então a lista de resultados
+    nunca apareceria enquanto a pessoa digita."""
+    chave_escolhida = "ad_conta_escolhida"
+
+    escolhida = st.session_state.get(chave_escolhida)
+    if not escolhida:
+        termo = st.text_input(
+            "Procurar no Active Directory", key="ad_novo_busca",
+            placeholder="nome, login ou e-mail",
+        )
+        if len(termo.strip()) < 2:
+            st.caption("Digite ao menos 2 caracteres para procurar.")
+            return
+
+        ok, retorno = _api_usuarios("GET", f"/ldap/search?q={quote(termo.strip())}")
+        if not ok:
+            st.error(retorno)
+            return
+        contas = retorno.get("contas", [])
+        if not contas:
+            st.info("Nenhuma conta encontrada com esse termo.")
+            return
+
+        for conta in contas:
+            coluna_dados, coluna_acao = st.columns([4, 1])
+            with coluna_dados:
+                st.markdown(f"**{conta['nome'] or conta['login']}** · `{conta['login']}`")
+                if not conta["habilitado"]:
+                    st.caption(":red[Conta desabilitada no AD]")
+                else:
+                    st.caption(conta.get("email") or ":orange[sem e-mail no AD]")
+            with coluna_acao:
+                if conta["habilitado"] and st.button(
+                    "Selecionar", key=f"ad_novo_{conta['external_id']}",
+                    use_container_width=True,
+                ):
+                    st.session_state[chave_escolhida] = conta
+                    st.rerun()
+        return
+
+    st.success(f"Conta do AD: **{escolhida['nome'] or escolhida['login']}** · `{escolhida['login']}`")
+    if st.button("Escolher outra conta", key="ad_novo_trocar"):
+        del st.session_state[chave_escolhida]
+        st.rerun()
+
+    with st.form("form_novo_usuario_ad", border=False):
+        col_a, col_b = st.columns(2)
+        # Login e nome vêm do diretório, mas continuam editáveis: o
+        # `displayName` do AD às vezes traz cargo ou setor junto do nome.
+        username = col_a.text_input("Usuário (login)", value=escolhida["login"])
+        nome = col_b.text_input("Nome completo", value=escolhida["nome"] or escolhida["login"])
+        col_c, col_d = st.columns(2)
+        email = col_c.text_input("E-mail", value=escolhida.get("email") or "")
+        perfil = col_d.selectbox(
+            "Perfil", options=list(PERFIS), format_func=_rotulo_perfil, key="ad_novo_perfil"
+        )
+        st.caption(
+            "Sem campo de senha: esta pessoa entra com a **senha da rede**. "
+            "Desligar a conta no AD corta o acesso aqui automaticamente."
+        )
+
+        if st.form_submit_button("Cadastrar com acesso pelo AD", type="primary", use_container_width=True):
+            if not (username and nome and email):
+                st.error("Preencha usuário, nome e e-mail.")
+                return
+            ok, retorno = _api_usuarios("POST", "/ldap", json={
+                "external_id": escolhida["external_id"], "perfil": perfil,
+                "username": username, "nome": nome, "email": email,
+            })
+            if ok:
+                del st.session_state[chave_escolhida]
+                st.success("Usuário cadastrado com acesso pelo Active Directory.")
+                st.rerun()
+            else:
+                st.error(retorno)
+
+
 def _render_form_novo_usuario():
+    # Com AD disponível, o cadastro pelo diretório vem PRIMEIRO: é o caminho
+    # que evita redigitar dados que já existem e que dispensa inventar uma
+    # senha inicial para depois trocá-la.
+    if _ldap_disponivel():
+        origem = st.radio(
+            "Como esta pessoa vai entrar?",
+            ["Active Directory (senha da rede)", "Senha local"],
+            horizontal=True, key="ad_novo_origem",
+        )
+        st.divider()
+        if origem.startswith("Active Directory"):
+            _render_cadastro_pelo_ad()
+            return
+
     with st.form("form_novo_usuario", border=False, clear_on_submit=True):
         col_a, col_b = st.columns(2)
         username = col_a.text_input("Usuário (login)", placeholder="nome.sobrenome")

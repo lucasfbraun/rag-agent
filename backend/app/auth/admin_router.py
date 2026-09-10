@@ -31,6 +31,7 @@ from app.auth.user_service import (
     VinculoLDAPInvalidoError,
     activate_user,
     create_user,
+    create_user_ldap,
     deactivate_user,
     get_user_by_id,
     list_users,
@@ -91,6 +92,16 @@ class RedefinirSenhaRequest(BaseModel):
     new_password: str
 
 
+class CriarUsuarioLDAPRequest(BaseModel):
+    """Cadastro já vinculado ao AD. Sem campo de senha, de propósito: usuário
+    de origem LDAP não tem senha local."""
+    external_id: str
+    perfil: Role
+    username: str | None = None
+    nome: str | None = None
+    email: str | None = None
+
+
 class VincularLDAPRequest(BaseModel):
     """`external_id` é o objectGUID da conta no AD, obtido em
     GET /api/auth/ldap/search — nunca digitado à mão."""
@@ -120,6 +131,29 @@ def criar_usuario(req: CriarUsuarioRequest, session: Session = Depends(get_sessi
 @router.get("", response_model=list[UsuarioResponse], dependencies=[Depends(require_permission(Permission.MANAGE_USERS))])
 def listar_usuarios(session: Session = Depends(get_session)):
     return [UsuarioResponse.from_user(u) for u in list_users(session)]
+
+
+@router.post(
+    "/ldap", response_model=UsuarioResponse, status_code=status.HTTP_201_CREATED,
+    dependencies=[Depends(require_permission(Permission.MANAGE_USERS))],
+)
+def criar_usuario_do_ldap(req: CriarUsuarioLDAPRequest, session: Session = Depends(get_session)):
+    """Cadastra alguém já vinculado ao AD, com os dados vindos do diretório."""
+    from app.auth import ldap_service
+
+    try:
+        with _commit_traduzindo_erros(session):
+            user = create_user_ldap(
+                session, external_id=req.external_id, perfil=req.perfil,
+                username=req.username, nome=req.nome, email=req.email,
+            )
+    except ldap_service.LDAPIndisponivelError:
+        session.rollback()
+        raise HTTPException(
+            status.HTTP_503_SERVICE_UNAVAILABLE,
+            "Não foi possível falar com o Active Directory para confirmar a conta.",
+        )
+    return UsuarioResponse.from_user(user)
 
 
 @router.get("/ldap/status", dependencies=[Depends(require_permission(Permission.MANAGE_USERS))])

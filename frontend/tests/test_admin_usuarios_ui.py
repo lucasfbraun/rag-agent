@@ -196,10 +196,14 @@ def test_reativar_chama_a_rota_de_reativacao():
 
 
 def test_cadastro_envia_perfil_escolhido_e_nao_a_senha_no_lugar_errado():
+    """Cadastro com SENHA LOCAL. Com AD disponível o formulário abre no modo
+    diretório (é o caminho preferencial), então o teste troca para o modo local
+    antes — o que também prova que a alternativa continua acessível."""
     app = _app()
     with patch("requests.get", side_effect=_fake_get), \
          patch("requests.request", side_effect=_fake_request) as request:
         app.run(timeout=15)
+        next(r for r in app.radio if r.key == "ad_novo_origem").set_value("Senha local").run(timeout=15)
         campos = {t.label: t for t in app.text_input}
         campos["Usuário (login)"].set_value("ana.silva")
         campos["Nome completo"].set_value("Ana Silva")
@@ -281,3 +285,42 @@ def test_sem_ad_configurado_a_secao_nao_aparece():
         app.run(timeout=15)
 
     assert not any(t.key == f"ad_busca_{ID_ADMIN}" for t in app.text_input)
+
+
+def test_cadastro_abre_no_modo_active_directory_quando_ha_ad():
+    """Com AD configurado, cadastrar pelo diretório é o caminho preferencial:
+    os dados da pessoa já existem lá, e redigitá-los só cria oportunidade de
+    erro de grafia — nome divergente entre os dois sistemas atrapalha a
+    auditoria depois."""
+    app = _app()
+    with patch("requests.get", side_effect=_fake_get), \
+         patch("requests.request", side_effect=_fake_request):
+        app.run(timeout=15)
+
+    assert not app.exception
+    seletor = next((r for r in app.radio if r.key == "ad_novo_origem"), None)
+    assert seletor is not None, "seletor de origem do cadastro não apareceu"
+    assert seletor.value.startswith("Active Directory")
+    # E o formulário de senha local não é montado enquanto esse modo está ativo.
+    assert "Senha inicial" not in [t.label for t in app.text_input]
+
+
+def test_sem_ad_o_cadastro_cai_direto_no_formulario_local():
+    """Instalação sem diretório não pode mostrar um seletor cuja opção
+    principal não existe ali."""
+    def _get_sem_ldap(url, **kw):
+        if url.endswith("/ldap/status"):
+            return _response(200, {"configurado": False})
+        return _fake_get(url, **kw)
+
+    def _request_sem_ldap(metodo, url, **kw):
+        return _get_sem_ldap(url, **kw) if metodo == "GET" else _response(200, USUARIOS[1])
+
+    app = _app()
+    with patch("requests.get", side_effect=_get_sem_ldap), \
+         patch("requests.request", side_effect=_request_sem_ldap):
+        app.run(timeout=15)
+
+    assert not app.exception
+    assert not any(r.key == "ad_novo_origem" for r in app.radio)
+    assert "Senha inicial" in [t.label for t in app.text_input]

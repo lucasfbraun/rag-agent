@@ -37,6 +37,8 @@ Ver visão geral de fases em [CRONOGRAMA.md](CRONOGRAMA.md).
 
 LDAPS (636) por padrão, não 389 — no bind de login a senha do usuário atravessa a rede, e em 389 ela vai em texto claro. `LDAP_VALIDAR_CERTIFICADO` é `false` por padrão (AD corporativo usa CA interna, ausente do truststore do container): **débito consciente**, protege contra escuta passiva, não contra man-in-the-middle interno. A senha do AD nunca é persistida, e o detalhe de erro do `ldap3` (host, porta, DN da conta de serviço) fica só no log — o cliente recebe mensagem genérica, mesma disciplina do AUD-011.
 
+**Ajuste pedido logo depois de entregar:** o vínculo só existia na EDIÇÃO; cadastrar alguém do AD exigia criar com senha local e vincular em seguida. Agora a aba de cadastro abre num seletor com *Active Directory* como padrão — busca no diretório, seleciona a pessoa e o formulário vem preenchido com login/nome/e-mail, sem campo de senha. `create_user_ldap()` cria já vinculado, em vez do caminho "criar com senha e vincular depois", que gravava um hash bcrypt apagado segundos depois e abria uma janela em que a conta tinha senha local válida. Trata também a conta de AD sem `mail` (a de serviço da própria Flexível não tem): pede o e-mail em vez de deixar o erro vir do banco, ilegível para quem cadastra. 5 testes de serviço + 2 de tela.
+
 **Testes:** 24 novos — 13 de vínculo/autenticação (diretório mockado) e **11 contra o AD REAL**, que pulam sozinhos onde não há AD, para não quebrar a suíte de quem roda em outra máquina. 373/374 no host (a única falha é artefato de ambiente: `test_ingest_admin_com_token_retorna_200` usa um caminho que só existe dentro do container) e 36/36 no frontend.
 
 ---

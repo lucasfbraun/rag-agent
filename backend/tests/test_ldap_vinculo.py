@@ -252,3 +252,89 @@ def test_desvincular_usuario_que_nunca_foi_vinculado_e_recusado(session):
     user = _novo_usuario(s, criados)
     with pytest.raises(VinculoLDAPInvalidoError):
         desvincular_ldap(s, user.id, "NovaSenhaLocal123")
+
+
+# --- cadastro já vinculado ao AD -------------------------------------------
+
+def test_cadastro_pelo_ad_puxa_os_dados_do_diretorio_e_nao_grava_senha(session):
+    """O caminho "criar com senha e vincular depois" gravaria um hash bcrypt
+    apagado segundos depois — trabalho inútil e, pior, uma janela em que a
+    conta tem senha local válida."""
+    from app.auth.user_service import create_user_ldap
+
+    s, criados = session
+    # Login e e-mail únicos: o banco de teste é o REAL, e um login fixo colide
+    # com quem já está cadastrado (o `lucas.braun` de verdade, por exemplo).
+    sufixo = uuid.uuid4().hex[:6]
+    conta = {**CONTA_AD, "login": f"ad.novo.{sufixo}", "nome": "Pessoa Do AD",
+             "email": f"ad.novo.{sufixo}@grupoflexivel.com.br",
+             "external_id": uuid.uuid4().hex[:8] + "-0000-0000-0000-000000000000"}
+
+    with patch("app.auth.ldap_service.obter_por_external_id", return_value=conta):
+        user = create_user_ldap(s, external_id=conta["external_id"], perfil=Role.VENDEDOR)
+    s.commit()
+    criados.append(user.id)
+
+    assert user.password_hash is None
+    assert user.origem == UserOrigin.LDAP
+    assert user.username == conta["login"]
+    assert user.nome == conta["nome"]
+    assert user.email == conta["email"]
+
+
+def test_cadastro_pelo_ad_sem_email_no_diretorio_pede_um(session):
+    """`email` é NOT NULL aqui, e nem toda conta de AD tem `mail` preenchido —
+    a conta de serviço da própria Flexível não tem. Sem esta checagem o erro
+    viria do banco, ilegível para quem está cadastrando."""
+    from app.auth.user_service import create_user_ldap
+
+    s, _ = session
+    conta = {**CONTA_AD, "email": None}
+    with patch("app.auth.ldap_service.obter_por_external_id", return_value=conta):
+        with pytest.raises(VinculoLDAPInvalidoError, match="e-mail"):
+            create_user_ldap(s, external_id=conta["external_id"], perfil=Role.VENDEDOR)
+
+
+def test_cadastro_pelo_ad_aceita_email_informado_quando_o_diretorio_nao_tem(session):
+    from app.auth.user_service import create_user_ldap
+
+    s, criados = session
+    sufixo = uuid.uuid4().hex[:6]
+    conta = {**CONTA_AD, "email": None, "login": f"ad.semmail.{sufixo}",
+             "external_id": uuid.uuid4().hex[:8] + "-1111-1111-1111-111111111111"}
+    with patch("app.auth.ldap_service.obter_por_external_id", return_value=conta):
+        user = create_user_ldap(
+            s, external_id=conta["external_id"], perfil=Role.VENDEDOR,
+            email=f"informado.{sufixo}@grupoflexivel.com.br",
+        )
+    s.commit()
+    criados.append(user.id)
+    assert user.email == f"informado.{sufixo}@grupoflexivel.com.br"
+
+
+def test_cadastro_pelo_ad_recusa_conta_desabilitada(session):
+    from app.auth.user_service import create_user_ldap
+
+    s, _ = session
+    with patch("app.auth.ldap_service.obter_por_external_id", return_value=CONTA_DESABILITADA):
+        with pytest.raises(VinculoLDAPInvalidoError, match="DESABILITADA"):
+            create_user_ldap(s, external_id=GUID, perfil=Role.VENDEDOR)
+
+
+def test_cadastro_pelo_ad_usa_a_senha_da_rede_no_login(session):
+    """Fecha o ciclo: cadastrado pelo AD, autentica pelo AD."""
+    from app.auth.user_service import create_user_ldap
+
+    s, criados = session
+    conta = {**CONTA_AD, "email": "ciclo@grupoflexivel.com.br",
+             "login": f"ciclo.{uuid.uuid4().hex[:6]}",
+             "external_id": uuid.uuid4().hex[:8] + "-2222-2222-2222-222222222222"}
+    with patch("app.auth.ldap_service.obter_por_external_id", return_value=conta):
+        user = create_user_ldap(s, external_id=conta["external_id"], perfil=Role.VENDEDOR)
+    s.commit()
+    criados.append(user.id)
+
+    with patch("app.auth.ldap_service.obter_por_external_id", return_value=conta), \
+         patch("app.auth.ldap_service.autenticar", return_value=True) as autenticar_ad:
+        assert authenticate(s, user.username, "SenhaDaRede").id == user.id
+    autenticar_ad.assert_called_once_with(conta["login"], "SenhaDaRede")

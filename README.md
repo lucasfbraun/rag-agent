@@ -150,7 +150,15 @@ Desativar **não apaga** a conta: o histórico de conversas e o feedback da pess
 
 > A tela é a interface de `/api/auth/users`; a autorização continua sendo decidida no backend (`Permission.MANAGE_USERS`). O primeiro Admin TI ainda precisa ser criado pelo comando descrito acima — é ele quem cadastra os demais.
 
-### Vincular um usuário ao Active Directory
+### Cadastrar um usuário direto do Active Directory
+
+Com AD configurado, a aba **Cadastrar usuário** abre num seletor: *Active Directory* (padrão) ou *Senha local*. No modo AD você procura a pessoa no diretório, clica em **Selecionar**, e o formulário já vem com login, nome e e-mail preenchidos — só falta escolher o perfil. **Não há campo de senha**: quem entra pelo AD não tem senha local.
+
+É o caminho preferencial quando existe diretório: os dados já estão lá, e redigitá-los só cria oportunidade de erro de grafia — nome divergente entre os dois sistemas atrapalha auditoria depois. Os campos continuam editáveis, porque o `displayName` do AD às vezes traz cargo ou setor junto do nome.
+
+Se a conta do AD não tiver e-mail preenchido (acontece com contas de serviço), o sistema pede um: `email` é obrigatório e único aqui.
+
+### Vincular um usuário já existente ao Active Directory
 
 Quando há AD configurado, o cartão de cada usuário (em "Usuários e perfis") ganha a seção **Active Directory**: procure a pessoa pelo nome, login ou e-mail e clique em **Vincular**. A partir daí ela entra no PU Matcher com a **senha da rede**.
 

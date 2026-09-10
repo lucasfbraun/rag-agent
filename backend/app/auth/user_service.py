@@ -159,6 +159,55 @@ def activate_user(session: Session, user_id) -> User:
     return user
 
 
+def create_user_ldap(
+    session: Session, *, external_id: str, perfil: Role,
+    username: str | None = None, nome: str | None = None, email: str | None = None,
+) -> User:
+    """Cria um usuário já vinculado ao Active Directory, sem senha local.
+
+    Existe porque o caminho "criar com senha e vincular depois" grava um hash
+    bcrypt que é apagado segundos depois — trabalho inútil e, pior, uma janela
+    em que a conta tem senha local válida.
+
+    Os dados vêm do diretório por padrão, mas os parâmetros permitem
+    sobrescrever: nem toda conta de AD tem `mail` preenchido, e `email` é
+    NOT NULL aqui. Quando o AD não informa, quem cadastra digita."""
+    from app.auth import ldap_service
+
+    conta = ldap_service.obter_por_external_id(external_id)
+    if conta is None:
+        raise VinculoLDAPInvalidoError(
+            "Conta não encontrada no Active Directory. Refaça a busca — ela pode ter sido removida."
+        )
+    if not conta["habilitado"]:
+        raise VinculoLDAPInvalidoError(
+            f"A conta '{conta['login']}' está DESABILITADA no Active Directory."
+        )
+
+    email_final = (email or conta.get("email") or "").strip()
+    if not email_final:
+        raise VinculoLDAPInvalidoError(
+            f"A conta '{conta['login']}' não tem e-mail no Active Directory. Informe um."
+        )
+
+    user = User(
+        username=(username or conta["login"]).strip(),
+        nome=(nome or conta["nome"] or conta["login"]).strip(),
+        email=email_final,
+        password_hash=None,  # nunca há senha local para usuário de AD
+        perfil=perfil,
+        origem=UserOrigin.LDAP,
+        external_id=conta["external_id"],
+    )
+    session.add(user)
+    _flush_or_raise_duplicate(
+        session,
+        f"já existe usuário com o login '{user.username}', o e-mail '{email_final}' "
+        f"ou vinculado à conta '{conta['login']}' do AD.",
+    )
+    return user
+
+
 def vincular_ldap(session: Session, user_id, external_id: str) -> User:
     """Passa o usuário a autenticar pelo Active Directory.
 
