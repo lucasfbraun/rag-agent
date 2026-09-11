@@ -809,12 +809,15 @@ def _atende_criterio(
     tolerancia_percentual: float,
 ) -> bool:
     minimo, maximo = especificacao["minimo"], especificacao["maximo"]
+    # Para afirmar que o PRODUTO atende a um limite, toda a faixa declarada
+    # precisa estar do lado solicitado. Usar apenas um extremo favorável fazia
+    # 18,6–32,9 aparecer como "abaixo de 32" e 200–230 como "abaixo de 220".
     if operador == "maior":
-        return maximo >= valor
+        return minimo >= valor
     if operador == "menor":
-        return minimo <= valor
+        return maximo <= valor
     if operador == "entre" and valor_maximo is not None:
-        return minimo <= valor_maximo and maximo >= valor
+        return minimo >= valor and maximo <= valor_maximo
     folga = abs(valor) * (tolerancia_percentual / 100.0)
     return (minimo - folga) <= valor <= (maximo + folga)
 

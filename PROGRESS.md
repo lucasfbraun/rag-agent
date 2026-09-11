@@ -23,9 +23,21 @@ varrer o Qdrant uma vez e calcular a interseção por produto. Um candidato só 
 apresentado quando há evidência para todos os critérios; escalas Shore A e
 Shore D são diferenciadas.
 
+Uma reprodução real revelou outra falha: na pergunta "densidade livre abaixo
+de 32 kg/m³ e tempo de pega livre abaixo de 220 segundos", o agente listava
+produtos usando apenas a densidade e aceitava faixas como 18,6–32,9 e 30–36.
+A causa determinística era a comparação por sobreposição: `abaixo de` olhava o
+menor valor da faixa. Agora `abaixo` exige o máximo dentro do limite, `acima`
+exige o mínimo e `entre` exige a faixa inteira contida.
+
+Consultas com dois ou mais requisitos também passaram a ignorar o LLM na etapa
+de resposta. O motor devolve diretamente a interseção e as fontes de cada
+propriedade nos fluxos síncrono e streaming. Assim o modelo não pode omitir um
+requisito, prometer uma segunda busca nem reinserir um produto parcial.
+
 Migration `e7c4a2f913b0` adiciona `produto`, `aplicacao` e `fonte`; o startup do
 backend executa `alembic upgrade head` antes da aplicação. Validação local:
-108 testes relevantes do backend e 59 testes do frontend passaram; compilação
+126 testes de regressão do backend e 59 testes do frontend passaram; compilação
 Python e cabeça única do Alembic também passaram.
 
 ---

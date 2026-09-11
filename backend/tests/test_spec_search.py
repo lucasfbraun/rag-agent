@@ -18,6 +18,7 @@ import pytest
 
 from app.rag.exceptions import RetrievalIndisponivelError
 from app.rag.spec_search import (
+    _atende_criterio,
     buscar_produtos_por_especificacao,
     buscar_produtos_por_especificacoes,
     extrair_especificacoes,
@@ -45,6 +46,26 @@ def test_interpreta_operadores_independentes_em_requisitos_compostos():
     assert criterios[0]["operador"] == "maior"
     assert criterios[1]["operador"] == "entre"
     assert criterios[1]["valor_maximo"] == 13.0
+
+
+@pytest.mark.parametrize(
+    ("faixa", "operador", "valor", "valor_maximo", "esperado"),
+    [
+        ((18.6, 32.9), "menor", 32.0, None, False),
+        ((29.0, 31.0), "menor", 32.0, None, True),
+        ((4900.0, 5100.0), "maior", 5000.0, None, False),
+        ((5100.0, 5500.0), "maior", 5000.0, None, True),
+        ((11.5, 12.5), "entre", 12.0, 13.0, False),
+        ((12.1, 12.9), "entre", 12.0, 13.0, True),
+    ],
+)
+def test_limites_exigem_faixa_inteira_compativel(
+    faixa, operador, valor, valor_maximo, esperado,
+):
+    especificacao = {"minimo": faixa[0], "maximo": faixa[1]}
+    assert _atende_criterio(
+        especificacao, operador, valor, valor_maximo, 0.0,
+    ) is esperado
 
 
 def _por_propriedade(content, propriedade):
@@ -484,6 +505,50 @@ def test_busca_composta_nao_mistura_shore_a_com_shore_d():
     with patch("app.rag.spec_search.get_qdrant_client", return_value=client):
         resultado = buscar_produtos_por_especificacoes(criterios)
     assert resultado["total"] == 0
+
+
+def test_requisitos_abaixo_exigem_faixa_inteira_e_intersecao():
+    """Reprodução da consulta real que listava produtos por apenas um critério
+    e aceitava uma faixa cujo máximo ultrapassava o limite solicitado."""
+    pontos = [
+        _ponto(
+            rf"{_BASE}\FLEXX ESP\FLEXX ESP 1\Boletim 1.pdf",
+            "Boletim 1.pdf",
+            "Densidade livre kg/m³ 18,6 a 32,9 Tempo de pega livre seg 180 a 210",
+        ),
+        _ponto(
+            rf"{_BASE}\FLEXX ESP\FLEXX ESP 2\Boletim 2.pdf",
+            "Boletim 2.pdf",
+            "Densidade livre kg/m³ 29 a 31 Tempo de pega livre seg 200 a 230",
+        ),
+        _ponto(
+            rf"{_BASE}\FLEXX ESP\FLEXX ESP 3\Boletim 3.pdf",
+            "Boletim 3.pdf",
+            "Densidade livre kg/m³ 29 a 31 Tempo de pega livre seg 180 a 210",
+        ),
+        _ponto(
+            rf"{_BASE}\FLEXX ESP\FLEXX ESP 4\Boletim 4.pdf",
+            "Boletim 4.pdf",
+            "Densidade livre kg/m³ 29 a 31",
+        ),
+    ]
+    client = MagicMock()
+    client.scroll.return_value = (pontos, None)
+    criterios = interpretar_consulta_especificacoes(
+        "preciso de um produto com densidade livre abaixo de 32 kg/m³ "
+        "e tempo de pega livre abaixo de 220 segundos"
+    )
+
+    assert [(c["propriedade"], c["operador"], c["valor"]) for c in criterios] == [
+        ("densidade", "menor", 32.0),
+        ("tempo_pega", "menor", 220.0),
+    ]
+    with patch("app.rag.spec_search.get_qdrant_client", return_value=client):
+        resultado = buscar_produtos_por_especificacoes(criterios)
+
+    assert resultado["total"] == 1
+    assert [item["produto"] for item in resultado["produtos"]] == ["FLEXX ESP 3"]
+    assert len(resultado["produtos"][0]["requisitos"]) == 2
 
 
 # --- ficha estruturada injetada no contexto do LLM --------------------------

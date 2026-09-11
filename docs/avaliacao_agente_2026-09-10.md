@@ -60,6 +60,8 @@ A busca numérica varre os trechos e extrai especificações durante cada consul
 
 Recomendação: representar uma lista de requisitos com propriedade, operador, valor, unidade, condição de ensaio e obrigatoriedade. Consultar sua interseção sobre dados estruturados. Diferenciar explicitamente “atende”, “não atende” e “não informado”. Não tratar densidade do líquido como equivalente à densidade da espuma, nem Shore A como Shore D. Selecionar a referência documental válida antes de declarar atendimento.
 
+**Implementado em 11/09/2026:** múltiplos requisitos são interpretados e intersectados em uma única varredura; limites exigem a faixa inteira compatível, propriedade ausente não conta como atendimento e consultas compostas são respondidas diretamente pelo resultado estruturado, sem redação do LLM.
+
 ### 5. O agente tem uma rodada de ferramentas, não uma investigação iterativa
 
 Evidência: `backend/app/rag/engine.py:842–883` e `:963–1008`.

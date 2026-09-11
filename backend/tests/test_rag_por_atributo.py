@@ -10,6 +10,7 @@ junto e o que NÃO pode disparar.
 
 Seam: as funções reais do engine com o cliente Qdrant e o embedding mockados.
 """
+import json
 from unittest.mock import MagicMock, patch
 
 from app.config import COLLECTION_NAME
@@ -17,6 +18,8 @@ from app.rag.engine import (
     _extrair_palavras_chave,
     _montar_context_str,
     retrieve_products_context,
+    run_pu_matcher_agent,
+    stream_pu_matcher_agent,
 )
 
 
@@ -192,6 +195,104 @@ def test_sem_resultado_o_contexto_carrega_a_faixa_real_do_acervo():
 
     assert "NENHUM produto" in contexto
     assert "20 a 415" in contexto
+
+
+def test_pergunta_com_dois_limites_entrega_intersecao_pronta_ao_modelo():
+    resultado = {
+        "criterios": [
+            {"propriedade": "densidade", "criterio": "Densidade abaixo de 32 kg/m³",
+             "faixa_no_acervo": {"minimo": 18.0, "maximo": 40.0, "unidade": "kg/m³"}},
+            {"propriedade": "tempo_pega", "criterio": "Tempo de pega livre abaixo de 220 s",
+             "faixa_no_acervo": {"minimo": 120.0, "maximo": 300.0, "unidade": "s"}},
+        ],
+        "total": 1,
+        "produtos": [{
+            "produto": "FLEXX ESP 3",
+            "requisitos": [
+                {"propriedade": "densidade", "propriedade_titulo": "Densidade",
+                 "valores": "29 a 31", "unidade": "kg/m³", "documento": "Boletim 3.pdf"},
+                {"propriedade": "tempo_pega", "propriedade_titulo": "Tempo de pega livre",
+                 "valores": "3 min a 3 min 30 s", "unidade": "", "documento": "Boletim 3.pdf"},
+            ],
+        }],
+        "truncado": False,
+        "aviso": "Todos os requisitos foram encontrados e atendidos.",
+    }
+    pergunta = (
+        "preciso de um produto com densidade livre abaixo de 32 kg/m³ "
+        "e tempo de pega livre abaixo de 220 segundos"
+    )
+    with patch(
+        "app.rag.engine.buscar_produtos_por_especificacoes", return_value=resultado,
+    ) as busca:
+        contexto = _montar_context_str(pergunta, [])
+
+    busca.assert_called_once()
+    assert "INTERSEÇÃO dos critérios" in contexto
+    assert "atendem a TODOS os requisitos: 1" in contexto
+    assert "FLEXX ESP 3" in contexto
+    assert "Densidade 29 a 31 kg/m³" in contexto
+    assert "Tempo de pega livre 3 min a 3 min 30 s" in contexto
+
+
+def _resultado_composto_deterministico():
+    return {
+        "criterios": [
+            {"propriedade": "densidade", "criterio": "Densidade abaixo de 32 kg/m³",
+             "faixa_no_acervo": {"minimo": 18.0, "maximo": 40.0, "unidade": "kg/m³"}},
+            {"propriedade": "tempo_pega", "criterio": "Tempo de pega livre abaixo de 220 s",
+             "faixa_no_acervo": {"minimo": 120.0, "maximo": 300.0, "unidade": "s"}},
+        ],
+        "total": 1,
+        "produtos": [{
+            "produto": "FLEXX ESP 3",
+            "requisitos": [
+                {"propriedade": "densidade", "propriedade_titulo": "Densidade",
+                 "valores": "29 a 31", "unidade": "kg/m³", "documento": "Boletim 3.pdf"},
+                {"propriedade": "tempo_pega", "propriedade_titulo": "Tempo de pega livre",
+                 "valores": "3 min a 3 min 30 s", "unidade": "", "documento": "Boletim 3.pdf"},
+            ],
+        }],
+        "truncado": False,
+        "aviso": "Todos os requisitos foram encontrados e atendidos.",
+    }
+
+
+def _pergunta_composta():
+    return (
+        "preciso de um produto com densidade livre abaixo de 32 kg/m³ "
+        "e tempo de pega livre abaixo de 220 segundos"
+    )
+
+
+def test_rota_sincrona_nao_delega_resultado_composto_ao_llm():
+    with patch(
+        "app.rag.engine.buscar_produtos_por_especificacoes",
+        return_value=_resultado_composto_deterministico(),
+    ), patch("app.rag.engine._preparar_contexto") as preparar, \
+         patch("app.rag.engine.litellm.completion") as completion:
+        resposta = run_pu_matcher_agent(_pergunta_composta())
+
+    preparar.assert_not_called()
+    completion.assert_not_called()
+    assert resposta["model_used"] == "catalogo-estruturado"
+    assert "FLEXX ESP 3" in resposta["answer"]
+    assert resposta["sources"] == ["Boletim 3.pdf"]
+
+
+def test_rota_streaming_nao_delega_resultado_composto_ao_llm():
+    with patch(
+        "app.rag.engine.buscar_produtos_por_especificacoes",
+        return_value=_resultado_composto_deterministico(),
+    ), patch("app.rag.engine._preparar_contexto") as preparar, \
+         patch("app.rag.engine.litellm.completion") as completion:
+        eventos = [json.loads(linha) for linha in stream_pu_matcher_agent(_pergunta_composta())]
+
+    preparar.assert_not_called()
+    completion.assert_not_called()
+    assert eventos[0]["model_used"] == "catalogo-estruturado"
+    assert "FLEXX ESP 3" in eventos[1]["content"]
+    assert eventos[-1] == {"type": "done"}
 
 
 def test_pedido_do_dado_de_um_produto_nomeado_nao_dispara_varredura():

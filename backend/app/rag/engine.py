@@ -278,6 +278,81 @@ def _responder_listagem_elastomeros(query: str) -> str:
     return "\n".join(linhas)
 
 
+def _responder_requisitos_compostos(query: str) -> Optional[Dict[str, Any]]:
+    """Resolve buscas com vários limites sem delegar fatos ao modelo gerativo.
+
+    A saída é derivada diretamente da interseção calculada sobre o catálogo.
+    Isso impede que o LLM omita um critério, prometa uma busca posterior ou
+    acrescente produtos que só atendem parte da demanda.
+    """
+    codigos = _detectar_codigos_produto(query)
+    if codigos:
+        return None
+    criterios = interpretar_consulta_especificacoes(query, codigos_produto=codigos)
+    if len(criterios) < 2:
+        return None
+
+    resultado = buscar_produtos_por_especificacoes(criterios)
+    if resultado.get("erro"):
+        return None
+
+    descricoes = [item["criterio"] for item in resultado["criterios"]]
+    linhas = [
+        "### Resultado da busca por requisitos técnicos",
+        "",
+        "**Critérios obrigatórios:** " + "; ".join(descricoes) + ".",
+        "",
+    ]
+    fontes: set[str] = set()
+    if resultado["produtos"]:
+        total = resultado["total"]
+        linhas.append(
+            f"Encontrei {total} produto{'s' if total != 1 else ''} com evidência de "
+            "atendimento simultâneo a todos os requisitos:"
+        )
+        linhas.append("")
+        for indice, item in enumerate(resultado["produtos"], start=1):
+            linhas.append(f"{indice}. **{item['produto']}**")
+            for requisito in item["requisitos"]:
+                unidade = f" {requisito['unidade']}" if requisito["unidade"] else ""
+                linhas.append(
+                    f"   - {requisito['propriedade_titulo']}: "
+                    f"{requisito['valores']}{unidade}"
+                )
+                linhas.append(f"   - Fonte: {requisito['documento']}")
+                fontes.add(requisito["documento"])
+        if resultado["truncado"]:
+            linhas.extend([
+                "",
+                f"A lista mostra uma prévia; há {resultado['total']} produtos compatíveis.",
+            ])
+    else:
+        linhas.append(
+            "Não encontrei produto com evidência de atendimento simultâneo a todos os requisitos."
+        )
+        linhas.append("")
+        linhas.append("Faixas identificadas no acervo:")
+        for item in resultado["criterios"]:
+            faixa = item.get("faixa_no_acervo")
+            if faixa:
+                linhas.append(
+                    f"- {item['criterio']}: {faixa['minimo']:g} a "
+                    f"{faixa['maximo']:g} {faixa['unidade']}"
+                )
+
+    linhas.extend([
+        "",
+        "A comparação exige que a faixa declarada do produto fique dentro de cada limite; "
+        "propriedade ausente não conta como atendimento.",
+        resultado["aviso"],
+    ])
+    return {
+        "answer": "\n".join(linhas),
+        "sources": sorted(fontes),
+        "model_used": "catalogo-estruturado",
+    }
+
+
 def _aplicar_guardrails_resposta(
     query: str,
     answer: str,
@@ -872,6 +947,10 @@ def run_pu_matcher_agent(
             "model_used": "catalogo-estruturado",
         }
 
+    resposta_composta = _responder_requisitos_compostos(query)
+    if resposta_composta is not None:
+        return resposta_composta
+
     query_recuperacao = _montar_query_recuperacao(query, history)
     docs, context_str = _preparar_contexto(query_recuperacao, ver_custos)
     system_instruction = _montar_system_instruction(template_id)
@@ -952,6 +1031,19 @@ def stream_pu_matcher_agent(
         return
 
     try:
+        resposta_composta = _responder_requisitos_compostos(query)
+        if resposta_composta is not None:
+            yield _json.dumps({
+                "type": "meta",
+                "sources": resposta_composta["sources"],
+                "model_used": resposta_composta["model_used"],
+            }) + "\n"
+            yield _json.dumps({
+                "type": "delta", "content": resposta_composta["answer"],
+            }) + "\n"
+            yield _json.dumps({"type": "done"}) + "\n"
+            return
+
         query_recuperacao = _montar_query_recuperacao(query, history)
         docs, context_str = _preparar_contexto(query_recuperacao, ver_custos)
     except RetrievalIndisponivelError:
