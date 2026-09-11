@@ -127,50 +127,58 @@ def _titulo_com_icone(texto: str) -> None:
 # registrar o Service Worker no escopo "/" da aplicação real — não do iframe.
 #
 # O Service Worker raiz só existe por trás do proxy Caddy (proxy/Caddyfile);
-# sem ele, o Chrome nunca dispara beforeinstallprompt e o botão fica
-# permanentemente desabilitado com uma dica em vez de travar mudo.
+# sem ele, o Chrome nunca dispara beforeinstallprompt e o card permanece
+# oculto, sem ocupar espaço na tela de login com uma ação indisponível.
 # ---------------------------------------------------------------------------
 def _render_pwa_install_card():
     components.html(
         """
         <div id="pu-install-card" class="pu-install-card">
           <div class="pu-install-text">
-            <strong>📲 Instale o PU Matcher</strong>
-            <div id="pu-install-hint">Verificando disponibilidade neste navegador…</div>
+            <strong>📲 Instalar PU Matcher</strong>
+            <div class="pu-install-hint">Acesso rápido pela tela inicial</div>
           </div>
-          <button id="pu-install-btn" disabled>Verificando…</button>
+          <button id="pu-install-btn">Instalar</button>
         </div>
         <style>
           body { margin: 0; }
           .pu-install-card {
-            display: flex;
+            display: none;
             align-items: center;
             justify-content: space-between;
-            gap: 14px;
+            gap: 10px;
             background: #FFFFFF;
             border: 1px solid #DDE3EA;
             border-radius: 10px;
             box-shadow: 0 1px 2px rgba(45,58,74,0.06);
-            padding: 14px 18px;
+            padding: 9px 12px;
             font-family: 'Roboto','Segoe UI',Arial,sans-serif;
             color: #2D3A4A;
           }
-          .pu-install-text strong { font-size: 14px; }
-          #pu-install-hint { font-size: 12.5px; color: #7A8FA6; margin-top: 2px; }
+          .pu-install-text { min-width: 0; }
+          .pu-install-text strong { font-size: 13.5px; white-space: nowrap; }
+          .pu-install-hint {
+            font-size: 11.5px;
+            color: #7A8FA6;
+            margin-top: 1px;
+            white-space: nowrap;
+          }
           #pu-install-btn {
             font-family: inherit;
-            font-size: 13px;
-            font-weight: 500;
+            font-size: 12.5px;
+            font-weight: 600;
             color: #FFFFFF;
             background: #0F7C70;
             border: none;
             border-radius: 6px;
-            padding: 8px 14px;
+            padding: 7px 14px;
             cursor: pointer;
             white-space: nowrap;
           }
           #pu-install-btn:hover:not(:disabled) { background: #14534D; }
-          #pu-install-btn:disabled { background: #B7C2CC; cursor: default; }
+          @media (max-width: 430px) {
+            .pu-install-hint { display: none; }
+          }
         </style>
         <script>
         (function () {
@@ -235,8 +243,14 @@ def _render_pwa_install_card():
           function render() {
             var card = document.getElementById("pu-install-card");
             var btn = document.getElementById("pu-install-btn");
-            var hint = document.getElementById("pu-install-hint");
-            if (!card || !btn || !hint) { return; }
+            if (!card || !btn) { return; }
+
+            function setVisible(visible) {
+              card.style.display = visible ? "flex" : "none";
+              try {
+                window.frameElement.style.height = visible ? "56px" : "0px";
+              } catch (e) {}
+            }
 
             var standalone = false;
             try { standalone = win.matchMedia("(display-mode: standalone)").matches; }
@@ -244,18 +258,13 @@ def _render_pwa_install_card():
 
             var state = win.__puInstallState;
             if (state.installed || standalone) {
-              card.style.display = "none";
+              setVisible(false);
               return;
             }
-            card.style.display = "flex";
             if (state.event) {
-              btn.disabled = false;
-              btn.textContent = "Instalar aplicativo";
-              hint.textContent = "Acesso rápido direto da tela inicial, sem abrir o navegador.";
+              setVisible(true);
             } else {
-              btn.disabled = true;
-              btn.textContent = "Instalação indisponível";
-              hint.textContent = "Disponível em Chrome/Edge (computador ou Android) quando o app atender aos critérios do navegador.";
+              setVisible(false);
             }
           }
 
@@ -277,7 +286,7 @@ def _render_pwa_install_card():
         })();
         </script>
         """,
-        height=84,
+        height=56,
     )
 
 

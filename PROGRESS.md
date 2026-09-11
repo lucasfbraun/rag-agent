@@ -35,6 +35,12 @@ de resposta. O motor devolve diretamente a interseção e as fontes de cada
 propriedade nos fluxos síncrono e streaming. Assim o modelo não pode omitir um
 requisito, prometer uma segunda busca nem reinserir um produto parcial.
 
+O card de instalação do PWA na tela de login foi reduzido para uma única linha,
+com texto curto e botão "Instalar". Ele só aparece quando o navegador dispara
+`beforeinstallprompt`; quando a instalação não está disponível, o iframe é
+recolhido e não ocupa espaço com mensagem longa ou botão desabilitado. Em telas
+estreitas, a frase auxiliar também é ocultada.
+
 Migration `e7c4a2f913b0` adiciona `produto`, `aplicacao` e `fonte`; o startup do
 backend executa `alembic upgrade head` antes da aplicação. Validação local:
 126 testes de regressão do backend e 59 testes do frontend passaram; compilação

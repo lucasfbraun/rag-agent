@@ -97,7 +97,7 @@ python frontend/run_local.py
 
 A interface estará em `http://localhost:8501` e o backend em `http://localhost:8000`.
 > **Qdrant:** Instale e rode localmente (`docker run -p 6333:6333 qdrant/qdrant`) ou aponte `QDRANT_HOST` para um servidor remoto.
-> **PWA:** rodando assim (sem o proxy Caddy do Docker Compose), o card "Instalar aplicativo" da tela de login fica sempre desabilitado — o Service Worker só é servido na raiz (`/`) através do proxy. Isso é o comportamento esperado em dev local, não um bug.
+> **PWA:** rodando assim (sem o proxy Caddy do Docker Compose), o card "Instalar PU Matcher" não aparece — o Service Worker só é servido na raiz (`/`) através do proxy. Isso é o comportamento esperado em dev local.
 
 ## Autenticação & Perfis (RBAC)
 
