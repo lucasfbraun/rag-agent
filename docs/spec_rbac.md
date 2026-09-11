@@ -11,6 +11,20 @@ Fonte da matriz de perfis: `docs/proposta_do_projeto_similaridade.md`, seção 5
 
 Mínimo de 8 caracteres (`SenhaFracaError` em `backend/app/auth/security.py`), hash via `bcrypt`. Não há requisito de negócio documentado para regras adicionais (maiúscula/número/símbolo) — o mínimo de 8 é só uma defesa básica contra senha vazia/trivial, não uma política de segurança completa. Se o time de TI tiver uma política corporativa de senha, é pendência a levantar e ajustar aqui.
 
+## Sessão persistente (2026-09-11)
+
+A opção **Manter conectado** emite o mesmo JWT assinado, com validade ampliada
+para `REMEMBER_ME_EXPIRE_DAYS` (30 dias por padrão), e o guarda em cookie do
+navegador com `SameSite=Strict` e `Secure` quando servido por HTTPS. Sem a opção,
+continua valendo `ACCESS_TOKEN_EXPIRE_MINUTES` (8 horas por padrão) e o token
+fica apenas no `session_state`.
+
+Uma nova sessão do Streamlit lê o cookie por `st.context.cookies` e valida o
+token em `/api/auth/me` antes de restaurar o usuário. Essa validação consulta o
+banco: conta desativada perde acesso mesmo com JWT ainda dentro da validade.
+Token expirado é removido, e logout explícito também apaga o cookie. Não existe
+token sem expiração.
+
 ## Modelo de usuário
 
 | Campo | Tipo | Justificativa |

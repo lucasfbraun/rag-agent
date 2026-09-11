@@ -136,11 +136,18 @@ PYEOF
 ```bash
 curl -X POST http://localhost:8000/api/auth/login \
   -H "Content-Type: application/json" \
-  -d '{"username": "admin", "password": "sua-senha"}'
-# -> {"access_token": "...", "token_type": "bearer"}
+  -d '{"username": "admin", "password": "sua-senha", "manter_conectado": true}'
+# -> {"access_token": "...", "token_type": "bearer", "expires_in_seconds": 2592000}
 
 curl http://localhost:8000/api/match -H "Authorization: Bearer <access_token>" ...
 ```
+
+Na tela de login, **Manter conectado** preserva o acesso no navegador depois
+que ele é fechado. A sessão lembrada dura 30 dias por padrão, configurável por
+`REMEMBER_ME_EXPIRE_DAYS`; sem marcar, o token continua com a validade normal de
+`ACCESS_TOKEN_EXPIRE_MINUTES` e fica apenas na sessão atual. Ao reabrir, o
+frontend valida `/api/auth/me`, portanto token expirado e usuário desativado não
+entram. O botão **Sair** remove também a credencial persistida.
 
 ### Cadastrando usuários pela tela
 

@@ -5,6 +5,28 @@ Ver visão geral de fases em [CRONOGRAMA.md](CRONOGRAMA.md).
 
 ---
 
+## 2026-09-11 — Sessão 42: opção "Manter conectado"
+
+A tela de login ganhou a opção **Manter conectado**. Quando marcada, o backend
+emite um JWT com validade ampliada e informa a duração ao frontend, que persiste
+o token em cookie `SameSite=Strict` (`Secure` sob HTTPS). Ao abrir o aplicativo
+novamente, o token é lido por `st.context.cookies` e validado em `/api/auth/me`
+antes de restaurar o usuário.
+
+O prazo padrão é 30 dias, configurável por `REMEMBER_ME_EXPIRE_DAYS`. Sem marcar,
+permanece o comportamento anterior: `ACCESS_TOKEN_EXPIRE_MINUTES` (8 horas por
+padrão) e token apenas no `session_state`. Não foi criado token eterno. Uma conta
+desativada perde acesso na validação seguinte, mesmo que o JWT ainda não tenha
+expirado; resposta 401 e logout explícito removem o cookie persistente.
+
+Testes foram escritos antes da implementação e reproduziram a ausência da opção,
+da validade específica e do módulo de persistência. Validação final: 71 testes
+do frontend e 203 testes relevantes do backend passaram. A cobertura verifica o
+checkbox e o payload do login, prazo normal e ampliado, leitura/gravação/remoção
+do cookie, expiração do JWT e preservação dos fluxos do agente.
+
+---
+
 ## 2026-09-11 — Sessão 41: upload de documentos pelo chat e autorização de correções
 
 O campo de mensagem do chat passou a aceitar vários anexos PDF, DOC, DOCX ou

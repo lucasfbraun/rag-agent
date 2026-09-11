@@ -9,6 +9,7 @@ from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
+from app.config import ACCESS_TOKEN_EXPIRE_MINUTES, REMEMBER_ME_EXPIRE_DAYS
 from app.db import get_session
 from app.models import User
 from app.auth.token import create_access_token
@@ -27,11 +28,13 @@ router = APIRouter(prefix="/api/auth", tags=["auth"])
 class LoginRequest(BaseModel):
     username: str
     password: str
+    manter_conectado: bool = False
 
 
 class LoginResponse(BaseModel):
     access_token: str
     token_type: str = "bearer"
+    expires_in_seconds: int
 
 
 @router.post("/login", response_model=LoginResponse)
@@ -58,7 +61,12 @@ def login(req: LoginRequest, session: Session = Depends(get_session)):
         registrar_tentativa_falha(req.username)
         raise HTTPException(status.HTTP_401_UNAUTHORIZED, "Usuário ou senha incorretos.")
     limpar_tentativas(req.username)
-    return LoginResponse(access_token=create_access_token(user.id))
+    expire_minutes = (
+        REMEMBER_ME_EXPIRE_DAYS * 24 * 60 if req.manter_conectado else None
+    )
+    token = create_access_token(user.id, expire_minutes=expire_minutes)
+    validade = expire_minutes or ACCESS_TOKEN_EXPIRE_MINUTES
+    return LoginResponse(access_token=token, expires_in_seconds=validade * 60)
 
 
 @router.get("/me", response_model=UsuarioResponse)

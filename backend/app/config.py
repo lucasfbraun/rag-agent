@@ -87,6 +87,7 @@ if not SECRET_KEY:
         "(sem isso os tokens de sessão seriam assinados com uma chave previsível)."
     )
 ACCESS_TOKEN_EXPIRE_MINUTES = int(os.getenv("ACCESS_TOKEN_EXPIRE_MINUTES", 480))  # 8h, um turno
+REMEMBER_ME_EXPIRE_DAYS = int(os.getenv("REMEMBER_ME_EXPIRE_DAYS", 30))
 
 # ---------------------------------------------------------------------------
 # Active Directory / LDAP (vínculo de usuário — ver app/auth/ldap_service.py)

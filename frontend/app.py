@@ -5,6 +5,7 @@ import json
 import os
 from urllib.parse import quote
 
+from auth_persistence import ler_token_persistido, montar_script_cookie
 from chat_upload import EXTENSOES_DOCUMENTO, enviar_anexos_chat, separar_entrada_chat
 
 STATIC_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "static")
@@ -292,6 +293,13 @@ def _render_pwa_install_card():
     )
 
 
+def _render_cookie_login(token=None, max_age_seconds=0, recarregar=False):
+    components.html(
+        montar_script_cookie(token, max_age_seconds, recarregar),
+        height=0,
+    )
+
+
 # ---------------------------------------------------------------------------
 # Estado da Sessão
 # ---------------------------------------------------------------------------
@@ -307,6 +315,10 @@ if "active_conversation_id" not in st.session_state:
     st.session_state.active_conversation_id = None
 if "pagina" not in st.session_state:
     st.session_state.pagina = "chat"
+if "restauracao_persistente_tentada" not in st.session_state:
+    st.session_state.restauracao_persistente_tentada = False
+if "remover_token_persistente" not in st.session_state:
+    st.session_state.remover_token_persistente = False
 
 
 def _bearer(token: str) -> dict:
@@ -325,6 +337,7 @@ def _fazer_logout():
     st.session_state.messages = []
     st.session_state.active_conversation_id = None
     st.session_state.pagina = "chat"
+    st.session_state.remover_token_persistente = True
 
 
 def _clear_message_state():
@@ -1396,11 +1409,38 @@ def _render_pagina_usuarios():
             _render_cartao_usuario(usuario, eu_mesmo=usuario["id"] == eu)
 
 
+def _restaurar_login_persistido():
+    """Valida uma sessão lembrada uma vez, na abertura do navegador."""
+    if (
+        st.session_state.access_token
+        or st.session_state.restauracao_persistente_tentada
+        or st.session_state.remover_token_persistente
+    ):
+        return
+    st.session_state.restauracao_persistente_tentada = True
+    token = ler_token_persistido(st.context.cookies)
+    if not token:
+        return
+    try:
+        resposta = requests.get(ME_URL, headers=_bearer(token), timeout=10)
+    except requests.exceptions.RequestException:
+        # Mantém o cookie: uma indisponibilidade temporária do backend não deve
+        # transformar uma sessão válida em logout definitivo.
+        return
+    if resposta.status_code == 200:
+        st.session_state.access_token = token
+        st.session_state.current_user = resposta.json()
+    elif resposta.status_code == 401:
+        st.session_state.remover_token_persistente = True
+
+
 # ---------------------------------------------------------------------------
 # Portão de login — nada abaixo deste bloco roda sem token válido em sessão.
 # Backend (Fase 5, tarefa 5) passou a exigir autenticação em /api/match e
 # companhia; sem isto o frontend simplesmente parou de funcionar.
 # ---------------------------------------------------------------------------
+_restaurar_login_persistido()
+
 if not st.session_state.access_token:
     # Card centralizado com componentes nativos do Streamlit (st.container
     # border=True + st.columns), não HTML/CSS solto: um <div> aberto via
@@ -1414,6 +1454,9 @@ if not st.session_state.access_token:
     _, login_col, _ = st.columns([1, 1.3, 1])
     with login_col:
         with st.container(border=True):
+            if st.session_state.remover_token_persistente:
+                _render_cookie_login()
+                st.session_state.remover_token_persistente = False
             # Logo horizontal (com o nome da marca) na entrada; o símbolo
             # sozinho fica para a sidebar, onde não há espaço para o nome.
             st.image(os.path.join(STATIC_DIR, "logo.png"), width=240)
@@ -1423,20 +1466,42 @@ if not st.session_state.access_token:
             with st.form("login_form", border=False):
                 username = st.text_input("Usuário")
                 password = st.text_input("Senha", type="password")
+                manter_conectado = st.checkbox(
+                    "Manter conectado",
+                    help="Mantém o acesso neste navegador até você sair ou a sessão expirar.",
+                )
                 submitted = st.form_submit_button(
                     "Entrar", type="primary", use_container_width=True
                 )
                 if submitted:
                     try:
                         login_resp = requests.post(
-                            LOGIN_URL, json={"username": username, "password": password}, timeout=10
+                            LOGIN_URL,
+                            json={
+                                "username": username,
+                                "password": password,
+                                "manter_conectado": manter_conectado,
+                            },
+                            timeout=10,
                         )
                         if login_resp.status_code == 200:
-                            token = login_resp.json()["access_token"]
+                            login_data = login_resp.json()
+                            token = login_data["access_token"]
                             me_resp = requests.get(ME_URL, headers=_bearer(token), timeout=10)
-                            st.session_state.access_token = token
-                            st.session_state.current_user = me_resp.json() if me_resp.status_code == 200 else None
-                            st.rerun()
+                            if me_resp.status_code != 200:
+                                st.error("Não foi possível validar a sessão criada.")
+                            else:
+                                st.session_state.access_token = token
+                                st.session_state.current_user = me_resp.json()
+                                if manter_conectado:
+                                    _render_cookie_login(
+                                        token,
+                                        max_age_seconds=login_data["expires_in_seconds"],
+                                        recarregar=True,
+                                    )
+                                    st.caption("Salvando o acesso neste navegador...")
+                                else:
+                                    st.rerun()
                         else:
                             st.error("Usuário ou senha incorretos.")
                     except requests.exceptions.ConnectionError:

@@ -178,7 +178,7 @@ O checklist abaixo (`--full` concluído, 11.273 trechos) descreve o estado **his
 ---
 
 ## Fase 6 — Frontend / UX de Campo
-**Status:** 🟨 Em andamento (identidade visual + PWA na Sessão 27; histórico persistente na Sessão 33; tela de usuários e **marca oficial** na Sessão 35; upload pelo campo do chat na Sessão 41; sem validação em navegador real)
+**Status:** 🟨 Em andamento (identidade visual + PWA na Sessão 27; histórico persistente na Sessão 33; tela de usuários e **marca oficial** na Sessão 35; upload pelo chat na Sessão 41; "Manter conectado" na Sessão 42; sem validação em navegador real)
 
 - [x] Aplicar identidade visual da marca (paleta + tipografia) — **feito 2026-08-26**: `.streamlit/config.toml` (tema nativo: botões, inputs) + CSS injetado em `frontend/app.py` (Roboto, cards), a partir de `IDENTIDADE_VISUAL.md` (documento trazido de outro projeto — Next.js/Tailwind — e adaptado nesta sessão pro mecanismo do Streamlit). Ícone da sidebar trocado do placeholder genérico (flaticon externo) por um monograma "PU" na paleta da marca — **ainda não é o logo real**, nenhum arquivo foi fornecido; ver tabela de troca em `IDENTIDADE_VISUAL.md`.
 - [x] Instalação como app (PWA) — **feito 2026-08-26, card simplificado em 2026-09-11**: card compacto na tela de login (`frontend/app.py`, componente HTML com `manifest.json` + Service Worker + evento `beforeinstallprompt`). O card só aparece quando a instalação está realmente disponível; caso contrário, fica recolhido. Exigiu o proxy Caddy porque o Service Worker precisa ser servido em `/` para controlar a página toda. Assets e fluxo estrutural cobertos por testes; o prompt nativo ainda depende de validação manual em Chrome/Edge.
@@ -186,6 +186,7 @@ O checklist abaixo (`--full` concluído, 11.273 trechos) descreve o estado **his
 - [x] **Marca oficial aplicada (Sessão 35d, 2026-09-09)** — logo e símbolo do Grupo Flexível substituíram o monograma placeholder. Originais em `frontend/static/brand/`, derivados de web gerados por `frontend/static/gerar_assets_marca.py` (ícones 192/512 + maskable pro PWA, favicon da aba, logo horizontal no login). 6 testes novos travam a forma
 - [x] **Tela de administração de usuários (Sessão 35b, 2026-09-09)** — cadastro, edição de perfil, redefinição de senha e ativar/desativar, visível só para Admin TI. Até aqui, provisionar usuário exigia CLI.
 - [x] **Upload pelo chat (Sessão 41, 2026-09-11)** — o campo de mensagem aceita vários PDF/DOC/DOCX/TXT somente quando o perfil tem `UPLOAD_DOCUMENTS`. O texto enviado junto vira observação, e os arquivos seguem para a fila existente; não entram no contexto do agente antes de `APPROVE_UPLOADS`. A rota repete o gate de permissão. Streamlit mínimo elevado para 1.43, versão que introduziu anexos em `st.chat_input`.
+- [x] **Manter conectado (Sessão 42, 2026-09-11)** — opção no login persiste o JWT no navegador por 30 dias configuráveis. Toda restauração valida `/api/auth/me`, de modo que expiração e usuário desativado continuam bloqueando; sair remove o cookie. Login sem a opção preserva a sessão curta de 8 horas apenas no `session_state`.
 - [ ] Testar usabilidade em tablet/mobile na intranet/VPN
 - [ ] Substituir o ícone placeholder pelo logo real do Grupo Flexível assim que o arquivo for fornecido
 - [ ] Validar em navegador real (Chrome/Edge) que o card de PWA de fato dispara o prompt de instalação

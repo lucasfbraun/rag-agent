@@ -19,10 +19,11 @@ class TokenInvalidoError(ValueError):
     """Token ausente, expirado, malformado ou com assinatura inválida."""
 
 
-def create_access_token(user_id: uuid.UUID) -> str:
+def create_access_token(user_id: uuid.UUID, expire_minutes: int | None = None) -> str:
+    minutos = expire_minutes if expire_minutes is not None else ACCESS_TOKEN_EXPIRE_MINUTES
     payload = {
         "sub": str(user_id),
-        "exp": datetime.now(timezone.utc) + timedelta(minutes=ACCESS_TOKEN_EXPIRE_MINUTES),
+        "exp": datetime.now(timezone.utc) + timedelta(minutes=minutos),
     }
     return jwt.encode(payload, SECRET_KEY, algorithm=ALGORITHM)
 
