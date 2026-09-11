@@ -5,6 +5,33 @@ Ver visão geral de fases em [CRONOGRAMA.md](CRONOGRAMA.md).
 
 ---
 
+## 2026-09-11 — Sessão 41: upload de documentos pelo chat e autorização de correções
+
+O campo de mensagem do chat passou a aceitar vários anexos PDF, DOC, DOCX ou
+TXT quando o perfil possui `upload_documents`. Para os demais perfis, o chat
+continua somente com texto e não mostra o controle de anexo. O texto digitado
+junto aos arquivos é tratado como observação para o aprovador; não é enviado ao
+LLM. Cada documento usa o mesmo `POST /api/documentos` da página dedicada e
+permanece pendente até aprovação, sem contaminar o acervo antes da revisão.
+
+A versão mínima do Streamlit subiu de 1.36 para 1.43, que introduziu anexos em
+`st.chat_input`. O processamento de múltiplos arquivos preserva sucessos parciais
+e mostra o erro específico de cada falha.
+
+Revalidado o controle para correções de respostas: o formulário do feedback
+negativo só aparece com `train_agent`, e `POST /api/treinamento` exige a mesma
+permissão. Um perfil com apenas `approve_training` pode revisar a fila, mas não
+criar uma correção. A mesma separação foi testada para upload: ter somente
+`approve_uploads` não concede `upload_documents`.
+
+Validação local: 67 testes do frontend e 200 testes relevantes do backend
+passaram. A cobertura inclui presença/ausência do anexo conforme a permissão,
+formatos aceitos, processamento de múltiplos arquivos e quatro testes diretos
+das rotas confirmando o bloqueio de upload e de correção para perfis sem a
+permissão de criação.
+
+---
+
 ## 2026-09-11 — Sessão 40: barreira determinística para perguntas fora do escopo
 
 Reproduzida a falha relatada com a pergunta "você pode me passar como fazer um

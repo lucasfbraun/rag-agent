@@ -125,6 +125,9 @@ Nada — é o ponto da coleção separada. Mas vale registrar explicitamente que
 O formulário aberto pelo feedback negativo exige `TRAIN_AGENT`. A mesma
 permissão é validada novamente pelo endpoint de criação; `APPROVE_TRAINING`
 isoladamente permite revisar a fila, mas não cadastrar uma correção.
+Esse contrato é coberto tanto por teste da interface quanto por teste direto da
+rota `POST /api/treinamento`, incluindo um perfil que tem somente poder de
+aprovação.
 
 **Estimativa de risco:** o passo 3 é o mais delicado. Mexer no prompt do agente já produziu regressão neste projeto, e a validação vai precisar de chamadas reais ao LLM comparando resposta antes/depois — não só teste de unidade.
 

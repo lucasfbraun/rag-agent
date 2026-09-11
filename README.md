@@ -204,7 +204,12 @@ Os cinco perfis originais (`vendedor`, `tecnico`, `gestor`, `quimico_pd`, `admin
 
 ### Enviar documentos para o acervo
 
-Quem tem a permissão *Enviar documentos* vê o atalho **Documentos** na barra lateral. O arquivo **não entra direto**: ele fica numa fila até alguém com *Aprovar documentos* revisar.
+Quem tem a permissão *Enviar documentos* pode anexar PDF, Word ou TXT no próprio
+campo do chat e também vê o atalho **Documentos** na barra lateral. O clipe de
+anexo não aparece para perfis sem essa permissão, e o endpoint repete a mesma
+validação. É possível enviar vários arquivos de uma vez; o texto digitado junto
+vira a observação que o aprovador recebe. O arquivo **não entra direto**: ele
+fica numa fila até alguém com *Aprovar documentos* revisar.
 
 A fila existe porque o acervo é a fonte que o agente cita como verdade para toda a equipe. Um PDF errado entrando sozinho contamina as respostas de todo mundo, e o estrago só aparece quando alguém desconfia de uma recomendação — muito depois, e sem ligação óbvia com o upload.
 
@@ -222,6 +227,8 @@ diretamente abaixo da resposta. Correções ficam pendentes até alguém com
 *Aprovar treinamento* revisar; só então podem influenciar novas respostas.
 Sem *Treinar o agente*, o usuário ainda pode avaliar a resposta como não útil,
 mas o formulário de correção não é exibido e a API recusa qualquer tentativa de cadastro.
+Ter somente *Aprovar treinamento* também não permite criar correções; essa
+permissão libera apenas a revisão da fila.
 
 Quem tem a permissão *Treinar o agente* pode registrar conhecimento que melhora as respostas. **Não é fine-tuning:** o aprendizado fica em dado, o que o torna legível, editável e removível apagando uma linha — e mantém o projeto livre para trocar de modelo de IA.
 

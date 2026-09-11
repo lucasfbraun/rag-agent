@@ -5,6 +5,8 @@ import json
 import os
 from urllib.parse import quote
 
+from chat_upload import EXTENSOES_DOCUMENTO, enviar_anexos_chat, separar_entrada_chat
+
 STATIC_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "static")
 
 API_BASE = "http://backend:8000"
@@ -1091,6 +1093,15 @@ def _api_documentos(metodo: str, caminho: str = "", **kwargs):
     return _chamar_api(f"{DOCUMENTOS_URL}{caminho}", metodo, **kwargs)
 
 
+def _enviar_documento(arquivo, observacao: str):
+    """Único contrato de envio, usado pela página de documentos e pelo chat."""
+    return _api_documentos(
+        "POST",
+        files={"arquivo": (arquivo.name, arquivo.getvalue())},
+        data={"observacao": observacao or ""},
+    )
+
+
 _ROTULO_STATUS = {
     "pendente": ":orange[aguardando aprovação]",
     "aprovado": ":green[no acervo]",
@@ -1105,7 +1116,7 @@ def _render_form_envio():
         "porque o que entra aqui vira fonte que o agente cita como verdade para toda a equipe."
     )
     with st.form("form_envio_documento", border=False, clear_on_submit=True):
-        arquivo = st.file_uploader("Arquivo", type=["pdf", "docx", "doc", "txt"])
+        arquivo = st.file_uploader("Arquivo", type=list(EXTENSOES_DOCUMENTO))
         # Aviso VISÍVEL, não no tooltip do uploader: quem está prestes a mandar
         # um PDF digitalizado precisa ler isso sem passar o mouse em nada.
         st.caption(
@@ -1123,11 +1134,7 @@ def _render_form_envio():
             if arquivo is None:
                 st.error("Escolha um arquivo.")
                 return
-            ok, retorno = _api_documentos(
-                "POST",
-                files={"arquivo": (arquivo.name, arquivo.getvalue())},
-                data={"observacao": observacao or ""},
-            )
+            ok, retorno = _enviar_documento(arquivo, observacao)
             if ok:
                 st.success(f"**{arquivo.name}** enviado. Você será avisado quando for revisado.")
                 st.rerun()
@@ -1643,9 +1650,40 @@ for idx, msg in enumerate(st.session_state.messages):
             _renderizar_feedback(idx, msg)
 
 # ---------------------------------------------------------------------------
-# Input e processamento
+# Input, anexos e processamento
 # ---------------------------------------------------------------------------
-if prompt := st.chat_input("Digite a demanda ou responda às perguntas do agente..."):
+aceita_anexos = _pode_enviar_documentos()
+if aceita_anexos:
+    st.caption(
+        "📎 Você pode anexar PDF, Word ou TXT aqui. O texto digitado junto vira a "
+        "observação do envio, e o documento só entra no acervo depois da aprovação."
+    )
+
+entrada_chat = st.chat_input(
+    "Digite a demanda ou responda às perguntas do agente...",
+    accept_file="multiple" if aceita_anexos else False,
+    file_type=list(EXTENSOES_DOCUMENTO) if aceita_anexos else None,
+)
+prompt = None
+if entrada_chat:
+    texto_chat, anexos = separar_entrada_chat(entrada_chat)
+    if anexos:
+        with st.chat_message("user", avatar=_avatar("user")):
+            st.markdown(texto_chat or "Envio de documentos para o acervo")
+            st.caption(" · ".join(arquivo.name for arquivo in anexos))
+
+        enviados, falhas = enviar_anexos_chat(anexos, texto_chat, _enviar_documento)
+        if enviados:
+            st.success(
+                f"{len(enviados)} documento(s) enviado(s) para aprovação: "
+                + ", ".join(enviados)
+            )
+        for nome, erro in falhas:
+            st.error(f"Não foi possível enviar **{nome}**: {erro}")
+    elif texto_chat:
+        prompt = texto_chat
+
+if prompt:
     st.session_state.messages.append({"role": "user", "content": prompt})
     with st.chat_message("user", avatar=_avatar("user")):
         st.markdown(prompt)

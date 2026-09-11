@@ -113,6 +113,33 @@ def test_quem_nao_pode_enviar_nao_ve_o_atalho():
     assert "Documentos" not in [b.label for b in app.button]
 
 
+def test_chat_aceita_anexos_para_quem_pode_enviar_documentos():
+    app = _app(SO_ENVIA, pagina="chat")
+    with patch("requests.get", side_effect=_fake_get), \
+         patch("requests.request", side_effect=_fake_request):
+        app.run(timeout=15)
+
+    assert not app.exception
+    assert app.chat_input[0].proto.accept_file == 2  # MULTIPLE
+    assert set(app.chat_input[0].proto.file_type) == {".pdf", ".docx", ".doc", ".txt"}
+
+
+def test_chat_nao_aceita_anexos_para_quem_nao_tem_permissao():
+    app = _app(SEM_NADA, pagina="chat")
+    with patch("requests.get", side_effect=_fake_get), \
+         patch("requests.request", side_effect=_fake_request):
+        app.run(timeout=15)
+
+    assert not app.exception
+    assert app.chat_input[0].proto.accept_file == 0  # NONE
+
+
+def test_versao_minima_do_streamlit_suporta_anexo_no_chat():
+    requirements = os.path.join(os.path.dirname(os.path.dirname(APP_PATH)), "requirements.txt")
+    with open(requirements, encoding="utf-8") as arquivo:
+        assert "streamlit>=1.43.0" in arquivo.read()
+
+
 def test_o_atalho_aparece_pela_permissao_e_nao_pelo_nome_do_perfil():
     """O perfil aqui se chama "qualquer" — um nome que não existe no catálogo
     original. Se a tela ainda decidisse pelo slug, este botão sumiria, e um
