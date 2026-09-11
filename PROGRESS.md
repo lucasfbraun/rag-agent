@@ -5,6 +5,38 @@ Ver visão geral de fases em [CRONOGRAMA.md](CRONOGRAMA.md).
 
 ---
 
+## 2026-09-11 — Sessão 44: interseção de aplicação e especificação
+
+Reproduzida a pergunta "material para fazer solado de tênis, com no mínimo
+200 kg/m³ de densidade por imersão". O fluxo anterior não reconhecia o número
+quando ele vinha antes da propriedade e colado à unidade (`200Kg/m³`). Como
+restava apenas uma especificação numérica, a consulta caía no LLM, que buscava
+densidade sem exigir a aplicação em solado.
+
+O parser agora reconhece valores antes ou depois da propriedade, inclusive com
+unidade colada, e trata **densidade por imersão** como propriedade própria. Ela
+não é mais confundida com densidade genérica, densidade livre ou densidade
+aparente. Também foi corrigida a detecção de código de produto, que interpretava
+"mínimo 200Kg" como se `mínimo` fosse uma família FLEXX.
+
+Perguntas que combinam aplicação e uma ou mais especificações passaram a usar
+uma única varredura estruturada no Qdrant. A chave da interseção é produto mais
+documento: o mesmo Boletim Técnico precisa mencionar a aplicação e comprovar
+todos os valores. Um produto com densidade compatível para filtros, ou com a
+aplicação em um boletim e o número apenas em outro, não entra no resultado. O LLM
+e o embedding não participam dessa decisão.
+
+Validação com a pergunta exata no acervo local encontrou seis produtos válidos.
+Os dois primeiros, ordenados pela faixa mais próxima do mínimo solicitado, foram
+`FLEXX® SL ECO 2535-CPS` (210–230 kg/m³) e `FLEXX SL ECO 2539`
+(270–290 kg/m³). Cada resultado cita o Boletim Técnico que contém as duas
+evidências. A suíte ampliada do motor passou com 214 testes; a cobertura nova
+inclui ordem invertida da frase, unidade colada, separação entre os dois tipos de
+densidade, interseção no mesmo boletim e paridade entre resposta síncrona e
+streaming.
+
+---
+
 ## 2026-09-11 — Sessão 43: aplicações exigem evidência do próprio boletim
 
 Reproduzida a resposta incorreta para "assento de ônibus". A causa era a regra

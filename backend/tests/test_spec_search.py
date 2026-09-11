@@ -19,6 +19,7 @@ import pytest
 from app.rag.exceptions import RetrievalIndisponivelError
 from app.rag.spec_search import (
     _atende_criterio,
+    buscar_produtos_por_aplicacao_e_especificacoes,
     buscar_produtos_por_especificacao,
     buscar_produtos_por_especificacoes,
     extrair_especificacoes,
@@ -46,6 +47,33 @@ def test_interpreta_operadores_independentes_em_requisitos_compostos():
     assert criterios[0]["operador"] == "maior"
     assert criterios[1]["operador"] == "entre"
     assert criterios[1]["valor_maximo"] == 13.0
+
+
+def test_interpreta_numero_antes_da_densidade_por_imersao_com_unidade_colada():
+    criterios = interpretar_consulta_especificacoes(
+        "Preciso de um material para fazer solado de tênis, ele precisa ter "
+        "no mínimo 200Kg/m³ de densidade por imersão"
+    )
+
+    assert criterios == [{
+        "propriedade": "densidade_imersao",
+        "operador": "maior",
+        "valor": 200.0,
+        "valor_maximo": None,
+        "unidade": "kg/m³",
+        "tolerancia_percentual": 0.0,
+    }]
+
+
+def test_densidade_generica_nao_vira_densidade_por_imersao():
+    leituras = extrair_especificacoes(
+        "Densidade kg/m³ 270 a 290 Densidade por Imersão kg/m³ 210 a 230"
+    )
+
+    assert [(item["propriedade"], item["minimo"], item["maximo"]) for item in leituras] == [
+        ("densidade", 270.0, 290.0),
+        ("densidade_imersao", 210.0, 230.0),
+    ]
 
 
 @pytest.mark.parametrize(
@@ -505,6 +533,58 @@ def test_busca_composta_nao_mistura_shore_a_com_shore_d():
     with patch("app.rag.spec_search.get_qdrant_client", return_value=client):
         resultado = buscar_produtos_por_especificacoes(criterios)
     assert resultado["total"] == 0
+
+
+def test_busca_cruza_aplicacao_e_especificacao_no_mesmo_boletim():
+    bom_path = rf"{_BASE}\FLEXX SL\FLEXX SL ECO 2539\Boletim SL ECO 2539.pdf"
+    pontos = [
+        _ponto(
+            bom_path,
+            "Boletim SL ECO 2539.pdf",
+            "Sistema para fabricação de solado de calçado.",
+        ),
+        _ponto(
+            bom_path,
+            "Boletim SL ECO 2539.pdf",
+            "Densidade por Imersão Kg/m³ 270,0 – 290,0",
+        ),
+        _ponto(
+            rf"{_BASE}\FLEXX FT\FLEXX FT 2556\Boletim FT 2556.pdf",
+            "Boletim FT 2556.pdf",
+            "Aplicação em filtros. Densidade por Imersão Kg/m³ 250 a 280",
+        ),
+        _ponto(
+            rf"{_BASE}\FLEXX SL\FLEXX SL 100\Boletim SL 100.pdf",
+            "Boletim SL 100.pdf",
+            "Sistema para solado. Densidade por Imersão Kg/m³ 150 a 180",
+        ),
+        _ponto(
+            rf"{_BASE}\FLEXX SL\FLEXX SL 200\Boletim Aplicação.pdf",
+            "Boletim Aplicação.pdf",
+            "Sistema para solado.",
+        ),
+        _ponto(
+            rf"{_BASE}\FLEXX SL\FLEXX SL 200\Boletim Especificação.pdf",
+            "Boletim Especificação.pdf",
+            "Densidade por Imersão Kg/m³ 250 a 280",
+        ),
+    ]
+    client = MagicMock()
+    client.scroll.return_value = (pontos, None)
+    criterios = interpretar_consulta_especificacoes(
+        "no mínimo 200Kg/m³ de densidade por imersão"
+    )
+
+    with patch("app.rag.spec_search.get_qdrant_client", return_value=client):
+        resultado = buscar_produtos_por_aplicacao_e_especificacoes(
+            ["solado"], criterios
+        )
+
+    assert client.scroll.call_count == 1
+    assert resultado["total"] == 1
+    assert resultado["produtos"][0]["produto"] == "FLEXX SL ECO 2539"
+    assert resultado["produtos"][0]["aplicacao"]["documento"] == "Boletim SL ECO 2539.pdf"
+    assert resultado["produtos"][0]["requisitos"][0]["valores"] == "270 a 290"
 
 
 def test_requisitos_abaixo_exigem_faixa_inteira_e_intersecao():

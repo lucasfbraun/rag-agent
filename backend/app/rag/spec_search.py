@@ -41,7 +41,7 @@ import unicodedata
 from typing import Any, Dict, List, Optional, Tuple
 
 from app.config import COLLECTION_NAME
-from app.rag.catalog_stats import _produto_do_filepath
+from app.rag.catalog_stats import _produto_do_filepath, _termo_bate_no_conteudo
 from app.rag.exceptions import RetrievalIndisponivelError
 from app.rag.ingestion import get_qdrant_client
 
@@ -83,6 +83,16 @@ PROPRIEDADES: Dict[str, Dict[str, Any]] = {
         "unidade_tipica": "cPs",
         "rotulos": ["viscosidade brookfield", "viscosidade"],
         "termos_consulta": ["viscosidade brookfield", "viscosidade"],
+    },
+    "densidade_imersao": {
+        "titulo": "Densidade por imersão",
+        "unidade_tipica": "kg/m³",
+        "rotulos": [
+            "densidade por imersao", "densidade de imersao", "densidade imersao",
+        ],
+        "termos_consulta": [
+            "densidade por imersao", "densidade de imersao", "densidade imersao",
+        ],
     },
     "densidade": {
         "titulo": "Densidade",
@@ -330,6 +340,11 @@ _JANELA_APOS_ROTULO = 90
 # 14.000 a 26.000 cPs (achado ao rodar o parser sobre o acervo real).
 _NUMERO = r"\d{1,3}(?:\.\d{3})+(?:,\d{1,4})?|\d{1,7}(?:[.,]\d{1,4})?"
 _PADRAO_NUMERO = re.compile(rf"(?<![\w,.])({_NUMERO})(?![\w])")
+# A pergunta frequentemente cola a unidade ao valor ("200Kg/m³"). Nos
+# documentos, a versão estrita acima evita códigos e outros ruídos; na consulta,
+# os códigos de produto já foram removidos pelo chamador e letras adjacentes são
+# necessárias para reconhecer esse modo natural de escrever a medida.
+_PADRAO_NUMERO_CONSULTA = re.compile(rf"(?<![\w,.])({_NUMERO})(?![\d,.])")
 _PADRAO_MAIS_MENOS = re.compile(rf"(?<![\w,.])({_NUMERO})\s*±\s*({_NUMERO})")
 
 # Numeração de seção de FISPQ ("9.10 Solubilidade em água", "10. ESTABILIDADE
@@ -653,6 +668,12 @@ def _fator_de_tempo(texto_apos_o_numero: str) -> int:
     return _FATOR_PARA_SEGUNDOS[achado.group(1).rstrip(".")]
 
 
+def _unidade_da_consulta(rotulo: str, antes: str, depois: str) -> Optional[str]:
+    """Prefere a unidade depois da propriedade e aceita a forma valor+unidade antes."""
+    unidade_depois = _detectar_unidade(f"{rotulo} {depois}")[0]
+    return unidade_depois or _detectar_unidade(antes[-40:])[0]
+
+
 def interpretar_consulta_especificacao(
     query: str, codigos_produto: Optional[List[str]] = None
 ) -> Optional[Dict[str, Any]]:
@@ -704,15 +725,15 @@ def interpretar_consulta_especificacao(
                 "valor_maximo": max(minimo, maximo),
                 "unidade": (
                     "s" if eh_tempo
-                    else _detectar_unidade(f"{ocorrencia.group(0)} {depois}")[0]
+                    else _unidade_da_consulta(ocorrencia.group(0), antes, depois)
                 ),
                 "tolerancia_percentual": 0.0,
             }
 
-    numero = _PADRAO_NUMERO.search(depois)
+    numero = _PADRAO_NUMERO_CONSULTA.search(depois)
     trecho_operador = depois[:numero.start()] if numero else ""
     if not numero:
-        anteriores = list(_PADRAO_NUMERO.finditer(antes))
+        anteriores = list(_PADRAO_NUMERO_CONSULTA.finditer(antes))
         if not anteriores:
             return None
         numero = anteriores[-1]
@@ -737,7 +758,7 @@ def interpretar_consulta_especificacao(
         "valor_maximo": None,
         "unidade": (
             "s" if eh_tempo
-            else _detectar_unidade(f"{ocorrencia.group(0)} {depois}")[0]
+            else _unidade_da_consulta(ocorrencia.group(0), antes, depois)
         ),
         "tolerancia_percentual": (
             TOLERANCIA_PADRAO_PERCENTUAL if operador == "igual" else 0.0
@@ -765,7 +786,12 @@ def interpretar_consulta_especificacoes(
     propriedades_vistas = set()
     for indice, ocorrencia in enumerate(ocorrencias):
         fim = ocorrencias[indice + 1].start() if indice + 1 < len(ocorrencias) else len(texto)
-        fragmento = texto[ocorrencia.start():fim]
+        # Inclui o trecho desde a propriedade anterior para aceitar a ordem
+        # natural "no mínimo 200 kg/m³ de densidade por imersão". O parser
+        # prefere o número depois do rótulo; só usa o último número anterior
+        # quando não há nenhum depois.
+        inicio = ocorrencias[indice - 1].end() if indice > 0 else 0
+        fragmento = texto[inicio:fim]
         criterio = interpretar_consulta_especificacao(fragmento)
         if not criterio or criterio["propriedade"] in propriedades_vistas:
             continue
@@ -1151,6 +1177,179 @@ def buscar_produtos_por_especificacoes(
         "aviso": (
             "O produto só foi incluído quando todos os requisitos foram encontrados e atendidos. "
             "Boletim Técnico é a especificação de referência; confirme os documentos citados."
+        ),
+    }
+
+
+def buscar_produtos_por_aplicacao_e_especificacoes(
+    termos_aplicacao: List[str],
+    criterios: List[Dict[str, Any]],
+    listar_todos: bool = False,
+) -> Dict[str, Any]:
+    """Cruza aplicação e números comprovados no mesmo Boletim Técnico.
+
+    A chave da interseção é ``(produto, documento)``. Isso evita aprovar um
+    produto porque um boletim antigo menciona a aplicação enquanto outro
+    documento, sem aquela aplicação, contém um valor compatível.
+    """
+    termos = [termo.strip() for termo in termos_aplicacao if termo and termo.strip()]
+    if not termos:
+        return {"erro": "Informe a aplicação desejada."}
+    if not criterios:
+        return {"erro": "Informe pelo menos um critério técnico."}
+    invalidas = [
+        criterio.get("propriedade")
+        for criterio in criterios
+        if criterio.get("propriedade") not in PROPRIEDADES
+    ]
+    if invalidas:
+        return {
+            "erro": f"Propriedade(s) não reconhecida(s): {', '.join(map(str, invalidas))}.",
+            "propriedades_suportadas": sorted(PROPRIEDADES.keys()),
+        }
+
+    aplicacoes: Dict[Tuple[str, str], set] = {}
+    melhores: List[Dict[Tuple[str, str], Dict[str, Any]]] = [
+        {} for _ in criterios
+    ]
+    faixas = [
+        {"minimo": None, "maximo": None, "unidade": None}
+        for _ in criterios
+    ]
+
+    try:
+        client = get_qdrant_client()
+        offset = None
+        while True:
+            pontos, offset = client.scroll(
+                collection_name=COLLECTION_NAME,
+                with_payload=["filepath", "filename", "content"],
+                with_vectors=False,
+                limit=1000,
+                offset=offset,
+            )
+            for ponto in pontos:
+                payload = ponto.payload or {}
+                filepath = payload.get("filepath") or ""
+                produto = _produto_do_filepath(filepath)
+                if not produto:
+                    continue
+                filename = payload.get("filename") or _SEPARADOR_CAMINHO.split(filepath)[-1]
+                if _tipo_documento(filename) != "Boletim Técnico":
+                    continue
+
+                content = payload.get("content") or ""
+                chave = (produto, filename)
+                termos_encontrados = {
+                    termo for termo in termos if _termo_bate_no_conteudo(termo, content)
+                }
+                if termos_encontrados:
+                    aplicacoes.setdefault(chave, set()).update(termos_encontrados)
+
+                for indice, criterio in enumerate(criterios):
+                    for especificacao in extrair_especificacoes(
+                        content, propriedades=[criterio["propriedade"]]
+                    ):
+                        faixa = faixas[indice]
+                        faixa["minimo"] = (
+                            especificacao["minimo"] if faixa["minimo"] is None
+                            else min(faixa["minimo"], especificacao["minimo"])
+                        )
+                        faixa["maximo"] = (
+                            especificacao["maximo"] if faixa["maximo"] is None
+                            else max(faixa["maximo"], especificacao["maximo"])
+                        )
+                        faixa["unidade"] = faixa["unidade"] or especificacao["unidade"]
+                        if not _unidades_compativeis(
+                            criterio.get("unidade"), especificacao.get("unidade")
+                        ):
+                            continue
+                        if not _atende_criterio(
+                            especificacao,
+                            criterio["operador"],
+                            criterio["valor"],
+                            criterio.get("valor_maximo"),
+                            criterio["tolerancia_percentual"],
+                        ):
+                            continue
+                        candidato = {
+                            "propriedade": criterio["propriedade"],
+                            "propriedade_titulo": PROPRIEDADES[criterio["propriedade"]]["titulo"],
+                            "valores": _formatar_valores(especificacao),
+                            "unidade": _unidade_para_exibicao(especificacao),
+                            "documento": filename,
+                            "tipo_documento": "Boletim Técnico",
+                            "trecho": especificacao["trecho"][:220],
+                            "_ordem": _distancia_do_alvo(
+                                especificacao, criterio["valor"]
+                            ),
+                        }
+                        atual = melhores[indice].get(chave)
+                        if atual is None or candidato["_ordem"] < atual["_ordem"]:
+                            melhores[indice][chave] = candidato
+            if offset is None:
+                break
+    except Exception as e:
+        raise RetrievalIndisponivelError(str(e)) from e
+
+    documentos_compativeis = set(aplicacoes)
+    for por_documento in melhores:
+        documentos_compativeis.intersection_update(por_documento)
+
+    melhor_documento_por_produto: Dict[str, Dict[str, Any]] = {}
+    for produto, filename in documentos_compativeis:
+        chave = (produto, filename)
+        requisitos = [por_documento[chave].copy() for por_documento in melhores]
+        ordem = sum(item.pop("_ordem") for item in requisitos)
+        candidato = {
+            "produto": produto,
+            "aplicacao": {
+                "documento": filename,
+                "termos_encontrados": sorted(aplicacoes[chave]),
+            },
+            "requisitos": requisitos,
+            "_ordem": ordem,
+        }
+        atual = melhor_documento_por_produto.get(produto)
+        if atual is None or candidato["_ordem"] < atual["_ordem"]:
+            melhor_documento_por_produto[produto] = candidato
+
+    encontrados = sorted(
+        melhor_documento_por_produto.values(),
+        key=lambda item: (item["_ordem"], item["produto"]),
+    )
+    for item in encontrados:
+        item.pop("_ordem", None)
+
+    descricoes = []
+    for criterio, faixa in zip(criterios, faixas):
+        descricoes.append({
+            "propriedade": criterio["propriedade"],
+            "criterio": _descrever_criterio(
+                criterio["propriedade"], criterio["operador"], criterio["valor"],
+                criterio.get("valor_maximo"), criterio["tolerancia_percentual"],
+            ),
+            "faixa_no_acervo": (
+                None if faixa["minimo"] is None else {
+                    "minimo": faixa["minimo"],
+                    "maximo": faixa["maximo"],
+                    "unidade": faixa["unidade"]
+                    or PROPRIEDADES[criterio["propriedade"]]["unidade_tipica"],
+                }
+            ),
+        })
+
+    limite = None if listar_todos else _LIMITE_PREVIA
+    return {
+        "aplicacao": {"termos_buscados": termos},
+        "criterios": descricoes,
+        "total": len(encontrados),
+        "produtos": encontrados if limite is None else encontrados[:limite],
+        "truncado": limite is not None and len(encontrados) > limite,
+        "aviso": (
+            "O produto só foi incluído quando aplicação e especificação foram "
+            "comprovadas no mesmo Boletim Técnico. Confirme o documento citado "
+            "antes de fechar a proposta."
         ),
     }
 

@@ -20,6 +20,7 @@ from app.rag.treinamento import montar_bloco as montar_bloco_de_treinamento
 from app.rag.exceptions import RetrievalIndisponivelError
 from app.rag.catalog_stats import buscar_evidencias_de_aplicacao_explicita
 from app.rag.spec_search import (
+    buscar_produtos_por_aplicacao_e_especificacoes,
     buscar_produtos_por_especificacao,
     buscar_produtos_por_especificacoes,
     interpretar_consulta_especificacoes,
@@ -44,7 +45,8 @@ _PALAVRAS_NUNCA_SAO_FAMILIA_DE_CODIGO = {
     "os", "as", "um", "uma", "de", "da", "do", "em", "no", "na", "por", "com",
     "que", "e", "ou", "se", "ao", "aos", "eu", "tu", "ele", "ela", "nos",
     "todos", "todas", "esses", "essas", "este", "esta", "estes", "estas",
-    "isso", "isto", "tem", "têm",
+    "isso", "isto", "tem", "têm", "minimo", "mínimo", "maximo", "máximo",
+    "menos", "mais",
 }
 
 
@@ -181,6 +183,7 @@ D) PEDIDO POR ESPECIFICAÇÃO TÉCNICA (o usuário descreve um NÚMERO que o pro
    - Ex: "quero um produto com hidroxila de 180", "preciso de viscosidade acima de 5000 cPs", "algum sistema com NCO entre 12 e 13%", "tempo de reação de 45 segundos", "densidade de 35 kg/m³", "dureza Shore A 80".
    - Isso NÃO é a Situação B (recomendação aberta) nem a C (listagem por categoria): o critério já veio pronto e é numérico. Não faça perguntas de qualificação antes — o vendedor já disse o que precisa.
    - CHAME A FERRAMENTA `consultar_produtos_por_especificacao` com a propriedade canônica, o valor e o operador. NUNCA responda esse tipo de pergunta só com o contexto de busca semântica: o embedding não compara grandezas, então os trechos recuperados falam da propriedade certa com o VALOR ERRADO, e apresentá-los como resposta é um erro silencioso.
+   - QUANDO A MESMA PERGUNTA TAMBÉM INFORMAR UMA APLICAÇÃO, aplicação e números são requisitos obrigatórios simultâneos. Nunca responda só pelos números nem use um produto de outra aplicação. O produto só pode ser apresentado quando o mesmo Boletim Técnico comprovar a aplicação pedida e todas as especificações.
    - Quando o contexto já trouxer o bloco "🔎 BUSCA POR ESPECIFICAÇÃO TÉCNICA", a varredura JÁ FOI FEITA — responda com aquela lista e aquele total, sem repetir a chamada. Chame a ferramenta de novo só para mudar algo: outra propriedade, outra tolerância, ou a lista completa (`listar_todos=true`) depois que o vendedor pedir.
    - RESPONDA COM O TOTAL REAL primeiro, depois a prévia (nome do produto, o valor lido e o documento de origem, 1 linha cada), e então pergunte se ele quer a lista completa ou a ficha de algum item.
    - SE NÃO ENCONTRAR NENHUM: diga claramente que nenhum produto do acervo atende, informe a FAIXA que existe no acervo para aquela propriedade (`faixa_no_acervo`) e pergunte se o valor pedido está correto. NUNCA ofereça um produto de valor diferente como se atendesse ao pedido.
@@ -283,8 +286,9 @@ def _eh_pedido_listagem_elastomeros(query: str) -> bool:
 
 _PADROES_APLICACAO_EXPLICITA = (
     re.compile(
-        r"\b(?:produtos?|sistemas?|colas?|espumas?|adesivos?|resinas?)\b"
+        r"\b(?:produtos?|material|materiais|sistemas?|colas?|espumas?|adesivos?|resinas?)\b"
         r".{0,60}\b(?:para|pra)\s+"
+        r"(?:(?:fazer|fabricar|produzir)\s+)?"
         r"(?:(?:o|a|os|as|um|uma)\s+)?(?P<aplicacao>[^?.,;\n]{2,100})"
     ),
     re.compile(
@@ -304,13 +308,15 @@ _EQUIVALENCIAS_DE_APLICACAO = {
     "assentos de onibus": ["assento de ônibus", "banco de ônibus"],
     "banco de onibus": ["assento de ônibus", "banco de ônibus"],
     "bancos de onibus": ["assento de ônibus", "banco de ônibus"],
+    "solado de tenis": ["solado de tênis", "solado de calçado", "solado"],
+    "solados de tenis": ["solado de tênis", "solado de calçado", "solado"],
 }
 
 
 def _extrair_aplicacao_explicita(query: str) -> Optional[str]:
     """Extrai aplicações de pedidos claros sem pedir ao LLM para ampliá-las."""
     codigos = _detectar_codigos_produto(query)
-    if codigos or interpretar_consulta_especificacoes(query, codigos_produto=codigos):
+    if codigos:
         return None
     texto = _normalizar_para_regra(query)
     if "onibus" in texto and re.search(r"\b(?:assentos?|bancos?)\b", texto):
@@ -337,6 +343,12 @@ def _extrair_aplicacao_explicita(query: str) -> Optional[str]:
     return None
 
 
+def _termos_para_aplicacao(aplicacao: str) -> List[str]:
+    return _EQUIVALENCIAS_DE_APLICACAO.get(
+        _normalizar_para_regra(aplicacao), [aplicacao]
+    )
+
+
 def _responder_aplicacao_com_evidencia(query: str) -> Optional[Dict[str, Any]]:
     """Responde listagem/aplicação só com evidência literal do boletim.
 
@@ -345,12 +357,13 @@ def _responder_aplicacao_com_evidencia(query: str) -> Optional[Dict[str, Any]]:
     resposta ruim relatada.
     """
     aplicacao = _extrair_aplicacao_explicita(query)
-    if not aplicacao:
+    codigos = _detectar_codigos_produto(query)
+    if not aplicacao or interpretar_consulta_especificacoes(
+        query, codigos_produto=codigos
+    ):
         return None
 
-    termos = _EQUIVALENCIAS_DE_APLICACAO.get(
-        _normalizar_para_regra(aplicacao), [aplicacao]
-    )
+    termos = _termos_para_aplicacao(aplicacao)
     evidencias = buscar_evidencias_de_aplicacao_explicita(termos)
     if not evidencias:
         fontes = []
@@ -440,6 +453,73 @@ def _responder_requisitos_compostos(query: str) -> Optional[Dict[str, Any]]:
     if codigos:
         return None
     criterios = interpretar_consulta_especificacoes(query, codigos_produto=codigos)
+    aplicacao = _extrair_aplicacao_explicita(query)
+    if aplicacao and criterios:
+        termos_aplicacao = _termos_para_aplicacao(aplicacao)
+        resultado = buscar_produtos_por_aplicacao_e_especificacoes(
+            termos_aplicacao, criterios
+        )
+        if resultado.get("erro"):
+            return None
+
+        descricoes = [item["criterio"] for item in resultado["criterios"]]
+        linhas = [
+            "### Resultado da busca por aplicação e requisitos técnicos",
+            "",
+            f'**Aplicação obrigatória:** {aplicacao}.',
+            "**Especificações obrigatórias:** " + "; ".join(descricoes) + ".",
+            "",
+        ]
+        fontes: set[str] = set()
+        if resultado["produtos"]:
+            total = resultado["total"]
+            linhas.append(
+                f"Encontrei {total} produto{'s' if total != 1 else ''} com aplicação "
+                "e especificações comprovadas no mesmo Boletim Técnico:"
+            )
+            linhas.append("")
+            for indice, item in enumerate(resultado["produtos"], start=1):
+                linhas.append(f"{indice}. **{item['produto']}**")
+                documento_aplicacao = item["aplicacao"]["documento"]
+                termos = ", ".join(item["aplicacao"]["termos_encontrados"])
+                linhas.append(f"   - Aplicação encontrada: {termos}")
+                linhas.append(f"   - Fonte da aplicação: {documento_aplicacao}")
+                fontes.add(documento_aplicacao)
+                for requisito in item["requisitos"]:
+                    unidade = f" {requisito['unidade']}" if requisito["unidade"] else ""
+                    linhas.append(
+                        f"   - {requisito['propriedade_titulo']}: "
+                        f"{requisito['valores']}{unidade}"
+                    )
+                    fontes.add(requisito["documento"])
+            if resultado["truncado"]:
+                linhas.extend([
+                    "",
+                    f"A lista mostra uma prévia; há {resultado['total']} produtos compatíveis.",
+                ])
+        else:
+            linhas.append(
+                "Não encontrei produto cujo mesmo Boletim Técnico comprove a aplicação "
+                "e todas as especificações solicitadas."
+            )
+            faixas = [
+                item for item in resultado["criterios"] if item.get("faixa_no_acervo")
+            ]
+            if faixas:
+                linhas.extend(["", "Faixas identificadas nos Boletins do acervo:"])
+                for item in faixas:
+                    faixa = item["faixa_no_acervo"]
+                    linhas.append(
+                        f"- {item['criterio']}: {faixa['minimo']:g} a "
+                        f"{faixa['maximo']:g} {faixa['unidade']}"
+                    )
+        linhas.extend(["", resultado["aviso"]])
+        return {
+            "answer": "\n".join(linhas),
+            "sources": sorted(fontes),
+            "model_used": "catalogo-estruturado",
+        }
+
     if len(criterios) < 2:
         return None
 

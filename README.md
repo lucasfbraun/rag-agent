@@ -271,6 +271,14 @@ embedding e sem o LLM escolher sinônimos. Se não houver menção explícita, a
 resposta informa que nenhum boletim foi encontrado. Equivalências técnicas só
 devem ser adicionadas depois de validação da equipe técnica/P&D.
 
+Quando a pergunta também contém valores técnicos, o agente cruza todos os
+requisitos em uma única consulta. O mesmo Boletim Técnico precisa comprovar a
+aplicação e cada especificação; atender apenas à densidade, dureza ou tempo não
+basta. Propriedades específicas permanecem separadas — por exemplo, **densidade
+por imersão** não é tratada como densidade livre ou aparente. Esse caminho
+estruturado aceita frases naturais como `no mínimo 200Kg/m³ de densidade por
+imersão` e não depende do LLM para fazer a interseção.
+
 ## Estrutura do projeto
 
 ```

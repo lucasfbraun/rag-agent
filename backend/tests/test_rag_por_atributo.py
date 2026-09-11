@@ -295,6 +295,77 @@ def test_rota_streaming_nao_delega_resultado_composto_ao_llm():
     assert eventos[-1] == {"type": "done"}
 
 
+def _resultado_aplicacao_e_especificacao():
+    return {
+        "aplicacao": {"termos_buscados": ["solado"]},
+        "criterios": [{
+            "propriedade": "densidade_imersao",
+            "criterio": "Densidade por imersão a partir de 200 kg/m³",
+            "faixa_no_acervo": {"minimo": 150.0, "maximo": 290.0, "unidade": "kg/m³"},
+        }],
+        "total": 1,
+        "produtos": [{
+            "produto": "FLEXX SL ECO 2539",
+            "aplicacao": {
+                "documento": "Boletim FLEXX SL ECO 2539.pdf",
+                "termos_encontrados": ["solado"],
+            },
+            "requisitos": [{
+                "propriedade": "densidade_imersao",
+                "propriedade_titulo": "Densidade por imersão",
+                "valores": "270 a 290",
+                "unidade": "kg/m³",
+                "documento": "Boletim FLEXX SL ECO 2539.pdf",
+            }],
+        }],
+        "truncado": False,
+        "aviso": "Aplicação e especificação comprovadas no mesmo Boletim Técnico.",
+    }
+
+
+def _pergunta_aplicacao_e_especificacao():
+    return (
+        "Preciso de um material para fazer solado de tênis, ele precisa ter "
+        "no mínimo 200Kg/m³ de densidade por imersão"
+    )
+
+
+def test_rota_sincrona_cruza_aplicacao_e_especificacao_sem_llm():
+    with patch(
+        "app.rag.engine.buscar_produtos_por_aplicacao_e_especificacoes",
+        return_value=_resultado_aplicacao_e_especificacao(),
+    ) as busca, patch("app.rag.engine._preparar_contexto") as preparar, \
+         patch("app.rag.engine.litellm.completion") as completion:
+        resposta = run_pu_matcher_agent(_pergunta_aplicacao_e_especificacao())
+
+    busca.assert_called_once()
+    preparar.assert_not_called()
+    completion.assert_not_called()
+    assert resposta["model_used"] == "catalogo-estruturado"
+    assert "solado de tênis" in resposta["answer"].lower()
+    assert "FLEXX SL ECO 2539" in resposta["answer"]
+    assert "270 a 290 kg/m³" in resposta["answer"]
+    assert resposta["sources"] == ["Boletim FLEXX SL ECO 2539.pdf"]
+
+
+def test_rota_streaming_cruza_aplicacao_e_especificacao_sem_llm():
+    with patch(
+        "app.rag.engine.buscar_produtos_por_aplicacao_e_especificacoes",
+        return_value=_resultado_aplicacao_e_especificacao(),
+    ), patch("app.rag.engine._preparar_contexto") as preparar, \
+         patch("app.rag.engine.litellm.completion") as completion:
+        eventos = [
+            json.loads(linha)
+            for linha in stream_pu_matcher_agent(_pergunta_aplicacao_e_especificacao())
+        ]
+
+    preparar.assert_not_called()
+    completion.assert_not_called()
+    assert eventos[0]["model_used"] == "catalogo-estruturado"
+    assert "FLEXX SL ECO 2539" in eventos[1]["content"]
+    assert eventos[-1] == {"type": "done"}
+
+
 def test_pedido_do_dado_de_um_produto_nomeado_nao_dispara_varredura():
     """"Qual a hidroxila do AG 2032" é consulta de ficha, não busca no acervo —
     e a varredura completa é cara demais para rodar à toa."""
