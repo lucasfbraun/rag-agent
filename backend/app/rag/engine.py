@@ -781,7 +781,7 @@ def _ordenar_por_secao(
 
 
 _MAXIMO_TRECHOS_EXATOS = 20
-_MAXIMO_REFERENCIAS_CRUZADAS = 6
+_MAXIMO_REFERENCIAS_CRUZADAS_POR_PRODUTO = 6
 
 
 def _recuperar_por_codigo(
@@ -828,40 +828,47 @@ def _recuperar_referencias_cruzadas(
     codigos: List[str],
     sensibilidade_must_not: List[Any],
 ) -> List[Dict[str, Any]]:
-    """Busca ``documento de X que menciona Y`` em todas as direções."""
+    """Busca em cada produto citado menções a qualquer um dos demais.
+
+    São ``N`` consultas para ``N`` produtos. O desenho anterior fazia uma
+    consulta por par ordenado (``N × (N - 1)``), custo que crescia rápido em
+    comparações maiores. Cada consulta continua cobrindo todos os outros
+    produtos por meio do bloco ``should`` interno.
+    """
     if len(codigos) < 2:
         return []
     encontrados: List[Dict[str, Any]] = []
     for codigo_documento in codigos:
-        for codigo_mencionado in codigos:
-            if codigo_documento == codigo_mencionado:
-                continue
-            filtro = qmodels.Filter(
-                must=[
+        outros_codigos = [codigo for codigo in codigos if codigo != codigo_documento]
+        filtro = qmodels.Filter(
+            must=[
+                qmodels.FieldCondition(
+                    key="filename", match=qmodels.MatchText(text=codigo_documento)
+                ),
+                qmodels.Filter(should=[
                     qmodels.FieldCondition(
-                        key="filename", match=qmodels.MatchText(text=codigo_documento)
-                    ),
-                    qmodels.FieldCondition(
-                        key="content", match=qmodels.MatchText(text=codigo_mencionado)
-                    ),
-                ],
-                must_not=sensibilidade_must_not,
+                        key="content", match=qmodels.MatchText(text=codigo)
+                    )
+                    for codigo in outros_codigos
+                ]),
+            ],
+            must_not=sensibilidade_must_not,
+        )
+        try:
+            pontos, _ = client.scroll(
+                collection_name=COLLECTION_NAME,
+                scroll_filter=filtro,
+                with_payload=True,
+                with_vectors=False,
+                limit=_MAXIMO_REFERENCIAS_CRUZADAS_POR_PRODUTO,
             )
-            try:
-                pontos, _ = client.scroll(
-                    collection_name=COLLECTION_NAME,
-                    scroll_filter=filtro,
-                    with_payload=True,
-                    with_vectors=False,
-                    limit=_MAXIMO_REFERENCIAS_CRUZADAS,
-                )
-                encontrados.extend(p.payload for p in pontos)
-            except Exception as e:
-                logger.warning(
-                    "Falha ao cruzar documentos de %s com menção a %s (%s).",
-                    codigo_documento, codigo_mencionado, e,
-                )
-    return encontrados[:_MAXIMO_REFERENCIAS_CRUZADAS]
+            encontrados.extend(p.payload for p in pontos)
+        except Exception as e:
+            logger.warning(
+                "Falha ao cruzar documentos de %s com os demais produtos (%s).",
+                codigo_documento, e,
+            )
+    return encontrados
 
 
 def retrieve_products_context(

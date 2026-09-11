@@ -195,11 +195,17 @@ def test_dois_produtos_buscam_evidencia_relacional_nos_documentos_de_ambos():
             for condicao in condicoes
             if hasattr(condicao, "key")
         }
-        if textos == {"filename": "cat 136", "content": "ag 2032"}:
+        mencoes = {
+            getattr(condicao.match, "text", None)
+            for grupo in condicoes
+            for condicao in (getattr(grupo, "should", None) or [])
+            if getattr(condicao, "key", None) == "content"
+        }
+        if textos == {"filename": "cat 136"} and "ag 2032" in mencoes:
             return [evidencia_em_y], None
-        if textos == {"filename": "ag 2032"}:
+        if textos == {"filename": "ag 2032"} and not mencoes:
             return [chunk_x], None
-        if textos == {"filename": "cat 136"}:
+        if textos == {"filename": "cat 136"} and not mencoes:
             return [chunk_y], None
         return [], None
 
@@ -217,6 +223,60 @@ def test_dois_produtos_buscam_evidencia_relacional_nos_documentos_de_ambos():
         "Boletim FLEXX AG 2032.pdf",
         "Boletim FLEXX CAT 136.pdf",
     }
+
+
+def test_tres_produtos_consultam_cada_documentacao_e_acham_prova_no_terceiro():
+    from app.config import COLLECTION_NAME
+
+    codigos = ["ag 2032", "cat 136", "rg 2464"]
+    fake_client = MagicMock()
+    fake_client.get_collections.return_value = _fake_collections([COLLECTION_NAME])
+    evidencia_no_terceiro = _hit(
+        "Boletim FLEXX RG 2464.pdf",
+        4,
+        "O sistema RG 2464 utiliza AG 2032 e CAT 136 em sua preparação.",
+    )
+
+    def responder_scroll(**kwargs):
+        filtro = kwargs["scroll_filter"]
+        condicoes = list(filtro.must or [])
+        filename = next((
+            getattr(condicao.match, "text", None)
+            for condicao in condicoes
+            if getattr(condicao, "key", None) == "filename"
+        ), None)
+        mencoes = {
+            getattr(condicao.match, "text", None)
+            for grupo in condicoes
+            for condicao in (getattr(grupo, "should", None) or [])
+            if getattr(condicao, "key", None) == "content"
+        }
+        if filename == "rg 2464" and mencoes == {"ag 2032", "cat 136"}:
+            return [evidencia_no_terceiro], None
+        if filename in codigos and not mencoes:
+            return [_hit(f"Boletim FLEXX {filename.upper()}.pdf", 0)], None
+        return [], None
+
+    fake_client.scroll.side_effect = responder_scroll
+    fake_client.search.return_value = []
+
+    with patch("app.rag.engine._get_qdrant_client", return_value=fake_client), \
+         patch("app.rag.engine.get_embedding", return_value=[0.1, 0.2]):
+        result = retrieve_products_context(
+            "AG 2032, CAT 136 e RG 2464 são utilizados juntos?", top_k=6
+        )
+
+    assert result[0] == evidencia_no_terceiro.payload
+    filenames = {item["filename"].lower() for item in result}
+    assert all(codigo in " | ".join(filenames) for codigo in codigos)
+
+    filtros_relacionais = [
+        chamada.kwargs["scroll_filter"]
+        for chamada in fake_client.scroll.call_args_list
+        if any(getattr(condicao, "should", None)
+               for condicao in (chamada.kwargs["scroll_filter"].must or []))
+    ]
+    assert len(filtros_relacionais) == 3
 
 
 def test_pergunta_sem_codigo_nem_palavra_chave_extraivel_nunca_chama_scroll():

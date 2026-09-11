@@ -5,6 +5,23 @@ Ver visão geral de fases em [CRONOGRAMA.md](CRONOGRAMA.md).
 
 ---
 
+## 2026-09-11 — Sessão 47: relações com qualquer quantidade de produtos
+
+A busca relacional foi generalizada para três ou mais produtos sem crescimento
+quadrático no número de chamadas ao Qdrant. Para `N` códigos citados, o motor
+faz uma consulta cruzada por produto; dentro dela, um grupo `should` procura
+qualquer um dos outros `N - 1` códigos. Todos os produtos também mantêm sua
+recuperação exata individual.
+
+Isso garante que uma pergunta envolvendo X, Y e Z consulte as três
+documentações e possa encontrar no boletim de Z uma relação que não apareça nos
+boletins de X ou Y. A regressão cobre esse cenário, confirma que os três produtos
+chegam ao contexto, que a evidência de Z ganha prioridade e que são feitas três
+buscas relacionais, em vez de seis buscas por pares direcionais. Validação
+focada: 30 testes aprovados; suíte ampliada do motor: 209 testes aprovados.
+
+---
+
 ## 2026-09-11 — Sessão 46: relações entre produtos consultam os dois lados
 
 Corrigida a recuperação de perguntas como "o produto X é utilizado no produto
