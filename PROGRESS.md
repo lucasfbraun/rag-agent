@@ -5,6 +5,26 @@ Ver visão geral de fases em [CRONOGRAMA.md](CRONOGRAMA.md).
 
 ---
 
+## 2026-09-11 — Sessão 46: relações entre produtos consultam os dois lados
+
+Corrigida a recuperação de perguntas como "o produto X é utilizado no produto
+Y?". Antes, vários códigos eram enviados ao Qdrant em um único filtro `X OU Y`
+com limite global de 20 chunks. Os documentos de X podiam ocupar o lote inteiro;
+assim, o agente concluía que não havia evidência sem ter recebido o boletim de Y.
+
+A recuperação exata agora reserva uma parcela do lote para cada produto citado.
+Além disso, faz uma busca cruzada em todas as direções: documento de X que
+menciona Y e documento de Y que menciona X. As referências cruzadas entram no
+início do contexto, antes da busca semântica. O prompt também determina que uma
+ausência no boletim de X não encerra a investigação.
+
+O detector passou a reconhecer identificadores alfanuméricos, como
+`TH T160DE1`, sem recortá-los como `T 160DE`. A regressão reproduz evidência
+presente somente no boletim do segundo produto e confirma que os documentos de
+ambos chegam ao agente. Validação ampliada do motor: 208 testes aprovados.
+
+---
+
 ## 2026-09-11 — Sessão 45: todos os produtos da interseção
 
 Consultas determinísticas com vários requisitos, inclusive as que combinam

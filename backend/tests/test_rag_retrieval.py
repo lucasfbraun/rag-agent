@@ -119,6 +119,12 @@ def test_detectar_codigos_produto_multiplos_codigos():
     assert _detectar_codigos_produto("compare AG 2032 com CAT 136") == ["ag 2032", "cat 136"]
 
 
+def test_detectar_codigo_com_identificador_alfanumerico():
+    assert _detectar_codigos_produto(
+        "o TH T160DE1 é utilizado no CAT 136?"
+    ) == ["th t160de1", "cat 136"]
+
+
 def test_detectar_codigos_produto_ignora_artigo_colado_em_numero():
     """Bug real: "liste os 77" (77 = contagem de uma listagem anterior, não
     código nenhum) casava "os" + "77" como se fosse o código "OS 77" — o
@@ -160,6 +166,57 @@ def test_codigo_de_produto_detectado_prioriza_match_exato_sobre_semantico():
 
     assert result[0]["filename"] == "Boletim FLEXX AG 2032.pdf"
     assert any(r["filename"] == "Pró Bloq Cimento Elástico.pdf" for r in result)
+
+
+def test_dois_produtos_buscam_evidencia_relacional_nos_documentos_de_ambos():
+    """A prova de que X é usado em Y pode existir apenas no boletim de Y.
+
+    A busca antiga fazia um único scroll ``X OU Y`` limitado a 20 chunks;
+    os chunks de X podiam ocupar o lote inteiro e esconder Y.
+    """
+    from app.config import COLLECTION_NAME
+
+    fake_client = MagicMock()
+    fake_client.get_collections.return_value = _fake_collections([COLLECTION_NAME])
+
+    evidencia_em_y = _hit(
+        "Boletim FLEXX CAT 136.pdf",
+        7,
+        "O sistema deve ser utilizado em conjunto com o FLEXX AG 2032.",
+    )
+    chunk_x = _hit("Boletim FLEXX AG 2032.pdf", 0, "Dados gerais do AG 2032.")
+    chunk_y = _hit("Boletim FLEXX CAT 136.pdf", 0, "Dados gerais do CAT 136.")
+
+    def responder_scroll(**kwargs):
+        filtro = kwargs["scroll_filter"]
+        condicoes = list(filtro.must or [])
+        textos = {
+            condicao.key: getattr(condicao.match, "text", None)
+            for condicao in condicoes
+            if hasattr(condicao, "key")
+        }
+        if textos == {"filename": "cat 136", "content": "ag 2032"}:
+            return [evidencia_em_y], None
+        if textos == {"filename": "ag 2032"}:
+            return [chunk_x], None
+        if textos == {"filename": "cat 136"}:
+            return [chunk_y], None
+        return [], None
+
+    fake_client.scroll.side_effect = responder_scroll
+    fake_client.search.return_value = []
+
+    with patch("app.rag.engine._get_qdrant_client", return_value=fake_client), \
+         patch("app.rag.engine.get_embedding", return_value=[0.1, 0.2]):
+        result = retrieve_products_context(
+            "o AG 2032 é utilizado no CAT 136?", top_k=6
+        )
+
+    assert result[0] == evidencia_em_y.payload
+    assert {item["filename"] for item in result} >= {
+        "Boletim FLEXX AG 2032.pdf",
+        "Boletim FLEXX CAT 136.pdf",
+    }
 
 
 def test_pergunta_sem_codigo_nem_palavra_chave_extraivel_nunca_chama_scroll():

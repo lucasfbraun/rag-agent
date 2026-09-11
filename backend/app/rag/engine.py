@@ -35,6 +35,10 @@ logger = logging.getLogger(__name__)
 # payload `filename` da ingestão: "Boletim FLEXX AG 2032.pdf", "FISPQ FLEXX
 # CAT 136.doc"). Usado pra detectar código de produto na pergunta do usuário.
 _PADRAO_CODIGO_PRODUTO = re.compile(r"\b([A-Za-zÀ-ÖØ-öø-ÿ]{1,6})\s?(\d{2,6}[A-Za-z]{0,2})\b")
+_PADRAO_CODIGO_PRODUTO_ALFANUMERICO = re.compile(
+    r"\b([A-Za-zÀ-ÖØ-öø-ÿ]{1,6})\s+"
+    r"([A-Za-zÀ-ÖØ-öø-ÿ]{1,3}\d{2,6}[A-Za-z0-9-]*)\b"
+)
 
 # Palavras curtas de função (artigo, preposição, pronome) que NUNCA são sigla
 # de família de produto, mesmo batendo no padrão acima quando ficam coladas
@@ -60,12 +64,23 @@ def _detectar_codigos_produto(query: str) -> List[str]:
     carrega pouco significado semântico. Quando a pergunta cita um código
     reconhecível, complementamos a busca vetorial com correspondência exata
     de texto no nome do arquivo (ver retrieve_products_context)."""
-    codigos = []
-    for familia, numero in _PADRAO_CODIGO_PRODUTO.findall(query):
-        if familia.lower() in _PALAVRAS_NUNCA_SAO_FAMILIA_DE_CODIGO:
-            continue
-        codigos.append(f"{familia} {numero}".lower())
-    return codigos
+    encontrados = []
+    intervalos_ocupados = []
+    # O identificador alfanumérico vem primeiro para ``TH T160DE1`` não ser
+    # recortado pelo padrão simples como ``T 160DE``.
+    for padrao in (_PADRAO_CODIGO_PRODUTO_ALFANUMERICO, _PADRAO_CODIGO_PRODUTO):
+        for match in padrao.finditer(query):
+            inicio, fim = match.span()
+            if any(inicio < ocupado_fim and fim > ocupado_inicio
+                   for ocupado_inicio, ocupado_fim in intervalos_ocupados):
+                continue
+            familia, numero = match.groups()
+            if familia.lower() in _PALAVRAS_NUNCA_SAO_FAMILIA_DE_CODIGO:
+                continue
+            encontrados.append((inicio, f"{familia} {numero}".lower()))
+            intervalos_ocupados.append((inicio, fim))
+    encontrados.sort(key=lambda item: item[0])
+    return list(dict.fromkeys(codigo for _, codigo in encontrados))
 
 
 # Palavras genéricas/de conexão em português — descartadas na extração de
@@ -151,6 +166,7 @@ A) PEDIDO ESPECÍFICO (produto/código/documento já nomeado pelo usuário):
    - Se a seção pedida NÃO estiver nos trechos recuperados, diga que aquele dado específico não consta no documento recuperado. NUNCA entregue outra seção no lugar (ex: responder com a tabela de especificação quando o que foi pedido foi embalagem, validade ou armazenamento) e NUNCA complete com conhecimento geral de mercado como se fosse do boletim.
    - Quando o contexto trouxer o bloco "📋 LEITURA ESTRUTURADA DAS TABELAS DE ESPECIFICAÇÃO", PREFIRA aqueles valores aos números do texto corrido: a extração de PDF embaralha as colunas da tabela, e esse bloco é a leitura já resolvida propriedade→valor do MESMO documento. Cite sempre o documento de origem.
    - SE O CONTEXTO TRAZ O AVISO "⚠️ ATENÇÃO: o(s) código(s) ... foi(ram) mencionado(s) ... mas NENHUM documento com esse código exato foi encontrado": NÃO invente uma resposta usando os trechos parecidos como se fossem do produto pedido. Diga diretamente ao usuário que esse produto/código NÃO foi encontrado na base de dados — pode sugerir que confira o código/nome, mas a mensagem principal é "não encontrado", não uma recomendação alternativa não pedida.
+   - PERGUNTA SOBRE A RELAÇÃO ENTRE DOIS OU MAIS PRODUTOS: examine os documentos de TODOS os produtos citados. A comprovação de que X é usado, combinado ou aplicado em Y pode estar somente no Boletim Técnico de Y. Uma ausência no boletim de X não encerra a busca. O contexto prioriza trechos em que o documento de um produto menciona diretamente outro; considere os dois sentidos antes de concluir que não há evidência.
 
 B) PEDIDO ABERTO DE RECOMENDAÇÃO (o usuário ainda não sabe qual produto quer):
    - Ex: "Quero um produto para assento de ônibus", "preciso de uma cola para rolha de cortiça".
@@ -763,6 +779,91 @@ def _ordenar_por_secao(
         destino.append(doc)
     return com_secao + sem_secao
 
+
+_MAXIMO_TRECHOS_EXATOS = 20
+_MAXIMO_REFERENCIAS_CRUZADAS = 6
+
+
+def _recuperar_por_codigo(
+    client,
+    codigos: List[str],
+    sensibilidade_must_not: List[Any],
+) -> List[Dict[str, Any]]:
+    """Reserva uma parte da recuperação exata para cada produto citado.
+
+    Um único filtro ``X OU Y`` permitia que os primeiros 20 chunks de X
+    ocupassem todo o lote. Consultas sobre a relação entre produtos então não
+    recebiam nenhum documento de Y, mesmo quando a prova estava nele.
+    """
+    if not codigos:
+        return []
+    limite_por_codigo = max(1, _MAXIMO_TRECHOS_EXATOS // len(codigos))
+    encontrados: List[Dict[str, Any]] = []
+    for codigo in codigos:
+        filtro = qmodels.Filter(
+            must=[qmodels.FieldCondition(
+                key="filename", match=qmodels.MatchText(text=codigo)
+            )],
+            must_not=sensibilidade_must_not,
+        )
+        try:
+            pontos, _ = client.scroll(
+                collection_name=COLLECTION_NAME,
+                scroll_filter=filtro,
+                with_payload=True,
+                with_vectors=False,
+                limit=limite_por_codigo,
+            )
+            encontrados.extend(p.payload for p in pontos)
+        except Exception as e:
+            logger.warning(
+                "Falha na busca exata pelo produto %s (%s) — seguindo com as demais buscas.",
+                codigo, e,
+            )
+    return encontrados
+
+
+def _recuperar_referencias_cruzadas(
+    client,
+    codigos: List[str],
+    sensibilidade_must_not: List[Any],
+) -> List[Dict[str, Any]]:
+    """Busca ``documento de X que menciona Y`` em todas as direções."""
+    if len(codigos) < 2:
+        return []
+    encontrados: List[Dict[str, Any]] = []
+    for codigo_documento in codigos:
+        for codigo_mencionado in codigos:
+            if codigo_documento == codigo_mencionado:
+                continue
+            filtro = qmodels.Filter(
+                must=[
+                    qmodels.FieldCondition(
+                        key="filename", match=qmodels.MatchText(text=codigo_documento)
+                    ),
+                    qmodels.FieldCondition(
+                        key="content", match=qmodels.MatchText(text=codigo_mencionado)
+                    ),
+                ],
+                must_not=sensibilidade_must_not,
+            )
+            try:
+                pontos, _ = client.scroll(
+                    collection_name=COLLECTION_NAME,
+                    scroll_filter=filtro,
+                    with_payload=True,
+                    with_vectors=False,
+                    limit=_MAXIMO_REFERENCIAS_CRUZADAS,
+                )
+                encontrados.extend(p.payload for p in pontos)
+            except Exception as e:
+                logger.warning(
+                    "Falha ao cruzar documentos de %s com menção a %s (%s).",
+                    codigo_documento, codigo_mencionado, e,
+                )
+    return encontrados[:_MAXIMO_REFERENCIAS_CRUZADAS]
+
+
 def retrieve_products_context(
     query: str, top_k: int = 6, incluir_sensivel: bool = False
 ) -> List[Dict[str, Any]]:
@@ -811,29 +912,11 @@ def retrieve_products_context(
         ]
     query_filter = qmodels.Filter(must_not=sensibilidade_must_not) if sensibilidade_must_not else None
 
-    exact_hits: List[Dict[str, Any]] = []
     codigos = _detectar_codigos_produto(query)
-    if codigos:
-        filtro_exato = qmodels.Filter(
-            should=[
-                qmodels.FieldCondition(key="filename", match=qmodels.MatchText(text=codigo))
-                for codigo in codigos
-            ],
-            must_not=sensibilidade_must_not,
-        )
-        try:
-            pontos, _ = client.scroll(
-                collection_name=COLLECTION_NAME,
-                scroll_filter=filtro_exato,
-                with_payload=True,
-                with_vectors=False,
-                limit=20,
-            )
-            exact_hits = [p.payload for p in pontos]
-        except Exception as e:
-            logger.warning(
-                "Falha na busca exata por código de produto (%s) — seguindo só com busca semântica.", e
-            )
+    relation_hits = _recuperar_referencias_cruzadas(
+        client, codigos, sensibilidade_must_not
+    )
+    exact_hits = _recuperar_por_codigo(client, codigos, sensibilidade_must_not)
 
     secoes = detectar_secoes(query)
     secao_hits = _recuperar_por_secao(
@@ -908,10 +991,12 @@ def retrieve_products_context(
 
     semantic_hits = [hit.payload for hit in results]
 
-    # Prioridade: seção pedida > match exato de código > palavra-chave > semântico.
-    prioritarios: List[Dict[str, Any]] = list(secao_hits)
+    # Referência cruzada vem primeiro: em perguntas sobre X dentro de Y, a
+    # evidência frequentemente mora apenas no boletim de Y.
+    # Depois: seção pedida > match exato de código > palavra-chave > semântico.
+    prioritarios: List[Dict[str, Any]] = list(relation_hits)
     vistos = {(h.get("filename"), h.get("chunk_index")) for h in prioritarios}
-    for h in [*exact_hits, *keyword_hits]:
+    for h in [*secao_hits, *exact_hits, *keyword_hits]:
         chave = (h.get("filename"), h.get("chunk_index"))
         if chave not in vistos:
             prioritarios.append(h)
