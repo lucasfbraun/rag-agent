@@ -205,16 +205,27 @@ def test_pergunta_com_dois_limites_entrega_intersecao_pronta_ao_modelo():
             {"propriedade": "tempo_pega", "criterio": "Tempo de pega livre abaixo de 220 s",
              "faixa_no_acervo": {"minimo": 120.0, "maximo": 300.0, "unidade": "s"}},
         ],
-        "total": 1,
-        "produtos": [{
-            "produto": "FLEXX ESP 3",
-            "requisitos": [
-                {"propriedade": "densidade", "propriedade_titulo": "Densidade",
-                 "valores": "29 a 31", "unidade": "kg/m³", "documento": "Boletim 3.pdf"},
-                {"propriedade": "tempo_pega", "propriedade_titulo": "Tempo de pega livre",
-                 "valores": "3 min a 3 min 30 s", "unidade": "", "documento": "Boletim 3.pdf"},
-            ],
-        }],
+        "total": 2,
+        "produtos": [
+            {
+                "produto": "FLEXX ESP 3",
+                "requisitos": [
+                    {"propriedade": "densidade", "propriedade_titulo": "Densidade",
+                     "valores": "29 a 31", "unidade": "kg/m³", "documento": "Boletim 3.pdf"},
+                    {"propriedade": "tempo_pega", "propriedade_titulo": "Tempo de pega livre",
+                     "valores": "3 min a 3 min 30 s", "unidade": "", "documento": "Boletim 3.pdf"},
+                ],
+            },
+            {
+                "produto": "FLEXX ESP 5",
+                "requisitos": [
+                    {"propriedade": "densidade", "propriedade_titulo": "Densidade",
+                     "valores": "28 a 30", "unidade": "kg/m³", "documento": "Boletim 5.pdf"},
+                    {"propriedade": "tempo_pega", "propriedade_titulo": "Tempo de pega livre",
+                     "valores": "2 min 50 s a 3 min", "unidade": "", "documento": "Boletim 5.pdf"},
+                ],
+            },
+        ],
         "truncado": False,
         "aviso": "Todos os requisitos foram encontrados e atendidos.",
     }
@@ -229,8 +240,9 @@ def test_pergunta_com_dois_limites_entrega_intersecao_pronta_ao_modelo():
 
     busca.assert_called_once()
     assert "INTERSEÇÃO dos critérios" in contexto
-    assert "atendem a TODOS os requisitos: 1" in contexto
+    assert "atendem a TODOS os requisitos: 2" in contexto
     assert "FLEXX ESP 3" in contexto
+    assert "FLEXX ESP 5" in contexto
     assert "Densidade 29 a 31 kg/m³" in contexto
     assert "Tempo de pega livre 3 min a 3 min 30 s" in contexto
 
@@ -243,16 +255,27 @@ def _resultado_composto_deterministico():
             {"propriedade": "tempo_pega", "criterio": "Tempo de pega livre abaixo de 220 s",
              "faixa_no_acervo": {"minimo": 120.0, "maximo": 300.0, "unidade": "s"}},
         ],
-        "total": 1,
-        "produtos": [{
-            "produto": "FLEXX ESP 3",
-            "requisitos": [
-                {"propriedade": "densidade", "propriedade_titulo": "Densidade",
-                 "valores": "29 a 31", "unidade": "kg/m³", "documento": "Boletim 3.pdf"},
-                {"propriedade": "tempo_pega", "propriedade_titulo": "Tempo de pega livre",
-                 "valores": "3 min a 3 min 30 s", "unidade": "", "documento": "Boletim 3.pdf"},
-            ],
-        }],
+        "total": 2,
+        "produtos": [
+            {
+                "produto": "FLEXX ESP 3",
+                "requisitos": [
+                    {"propriedade": "densidade", "propriedade_titulo": "Densidade",
+                     "valores": "29 a 31", "unidade": "kg/m³", "documento": "Boletim 3.pdf"},
+                    {"propriedade": "tempo_pega", "propriedade_titulo": "Tempo de pega livre",
+                     "valores": "3 min a 3 min 30 s", "unidade": "", "documento": "Boletim 3.pdf"},
+                ],
+            },
+            {
+                "produto": "FLEXX ESP 5",
+                "requisitos": [
+                    {"propriedade": "densidade", "propriedade_titulo": "Densidade",
+                     "valores": "28 a 30", "unidade": "kg/m³", "documento": "Boletim 5.pdf"},
+                    {"propriedade": "tempo_pega", "propriedade_titulo": "Tempo de pega livre",
+                     "valores": "2 min 50 s a 3 min", "unidade": "", "documento": "Boletim 5.pdf"},
+                ],
+            },
+        ],
         "truncado": False,
         "aviso": "Todos os requisitos foram encontrados e atendidos.",
     }
@@ -269,15 +292,18 @@ def test_rota_sincrona_nao_delega_resultado_composto_ao_llm():
     with patch(
         "app.rag.engine.buscar_produtos_por_especificacoes",
         return_value=_resultado_composto_deterministico(),
-    ), patch("app.rag.engine._preparar_contexto") as preparar, \
+    ) as busca, patch("app.rag.engine._preparar_contexto") as preparar, \
          patch("app.rag.engine.litellm.completion") as completion:
         resposta = run_pu_matcher_agent(_pergunta_composta())
 
+    busca.assert_called_once()
+    assert busca.call_args.kwargs == {"listar_todos": True}
     preparar.assert_not_called()
     completion.assert_not_called()
     assert resposta["model_used"] == "catalogo-estruturado"
     assert "FLEXX ESP 3" in resposta["answer"]
-    assert resposta["sources"] == ["Boletim 3.pdf"]
+    assert "FLEXX ESP 5" in resposta["answer"]
+    assert resposta["sources"] == ["Boletim 3.pdf", "Boletim 5.pdf"]
 
 
 def test_rota_streaming_nao_delega_resultado_composto_ao_llm():
@@ -292,6 +318,7 @@ def test_rota_streaming_nao_delega_resultado_composto_ao_llm():
     completion.assert_not_called()
     assert eventos[0]["model_used"] == "catalogo-estruturado"
     assert "FLEXX ESP 3" in eventos[1]["content"]
+    assert "FLEXX ESP 5" in eventos[1]["content"]
     assert eventos[-1] == {"type": "done"}
 
 
@@ -303,21 +330,37 @@ def _resultado_aplicacao_e_especificacao():
             "criterio": "Densidade por imersão a partir de 200 kg/m³",
             "faixa_no_acervo": {"minimo": 150.0, "maximo": 290.0, "unidade": "kg/m³"},
         }],
-        "total": 1,
-        "produtos": [{
-            "produto": "FLEXX SL ECO 2539",
-            "aplicacao": {
-                "documento": "Boletim FLEXX SL ECO 2539.pdf",
-                "termos_encontrados": ["solado"],
+        "total": 2,
+        "produtos": [
+            {
+                "produto": "FLEXX SL ECO 2539",
+                "aplicacao": {
+                    "documento": "Boletim FLEXX SL ECO 2539.pdf",
+                    "termos_encontrados": ["solado"],
+                },
+                "requisitos": [{
+                    "propriedade": "densidade_imersao",
+                    "propriedade_titulo": "Densidade por imersão",
+                    "valores": "270 a 290",
+                    "unidade": "kg/m³",
+                    "documento": "Boletim FLEXX SL ECO 2539.pdf",
+                }],
             },
-            "requisitos": [{
-                "propriedade": "densidade_imersao",
-                "propriedade_titulo": "Densidade por imersão",
-                "valores": "270 a 290",
-                "unidade": "kg/m³",
-                "documento": "Boletim FLEXX SL ECO 2539.pdf",
-            }],
-        }],
+            {
+                "produto": "FLEXX SL ECO 2535",
+                "aplicacao": {
+                    "documento": "Boletim FLEXX SL ECO 2535.pdf",
+                    "termos_encontrados": ["solado de calçado"],
+                },
+                "requisitos": [{
+                    "propriedade": "densidade_imersao",
+                    "propriedade_titulo": "Densidade por imersão",
+                    "valores": "270 a 290",
+                    "unidade": "kg/m³",
+                    "documento": "Boletim FLEXX SL ECO 2535.pdf",
+                }],
+            },
+        ],
         "truncado": False,
         "aviso": "Aplicação e especificação comprovadas no mesmo Boletim Técnico.",
     }
@@ -339,13 +382,18 @@ def test_rota_sincrona_cruza_aplicacao_e_especificacao_sem_llm():
         resposta = run_pu_matcher_agent(_pergunta_aplicacao_e_especificacao())
 
     busca.assert_called_once()
+    assert busca.call_args.kwargs == {"listar_todos": True}
     preparar.assert_not_called()
     completion.assert_not_called()
     assert resposta["model_used"] == "catalogo-estruturado"
     assert "solado de tênis" in resposta["answer"].lower()
     assert "FLEXX SL ECO 2539" in resposta["answer"]
+    assert "FLEXX SL ECO 2535" in resposta["answer"]
     assert "270 a 290 kg/m³" in resposta["answer"]
-    assert resposta["sources"] == ["Boletim FLEXX SL ECO 2539.pdf"]
+    assert resposta["sources"] == [
+        "Boletim FLEXX SL ECO 2535.pdf",
+        "Boletim FLEXX SL ECO 2539.pdf",
+    ]
 
 
 def test_rota_streaming_cruza_aplicacao_e_especificacao_sem_llm():
@@ -363,6 +411,7 @@ def test_rota_streaming_cruza_aplicacao_e_especificacao_sem_llm():
     completion.assert_not_called()
     assert eventos[0]["model_used"] == "catalogo-estruturado"
     assert "FLEXX SL ECO 2539" in eventos[1]["content"]
+    assert "FLEXX SL ECO 2535" in eventos[1]["content"]
     assert eventos[-1] == {"type": "done"}
 
 

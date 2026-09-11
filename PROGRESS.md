@@ -5,6 +5,25 @@ Ver visão geral de fases em [CRONOGRAMA.md](CRONOGRAMA.md).
 
 ---
 
+## 2026-09-11 — Sessão 45: todos os produtos da interseção
+
+Consultas determinísticas com vários requisitos, inclusive as que combinam
+aplicação e especificações, agora pedem explicitamente a lista completa ao
+motor do catálogo. A prévia de dez itens continua disponível para listagens
+genéricas, mas não limita uma recomendação técnica: se dois, doze ou mais
+produtos comprovarem todas as mesmas condições, todos aparecem na resposta.
+
+A regra continua conservadora. Cada produto só entra depois da interseção de
+todos os critérios reconhecidos; quando há aplicação, ela e os valores precisam
+estar comprovados no mesmo Boletim Técnico. Testes com dois produtos na mesma
+condição verificam a resposta síncrona, o streaming, as fontes dos dois produtos
+e o uso de `listar_todos=True`. Validação focada: 73 testes aprovados.
+A suíte ampliada do motor teve 219 testes aprovados; quatro testes integrados
+foram interrompidos antes da lógica alterada porque o PostgreSQL local recusou
+a senha descartável usada pelo processo de teste.
+
+---
+
 ## 2026-09-11 — Sessão 44: interseção de aplicação e especificação
 
 Reproduzida a pergunta "material para fazer solado de tênis, com no mínimo

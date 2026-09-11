@@ -457,7 +457,7 @@ def _responder_requisitos_compostos(query: str) -> Optional[Dict[str, Any]]:
     if aplicacao and criterios:
         termos_aplicacao = _termos_para_aplicacao(aplicacao)
         resultado = buscar_produtos_por_aplicacao_e_especificacoes(
-            termos_aplicacao, criterios
+            termos_aplicacao, criterios, listar_todos=True
         )
         if resultado.get("erro"):
             return None
@@ -523,7 +523,7 @@ def _responder_requisitos_compostos(query: str) -> Optional[Dict[str, Any]]:
     if len(criterios) < 2:
         return None
 
-    resultado = buscar_produtos_por_especificacoes(criterios)
+    resultado = buscar_produtos_por_especificacoes(criterios, listar_todos=True)
     if resultado.get("erro"):
         return None
 
