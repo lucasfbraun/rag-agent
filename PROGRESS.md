@@ -5,6 +5,31 @@ Ver visão geral de fases em [CRONOGRAMA.md](CRONOGRAMA.md).
 
 ---
 
+## 2026-09-11 — Sessão 39: aprendizado por correções e requisitos compostos
+
+Concluída a interface de treinamento: cadastro das três modalidades, listagem,
+aprovação/recusa e formulário de correção exibido após feedback negativo. Os
+itens agora registram produto, aplicação e fonte. Correções só influenciam o
+agente depois de aprovadas, exigem similaridade maior e são descartadas quando
+o escopo e a pergunta citam códigos de produto diferentes.
+
+O feedback negativo bruto deixou de ser injetado globalmente no prompt. Ele
+continua salvo para análise, mas só uma correção escrita e aprovada altera uma
+resposta futura. Isso evita que uma reclamação sem resposta correta ou sem
+relação com a pergunta atual contamine toda a equipe.
+
+A busca estruturada passou a interpretar vários requisitos na mesma pergunta,
+varrer o Qdrant uma vez e calcular a interseção por produto. Um candidato só é
+apresentado quando há evidência para todos os critérios; escalas Shore A e
+Shore D são diferenciadas.
+
+Migration `e7c4a2f913b0` adiciona `produto`, `aplicacao` e `fonte`; o startup do
+backend executa `alembic upgrade head` antes da aplicação. Validação local:
+108 testes relevantes do backend e 59 testes do frontend passaram; compilação
+Python e cabeça única do Alembic também passaram.
+
+---
+
 ## 2026-09-10 — Sessão 38 (item 4): treinamento do agente — backend concluído
 
 **Fecha a fila de 4 itens combinada com o usuário.** Ele autorizou a execução (*"pode fazer o item 4"*) antes de responder às perguntas de governança do documento de arquitetura — **as recomendações foram adotadas como decisão e marcadas como tal** em `docs/spec_treinamento.md`, seção 7, para poderem ser revistas.
@@ -73,7 +98,7 @@ Depois do reboot, o backend entrou em `Restarting (1)`. Causa: eu havia migrado 
 
 **Lição para o projeto:** não migrar o banco por fora do container à frente da imagem. A migration deve rodar pelo boot da imagem nova — senão banco e código ficam dessincronizados e o backend não sobe. No Ubuntu isso não ocorre, porque lá a migration roda dentro do container a partir da imagem já atualizada.
 
-**PENDENTE — a tela** e o botão *"escrever a resposta certa"* no feedback negativo. O backend está completo: `/api/treinamento` com `GET /tipos`, criar, listar, `/aprovar`, `/recusar` e excluir.
+**Atualização de 2026-09-11:** a tela e o formulário *"Ensinar a resposta correta"* foram concluídos na Sessão 39.
 
 ---
 
@@ -422,7 +447,7 @@ Os 4 produtos ausentes foram rastreados um a um no log, e **nenhum é falha da i
 
 **7. Bug real relatado pelo usuário — "liste os 77" (`8eacd48`):** resposta de acompanhamento pedindo a lista completa mencionada no turno anterior era interpretada pelo detector de código de produto como o código "OS 77" (a regex casava qualquer sigla curta + número colado) — como não existe esse produto, o aviso de "não encontrado" atropelava a listagem pedida. Corrigido bloqueando artigos/preposições/pronomes curtos ("os", "as", "um", "de", "todos"...) de virarem sigla de família.
 
-**8. Feedback útil/não útil com memória sempre consultada (`67b5ba7`):** pedido do usuário — poder avaliar cada resposta do agente (opcional) e o agente **sempre** considerar o feedback negativo recente antes de responder, "pra ir deixando o agente mais inteligente". Tabela `feedback` nova (Postgres, migration via `alembic revision --autogenerate` contra o schema real); `POST /api/feedback`; widget `st.feedback("thumbs")` abaixo de cada resposta no frontend (histórico e nova, streaming e síncrono, envia 1x por mensagem). `app.feedback_service.obter_licoes_de_feedback()` é consultado em **toda** chamada do agente (não é opcional, embutido em `_montar_system_instruction`, compartilhado pelas duas rotas) — falha ao consultar só loga, nunca derruba a resposta.
+**8. Feedback útil/não útil com memória sempre consultada (`67b5ba7`, comportamento substituído na Sessão 39):** pedido do usuário — poder avaliar cada resposta do agente (opcional) e o agente considerar o feedback negativo. Na implementação original, `app.feedback_service.obter_licoes_de_feedback()` entrava em toda chamada. A Sessão 39 removeu essa injeção global: o feedback continua salvo, mas somente uma correção escrita, aprovada e relevante influencia novas respostas.
 
 **Testes:** ~110 novos entre as 9 sub-frentes (TDD em todas, vários ciclos de "corrigido → validado ao vivo → achou efeito colateral → corrigido de novo" — registrado como normal, não como retrabalho malfeito). Suíte completa: 148 (início da sessão) → 235.
 

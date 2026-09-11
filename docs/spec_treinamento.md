@@ -1,6 +1,6 @@
 # Especificação — Treinamento do agente pelos usuários
 
-**Status:** APROVADO para implementação (2026-09-10). O usuário autorizou a execução sem responder às perguntas da seção 4 — **as recomendações deste documento foram adotadas como decisão**, e estão marcadas como tal. Todas são reversíveis por configuração ou por uma migration curta.
+**Status:** IMPLEMENTADO (backend e interface, 2026-09-11).
 **Data:** 2026-09-10 (Sessão 38)
 **Origem:** pedido do usuário — *"no perfil dizer se o mesmo tem permissão para 'treinar' nosso agente; a ideia é que o usuário consiga contribuir com o aprendizado e melhorar a qualidade das respostas"*. Perguntado entre três leituras possíveis, ele escolheu **as três**.
 
@@ -24,9 +24,9 @@ Elas não são variações do mesmo recurso: cada uma responde a uma pergunta di
 
 > *"Para esta pergunta, a resposta certa é aquela."*
 
-**Origem:** o usuário viu uma resposta ruim e escreveu a correta. É a evolução natural do feedback útil/não útil que já existe (Sessão 32) — hoje o "não útil" só vira uma lição genérica no prompt; aqui ele vira a resposta.
+**Origem:** o usuário viu uma resposta ruim e escreveu a correta. É a evolução natural do feedback útil/não útil: após marcar "não útil", a interface abre o formulário da correção. O feedback bruto permanece disponível para análise, mas não é injetado no prompt.
 
-**Campos:** pergunta original, resposta que o agente deu (para auditoria), resposta correta, autor, data.
+**Campos:** pergunta original, resposta que o agente deu (para auditoria), resposta correta, produto/código, aplicação/condição, fonte, autor e data.
 
 **Papel no prompt:** a de maior precedência. Quando a pergunta atual é semanticamente próxima de uma correção registrada, ela entra como *"Para uma pergunta praticamente igual a esta, a equipe técnica já corrigiu a resposta para o seguinte"*.
 
@@ -69,7 +69,7 @@ O mesmo problema do acervo: não dá para injetar tudo no prompt.
 - Os filtros de listagem varrem a coleção inteira contando produtos (`catalog_stats`). Itens de treinamento entrariam nessas contagens como se fossem produtos.
 - A precedência é diferente, e separar torna trivial dar pesos e limites distintos.
 
-**Limite:** no máximo 2 correções, 3 conhecimentos e 2 exemplos por consulta, por similaridade. Sem teto, uma base de treinamento grande empurraria o acervo para fora do contexto — e o agente passaria a responder de memória curada em vez de documento.
+**Limite:** no máximo 2 correções, 3 conhecimentos e 2 exemplos por consulta, por similaridade. O corte mínimo é mais rigoroso para correções, e uma correção com produto definido é descartada quando a pergunta cita outro código. Sem teto, uma base de treinamento grande empurraria o acervo para fora do contexto — e o agente passaria a responder de memória curada em vez de documento.
 
 ---
 
@@ -113,13 +113,14 @@ Nada — é o ponto da coleção separada. Mas vale registrar explicitamente que
 
 ---
 
-## 6. Plano de implementação proposto
+## 6. Implementação
 
-1. Tabela `itens_treinamento` + permissões `TRAIN_AGENT`/`APPROVE_TRAINING` (migration).
-2. Serviço de CRUD + indexação na coleção `pu_treinamento`.
-3. Recuperação no `engine.py`, com os três blocos e a precedência declarada no prompt.
-4. Tela: cadastro das três modalidades, fila de aprovação, e o botão *"escrever a resposta certa"* no feedback negativo.
-5. Testes, incluindo os modos de falha: exemplo vazando número para a resposta real, correção casando com pergunta parecida-mas-diferente, contradição com o acervo.
+1. [x] Tabela `itens_treinamento` + permissões `TRAIN_AGENT`/`APPROVE_TRAINING`.
+2. [x] Serviço de CRUD + indexação na coleção `pu_treinamento`.
+3. [x] Recuperação no `engine.py`, com os três blocos e a precedência declarada no prompt.
+4. [x] Tela de cadastro, listagem e aprovação, incluindo a correção após feedback negativo.
+5. [x] Escopo por produto/aplicação/fonte e bloqueio de código de produto divergente.
+6. [x] Testes dos fluxos de recuperação, governança e interface.
 
 **Estimativa de risco:** o passo 3 é o mais delicado. Mexer no prompt do agente já produziu regressão neste projeto, e a validação vai precisar de chamadas reais ao LLM comparando resposta antes/depois — não só teste de unidade.
 

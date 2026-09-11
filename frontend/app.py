@@ -23,6 +23,7 @@ USERS_URL = f"{API_BASE}/api/auth/users"
 MODELS_URL = f"{API_BASE}/api/models"
 DOCUMENTOS_URL = f"{API_BASE}/api/documentos"
 PERFIS_URL = f"{API_BASE}/api/auth/perfis"
+TREINAMENTO_URL = f"{API_BASE}/api/treinamento"
 
 # `page_icon` aceita caminho de arquivo além de emoji — o símbolo da marca
 # substitui o 🎯 placeholder na aba do navegador e no atalho do PWA.
@@ -318,7 +319,12 @@ def _fazer_logout():
 def _clear_message_state():
     st.session_state.messages = []
     for key in list(st.session_state):
-        if key.startswith("feedback_widget_") or key.startswith("feedback_enviado_"):
+        if (
+            key.startswith("feedback_widget_")
+            or key.startswith("feedback_enviado_")
+            or key.startswith("feedback_util_")
+            or key.startswith("correcao_enviada_")
+        ):
             del st.session_state[key]
 
 
@@ -398,6 +404,49 @@ def _enviar_feedback(query: str, resposta: dict, util: bool) -> bool:
         return False
 
 
+def _renderizar_form_correcao(idx: int, pergunta: str, msg: dict):
+    if st.session_state.get(f"correcao_enviada_{idx}"):
+        st.success("Correção enviada para aprovação da equipe técnica.")
+        return
+    with st.expander("Ensinar a resposta correta", expanded=True):
+        st.caption(
+            "A correção só passa a influenciar o agente depois de aprovada. "
+            "Informe o escopo para ela não ser aplicada a outro caso."
+        )
+        with st.form(f"form_correcao_{idx}", clear_on_submit=True):
+            correta = st.text_area(
+                "Qual seria a resposta correta?", key=f"correta_{idx}", max_chars=8000,
+            )
+            produto = st.text_input(
+                "Produto ou código relacionado (opcional)", key=f"produto_correcao_{idx}",
+                help="Preencha quando a correção vale para um produto específico.",
+            )
+            aplicacao = st.text_input(
+                "Aplicação ou condição (opcional)", key=f"aplicacao_correcao_{idx}",
+            )
+            fonte = st.text_input(
+                "Fonte da correção (opcional)", key=f"fonte_correcao_{idx}",
+                placeholder="ex: Boletim FLEXX AG 2032 rev. 03, seção Aplicação",
+            )
+            if st.form_submit_button("Enviar correção para aprovação", type="primary"):
+                if len(correta.strip()) < 10:
+                    st.error("Descreva a resposta correta com pelo menos 10 caracteres.")
+                    return
+                ok, retorno = _api_treinamento("POST", json={
+                    "tipo": "correcao",
+                    "pergunta": pergunta,
+                    "resposta": correta.strip(),
+                    "resposta_original": msg.get("content", ""),
+                    "produto": produto.strip() or None,
+                    "aplicacao": aplicacao.strip() or None,
+                    "fonte": fonte.strip() or None,
+                })
+                if ok:
+                    st.session_state[f"correcao_enviada_{idx}"] = True
+                    st.rerun()
+                st.error(retorno)
+
+
 def _renderizar_feedback(idx: int, msg: dict):
     """Widget de polegar pra cima/baixo abaixo de uma resposta do agente —
     st.feedback("thumbs") devolve 0 (não útil), 1 (útil) ou None (sem
@@ -406,6 +455,14 @@ def _renderizar_feedback(idx: int, msg: dict):
     enviado_key = f"feedback_enviado_{idx}"
     if st.session_state.get(enviado_key):
         st.caption("✅ Obrigado pelo feedback!")
+        if (
+            st.session_state.get(f"feedback_util_{idx}") is False
+            and _pode_treinar_agente()
+        ):
+            pergunta = ""
+            if idx > 0 and st.session_state.messages[idx - 1]["role"] == "user":
+                pergunta = st.session_state.messages[idx - 1]["content"]
+            _renderizar_form_correcao(idx, pergunta, msg)
         return
 
     pergunta_anterior = ""
@@ -417,6 +474,7 @@ def _renderizar_feedback(idx: int, msg: dict):
         util = selecao == 1
         if _enviar_feedback(pergunta_anterior, msg, util):
             st.session_state[enviado_key] = True
+            st.session_state[f"feedback_util_{idx}"] = util
             st.rerun()
 
 
@@ -531,9 +589,25 @@ def _pode_aprovar_documentos() -> bool:
     return _tem_permissao("approve_uploads")
 
 
+def _pode_treinar_agente() -> bool:
+    return _tem_permissao("train_agent")
+
+
+def _pode_aprovar_treinamento() -> bool:
+    return _tem_permissao("approve_training")
+
+
+def _pode_acessar_treinamento() -> bool:
+    return _pode_treinar_agente() or _pode_aprovar_treinamento()
+
+
 def _api_usuarios(metodo: str, caminho: str = "", **kwargs):
     """Chamada às rotas de administração de usuários."""
     return _chamar_api(f"{USERS_URL}{caminho}", metodo, **kwargs)
+
+
+def _api_treinamento(metodo: str, caminho: str = "", **kwargs):
+    return _chamar_api(f"{TREINAMENTO_URL}{caminho}", metodo, **kwargs)
 
 
 def _chamar_api(url: str, metodo: str, **kwargs):
@@ -555,7 +629,7 @@ def _chamar_api(url: str, metodo: str, **kwargs):
         _fazer_logout()
         st.rerun()
     if resposta.status_code == 403:
-        return False, "Seu perfil não tem permissão para administrar usuários."
+        return False, "Seu perfil não tem permissão para esta ação."
     if 200 <= resposta.status_code < 300:
         return True, (resposta.json() if resposta.content else None)
     try:
@@ -1149,6 +1223,126 @@ def _render_pagina_documentos():
             _render_cartao_documento(documento, pode_aprovar)
 
 
+_ROTULO_TIPO_TREINAMENTO = {
+    "correcao": "Correção de resposta",
+    "conhecimento": "Conhecimento interno",
+    "exemplo": "Exemplo de formato",
+}
+
+
+def _render_form_treinamento():
+    st.caption(
+        "Registre uma orientação reutilizável. Correções e conhecimento ficam pendentes "
+        "até aprovação; exemplos ensinam apenas o formato da resposta."
+    )
+    with st.form("form_treinamento", clear_on_submit=True):
+        tipo = st.selectbox(
+            "O que deseja ensinar?", list(_ROTULO_TIPO_TREINAMENTO),
+            format_func=lambda valor: _ROTULO_TIPO_TREINAMENTO[valor],
+        )
+        pergunta = st.text_area(
+            "Pergunta ou título", max_chars=4000,
+            placeholder="ex: Qual cola usar para rolha de cortiça?",
+        )
+        resposta = st.text_area("Resposta correta ou orientação", max_chars=8000)
+        produto = st.text_input("Produto ou código relacionado (opcional)")
+        aplicacao = st.text_input("Aplicação ou condição (opcional)")
+        fonte = st.text_input(
+            "Fonte (opcional)",
+            placeholder="ex: Boletim FLEXX AG 2032 rev. 03, seção Aplicação",
+        )
+        if st.form_submit_button("Registrar ensinamento", type="primary", use_container_width=True):
+            if len(pergunta.strip()) < 10 or len(resposta.strip()) < 10:
+                st.error("Pergunta e resposta precisam ter pelo menos 10 caracteres.")
+                return
+            ok, retorno = _api_treinamento("POST", json={
+                "tipo": tipo, "pergunta": pergunta.strip(), "resposta": resposta.strip(),
+                "produto": produto.strip() or None,
+                "aplicacao": aplicacao.strip() or None,
+                "fonte": fonte.strip() or None,
+            })
+            if ok:
+                if retorno["status"] == "aprovado":
+                    st.success("Exemplo registrado e já disponível para o agente.")
+                else:
+                    st.success("Ensinamento enviado para aprovação.")
+                st.rerun()
+            st.error(retorno)
+
+
+def _render_cartao_treinamento(item: dict, pode_aprovar: bool):
+    with st.container(border=True):
+        status = _ROTULO_STATUS.get(item["status"], item["status"])
+        tipo = _ROTULO_TIPO_TREINAMENTO.get(item["tipo"], item["tipo"])
+        st.markdown(f"**{tipo}** · {status}")
+        st.caption(f"por {item['criado_por']} · {item['created_at'][:10]}")
+        st.markdown(f"**Pergunta/título:** {item['pergunta']}")
+        st.markdown(f"**Conteúdo:** {item['resposta']}")
+        escopo = []
+        if item.get("produto"):
+            escopo.append(f"produto: {item['produto']}")
+        if item.get("aplicacao"):
+            escopo.append(f"aplicação: {item['aplicacao']}")
+        if item.get("fonte"):
+            escopo.append(f"fonte: {item['fonte']}")
+        if escopo:
+            st.caption(" · ".join(escopo))
+        if item.get("motivo_decisao"):
+            st.warning(f"Motivo da decisão: {item['motivo_decisao']}")
+
+        if not pode_aprovar or item["status"] != "pendente":
+            return
+        aprovar_col, recusar_col = st.columns(2)
+        with aprovar_col:
+            if st.button(
+                "Aprovar", key=f"treino_ap_{item['id']}", type="primary",
+                use_container_width=True,
+            ):
+                ok, retorno = _api_treinamento("POST", f"/{item['id']}/aprovar")
+                if ok:
+                    st.rerun()
+                st.error(retorno)
+        with recusar_col:
+            with st.popover("Recusar", use_container_width=True):
+                motivo = st.text_input("Motivo", key=f"treino_motivo_{item['id']}")
+                if st.button("Confirmar recusa", key=f"treino_rec_{item['id']}"):
+                    if not motivo.strip():
+                        st.error("Informe o motivo.")
+                    else:
+                        ok, retorno = _api_treinamento(
+                            "POST", f"/{item['id']}/recusar", json={"motivo": motivo.strip()}
+                        )
+                        if ok:
+                            st.rerun()
+                        st.error(retorno)
+
+
+def _render_pagina_treinamento():
+    _titulo_com_icone("Treinar o agente")
+    pode_treinar = _pode_treinar_agente()
+    pode_aprovar = _pode_aprovar_treinamento()
+    ok, itens = _api_treinamento("GET")
+    if not ok:
+        st.error(itens)
+        return
+    pendentes = [item for item in itens if item["status"] == "pendente"]
+    rotulo = f"Fila de aprovação ({len(pendentes)})" if pode_aprovar else f"Meus ensinamentos ({len(itens)})"
+    rotulos_abas = [rotulo]
+    if pode_treinar:
+        rotulos_abas = [rotulo, "Novo ensinamento"] if pode_aprovar else ["Novo ensinamento", rotulo]
+    abas = st.tabs(rotulos_abas)
+    indice_lista = 0 if pode_aprovar or not pode_treinar else 1
+    with abas[indice_lista]:
+        if not itens:
+            st.info("Nenhum ensinamento registrado.")
+        for item in itens:
+            _render_cartao_treinamento(item, pode_aprovar)
+    if pode_treinar:
+        indice_novo = 1 if pode_aprovar else 0
+        with abas[indice_novo]:
+            _render_form_treinamento()
+
+
 def _render_pagina_administracao():
     """Área de administração: usuários e perfis, em abas.
 
@@ -1273,6 +1467,10 @@ with st.sidebar:
         if _pode_enviar_documentos():
             if st.button("Documentos", icon=":material/upload_file:", use_container_width=True):
                 st.session_state.pagina = "documentos"
+                st.rerun()
+        if _pode_acessar_treinamento():
+            if st.button("Treinar agente", icon=":material/school:", use_container_width=True):
+                st.session_state.pagina = "treinamento"
                 st.rerun()
         if _pode_administrar_usuarios():
             if st.button("Usuários e perfis", icon=":material/group:", use_container_width=True):
@@ -1409,6 +1607,13 @@ if st.session_state.pagina == "documentos":
         st.session_state.pagina = "chat"
         st.rerun()
     _render_pagina_documentos()
+    st.stop()
+
+if st.session_state.pagina == "treinamento":
+    if not _pode_acessar_treinamento():
+        st.session_state.pagina = "chat"
+        st.rerun()
+    _render_pagina_treinamento()
     st.stop()
 
 _titulo_com_icone("Assistente de Vendas Técnicas &amp; Match de Produtos")

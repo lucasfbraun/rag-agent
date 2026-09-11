@@ -216,7 +216,10 @@ A fila existe porque o acervo é a fonte que o agente cita como verdade para tod
 
 ### Treinar o agente
 
-> **Backend pronto, tela ainda não.** Hoje só pela API — ver `docs/spec_treinamento.md`.
+Quem tem a permissão *Treinar o agente* vê o atalho **Treinar agente** na barra
+lateral. Também pode marcar uma resposta como não útil e escrever a correção
+diretamente abaixo da resposta. Correções ficam pendentes até alguém com
+*Aprovar treinamento* revisar; só então podem influenciar novas respostas.
 
 Quem tem a permissão *Treinar o agente* pode registrar conhecimento que melhora as respostas. **Não é fine-tuning:** o aprendizado fica em dado, o que o torna legível, editável e removível apagando uma linha — e mantém o projeto livre para trocar de modelo de IA.
 

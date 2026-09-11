@@ -19,6 +19,8 @@ não a resposta: o item precisa ser encontrado quando alguém pergunta algo
 parecido, e é a pergunta que se parece com a pergunta.
 """
 import logging
+import re
+import unicodedata
 from typing import Any, Dict, List
 
 from qdrant_client.http import models as qmodels
@@ -39,7 +41,46 @@ LIMITES = {"correcao": 2, "conhecimento": 3, "exemplo": 2}
 # Abaixo disto o item não tem relação real com a pergunta. Sem corte, o Qdrant
 # devolve sempre os N mais próximos — mesmo que o mais próximo seja distante —
 # e uma correção sobre cortiça apareceria numa pergunta sobre colchão.
-SIMILARIDADE_MINIMA = 0.35
+SIMILARIDADE_MINIMA_POR_TIPO = {
+    # Correção altera fatos e por isso exige relação mais forte que uma
+    # orientação geral. Recalibrar com o conjunto de avaliações reais.
+    "correcao": 0.65,
+    "conhecimento": 0.45,
+    "exemplo": 0.55,
+}
+
+_PADRAO_CODIGO = re.compile(
+    r"\b([A-ZÀ-ÖØ-Þ]{1,6})\s?(\d{2,6}[A-Z]{0,2})\b", re.IGNORECASE
+)
+
+
+def _normalizar(texto: str) -> str:
+    decomposed = unicodedata.normalize("NFKD", (texto or "").upper())
+    return "".join(c for c in decomposed if not unicodedata.combining(c))
+
+
+def _codigos(texto: str) -> set[str]:
+    return {
+        f"{familia.upper()} {numero.upper()}"
+        for familia, numero in _PADRAO_CODIGO.findall(_normalizar(texto))
+    }
+
+
+def _correcao_aplicavel(pergunta: str, item: Dict[str, Any]) -> bool:
+    """Recusa uma correção com escopo quando a consulta cita outro produto.
+
+    O campo ``produto`` é a autoridade para esta decisão. Tentar inferir o
+    produto apenas da pergunta confundiria valores como "dureza 80" ou
+    "densidade 35" com códigos e descartaria correções válidas.
+    """
+    codigos_item = _codigos(item.get("produto") or "")
+    if not codigos_item:
+        return True
+    codigos_atuais = _codigos(pergunta)
+    return not (
+        codigos_atuais and codigos_item
+        and codigos_atuais.isdisjoint(codigos_item)
+    )
 
 
 def _garantir_colecao(client) -> None:
@@ -63,7 +104,12 @@ def indexar(item) -> None:
     client = get_qdrant_client()
     _garantir_colecao(client)
 
-    vetor = get_embedding(item.pergunta, EMBEDDING_MODEL)
+    texto_busca = "\n".join(filter(None, (
+        item.pergunta,
+        f"Produto: {item.produto}" if item.produto else None,
+        f"Aplicação: {item.aplicacao}" if item.aplicacao else None,
+    )))
+    vetor = get_embedding(texto_busca, EMBEDDING_MODEL)
     client.upsert(
         collection_name=COLECAO_TREINAMENTO,
         points=[
@@ -74,6 +120,9 @@ def indexar(item) -> None:
                     "tipo": item.tipo.value,
                     "pergunta": item.pergunta,
                     "resposta": item.resposta,
+                    "produto": item.produto,
+                    "aplicacao": item.aplicacao,
+                    "fonte": item.fonte,
                     "autor": item.criado_por.nome,
                     # A data vai para o prompt: o agente e o leitor precisam
                     # poder pesar a idade de uma orientação interna. Ver a
@@ -127,7 +176,7 @@ def buscar(pergunta: str) -> Dict[str, List[Dict[str, Any]]]:
                 collection_name=COLECAO_TREINAMENTO,
                 query_vector=vetor,
                 limit=limite,
-                score_threshold=SIMILARIDADE_MINIMA,
+                score_threshold=SIMILARIDADE_MINIMA_POR_TIPO[tipo],
                 query_filter=qmodels.Filter(
                     must=[qmodels.FieldCondition(
                         key="tipo", match=qmodels.MatchValue(value=tipo)
@@ -137,7 +186,10 @@ def buscar(pergunta: str) -> Dict[str, List[Dict[str, Any]]]:
         except Exception as e:
             logger.warning("Falha ao buscar treinamento do tipo %s: %s", tipo, e)
             continue
-        resultado[tipo] = [hit.payload for hit in achados]
+        itens = [{**hit.payload, "similaridade": hit.score} for hit in achados]
+        if tipo == "correcao":
+            itens = [item for item in itens if _correcao_aplicavel(pergunta, item)]
+        resultado[tipo] = itens
     return resultado
 
 
@@ -164,11 +216,18 @@ def montar_bloco(pergunta: str) -> str:
     linhas = ["", "🎓 CONHECIMENTO TREINADO PELA EQUIPE (curado por pessoas, não extraído de documento):"]
 
     for item in itens["correcao"]:
+        escopo = ""
+        if item.get("produto"):
+            escopo += f'\n   Produto/código relacionado: {item["produto"]}'
+        if item.get("aplicacao"):
+            escopo += f'\n   Aplicação/condição: {item["aplicacao"]}'
+        if item.get("fonte"):
+            escopo += f'\n   Fonte informada pela equipe: {item["fonte"]}'
         linhas.append(
             f'\n⭐ CORREÇÃO REGISTRADA ({item["data"]}, por {item["autor"]}) — para uma pergunta '
             f'praticamente igual a esta, a equipe corrigiu a resposta para:\n'
             f'   Pergunta: "{item["pergunta"]}"\n'
-            f'   Resposta correta: {item["resposta"]}\n'
+            f'   Resposta correta: {item["resposta"]}{escopo}\n'
             "   USE ISTO com prioridade sobre a sua própria formulação. Mas CONFIRA se o caso é "
             "mesmo o mesmo: se a pergunta atual difere em densidade, norma, aplicação ou produto, "
             "diga isso em vez de repetir a correção como se coubesse."

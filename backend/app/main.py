@@ -339,8 +339,8 @@ def submit_feedback(
     """Grava a avaliação (útil/não útil) de uma resposta — mesma permissão
     de /api/match (quem pode perguntar, pode avaliar). Pedido do usuário:
     não é obrigatório dar feedback, mas quando dado (positivo ou negativo)
-    precisa ser salvo — o agente consulta o negativo em toda consulta futura
-    (app.rag.engine._montar_licoes_str)."""
+    precisa ser salvo. Feedback negativo fica disponível para análise e pode
+    originar uma correção revisável na tela de treinamento."""
     try:
         registrar_feedback(
             session,

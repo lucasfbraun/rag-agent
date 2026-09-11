@@ -181,10 +181,8 @@ class ConversationMessage(Base):
 
 class Feedback(Base):
     """Avaliação opcional (útil/não útil) que o vendedor dá numa resposta do
-    agente — pedido do usuário: fechar o loop de melhoria contínua. O agente
-    consulta o feedback negativo mais recente ANTES de responder (ver
-    app.feedback_service.obter_licoes_de_feedback, usado em toda consulta por
-    app.rag.engine), pra não repetir um padrão já sinalizado como ruim."""
+    agente. Feedback bruto fica disponível para análise; apenas uma correção
+    escrita, aprovada e recuperada por similaridade entra no contexto do RAG."""
     __tablename__ = "feedback"
 
     id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
@@ -300,6 +298,11 @@ class ItemTreinamento(Base):
     # Só em CORRECAO: o que o agente respondeu errado. Guardado para auditoria
     # — sem isso não dá para entender depois por que a correção foi criada.
     resposta_original: Mapped[str | None] = mapped_column(Text, nullable=True)
+    # Escopo e proveniência tornam a correção verificável e evitam que uma
+    # orientação sobre um produto seja aplicada silenciosamente a outro.
+    produto: Mapped[str | None] = mapped_column(String(200), nullable=True)
+    aplicacao: Mapped[str | None] = mapped_column(String(500), nullable=True)
+    fonte: Mapped[str | None] = mapped_column(Text, nullable=True)
 
     status: Mapped[StatusDocumento] = mapped_column(
         SAEnum(StatusDocumento, name="status_documento"),

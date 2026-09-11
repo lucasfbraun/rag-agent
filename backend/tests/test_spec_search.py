@@ -19,10 +19,32 @@ import pytest
 from app.rag.exceptions import RetrievalIndisponivelError
 from app.rag.spec_search import (
     buscar_produtos_por_especificacao,
+    buscar_produtos_por_especificacoes,
     extrair_especificacoes,
     interpretar_consulta_especificacao,
+    interpretar_consulta_especificacoes,
     resumir_especificacoes_dos_documentos,
 )
+
+
+def test_interpreta_requisitos_compostos_sem_trocar_os_valores():
+    criterios = interpretar_consulta_especificacoes(
+        "densidade de 35 kg/m³ e dureza Shore A 80"
+    )
+    assert [(c["propriedade"], c["valor"]) for c in criterios] == [
+        ("densidade", 35.0), ("dureza", 80.0),
+    ]
+    assert criterios[0]["unidade"] == "kg/m³"
+    assert criterios[1]["unidade"] == "Shore A"
+
+
+def test_interpreta_operadores_independentes_em_requisitos_compostos():
+    criterios = interpretar_consulta_especificacoes(
+        "viscosidade acima de 5000 cPs e NCO entre 12 e 13%"
+    )
+    assert criterios[0]["operador"] == "maior"
+    assert criterios[1]["operador"] == "entre"
+    assert criterios[1]["valor_maximo"] == 13.0
 
 
 def _por_propriedade(content, propriedade):
@@ -414,6 +436,54 @@ def test_paginacao_percorre_todas_as_paginas():
 
     assert client.scroll.call_count == 2
     assert resultado["faixa_no_acervo"]["maximo"] == 185.0
+
+
+def test_busca_composta_faz_uma_varredura_e_exige_todos_os_requisitos():
+    pontos = [
+        _ponto(
+            rf"{_BASE}\FLEXX SIST\FLEXX SIST 100\Boletim 100.pdf",
+            "Boletim FLEXX SIST 100.pdf",
+            "Densidade kg/m³ 33 a 37 Dureza Shore A 78 a 82",
+        ),
+        _ponto(
+            rf"{_BASE}\FLEXX SIST\FLEXX SIST 200\Boletim 200.pdf",
+            "Boletim FLEXX SIST 200.pdf",
+            "Densidade kg/m³ 33 a 37 Dureza Shore A 60 a 65",
+        ),
+        _ponto(
+            rf"{_BASE}\FLEXX SIST\FLEXX SIST 300\Boletim 300.pdf",
+            "Boletim FLEXX SIST 300.pdf",
+            "Densidade kg/m³ 33 a 37",
+        ),
+    ]
+    client = MagicMock()
+    client.scroll.return_value = (pontos, None)
+    criterios = interpretar_consulta_especificacoes(
+        "densidade de 35 kg/m³ e dureza Shore A 80"
+    )
+    with patch("app.rag.spec_search.get_qdrant_client", return_value=client):
+        resultado = buscar_produtos_por_especificacoes(criterios)
+
+    assert client.scroll.call_count == 1
+    assert resultado["total"] == 1
+    assert resultado["produtos"][0]["produto"] == "FLEXX SIST 100"
+    assert len(resultado["produtos"][0]["requisitos"]) == 2
+
+
+def test_busca_composta_nao_mistura_shore_a_com_shore_d():
+    ponto = _ponto(
+        rf"{_BASE}\FLEXX SIST\FLEXX SIST 400\Boletim 400.pdf",
+        "Boletim FLEXX SIST 400.pdf",
+        "Densidade kg/m³ 33 a 37 Dureza Shore D 78 a 82",
+    )
+    client = MagicMock()
+    client.scroll.return_value = ([ponto], None)
+    criterios = interpretar_consulta_especificacoes(
+        "densidade de 35 kg/m³ e dureza Shore A 80"
+    )
+    with patch("app.rag.spec_search.get_qdrant_client", return_value=client):
+        resultado = buscar_produtos_por_especificacoes(criterios)
+    assert resultado["total"] == 0
 
 
 # --- ficha estruturada injetada no contexto do LLM --------------------------

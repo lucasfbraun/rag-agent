@@ -1,10 +1,9 @@
 """
-Feedback do usuário por resposta do agente (útil/não útil, opcional) —
-pedido do usuário: fechar o loop de melhoria contínua. O agente consulta o
-feedback negativo mais recente ANTES de responder (ver
-`obter_licoes_de_feedback`, usada em toda consulta por app.rag.engine — não
-é um recurso opcional que precisa ser pedido, roda sempre), pra não repetir
-um padrão de resposta já sinalizado como ruim.
+Feedback do usuário por resposta do agente (útil/não útil, opcional).
+
+Feedback bruto é sinal para revisão e métricas. Ele não vira instrução do
+agente automaticamente: só uma correção criada no módulo de treinamento e
+aprovada pode alterar respostas futuras.
 """
 import uuid
 from typing import Any, Dict, List, Optional
@@ -44,16 +43,10 @@ def registrar_feedback(
 
 
 def obter_licoes_de_feedback(limit: int = 5) -> List[Dict[str, Any]]:
-    """Feedback NEGATIVO mais recente (com comentário quando houver) — base
-    do bloco "LIÇÕES APRENDIDAS" injetado no prompt do agente em toda
-    consulta (ver `_montar_licoes_str` em app.rag.engine).
+    """Feedback negativo recente para telas e relatórios de revisão.
 
-    Só feedback negativo entra aqui de propósito: o objetivo é o agente
-    evitar repetir um erro já sinalizado, não acumular elogios genéricos que
-    não mudam comportamento nenhum. Sessão própria (não recebe uma de fora)
-    porque quem chama (engine.py) não tem — nem deveria ter — acesso a uma
-    sessão de banco; RAG e Postgres são camadas historicamente separadas
-    neste projeto (Qdrant de um lado, auth/DB relacional do outro)."""
+    Mantida como consulta administrativa; o motor RAG não consome esse
+    retorno. Apenas itens aprovados de treinamento alteram respostas."""
     session = SessionLocal()
     try:
         registros = (

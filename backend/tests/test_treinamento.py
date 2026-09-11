@@ -24,7 +24,7 @@ exercitado à parte, e indexar de verdade a cada teste custaria uma chamada de
 embedding por item.
 """
 import uuid
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
 import pytest
 
@@ -243,6 +243,15 @@ def test_permissoes_de_treinar_e_aprovar_sao_separadas(session):
     assert has_permission(admin, Permission.APPROVE_TRAINING) is True
 
 
+def test_aprovador_sem_permissao_de_criar_pode_acessar_a_fila():
+    from app.treinamento_router import _require_acesso_treinamento
+
+    perfil = MagicMock(nome="Aprovador")
+    perfil.nomes_de_permissoes.return_value = {Permission.APPROVE_TRAINING.value}
+    usuario = MagicMock(perfil=perfil)
+    assert _require_acesso_treinamento(usuario) is usuario
+
+
 # --- o bloco que vai para o prompt -----------------------------------------
 
 def _payload(tipo, pergunta="Qual cola para cortiça?", resposta="FLEXX AG 2066."):
@@ -315,3 +324,52 @@ def test_busca_indisponivel_nao_derruba_a_consulta():
         resultado = buscar("qualquer pergunta")
 
     assert resultado == {"correcao": [], "conhecimento": [], "exemplo": []}
+
+
+def test_correcao_de_codigo_diferente_e_descartada_mesmo_com_score_alto():
+    from app.rag.treinamento import buscar, COLECAO_TREINAMENTO
+
+    client = MagicMock()
+    client.get_collections.return_value.collections = [MagicMock(name=COLECAO_TREINAMENTO)]
+    # MagicMock(name=...) não define o atributo usado pelo código.
+    client.get_collections.return_value.collections[0].name = COLECAO_TREINAMENTO
+    hit = MagicMock(score=0.99)
+    hit.score = 0.99
+    hit.payload = _payload(
+        "correcao", pergunta="Qual a densidade do FLEXX AG 2062?",
+        resposta="Densidade corrigida.",
+    ) | {"produto": "FLEXX AG 2062"}
+    client.search.side_effect = [[hit], [], []]
+
+    with patch("app.rag.treinamento.get_qdrant_client", return_value=client), \
+         patch("app.rag.treinamento.get_embedding", return_value=[0.1]):
+        resultado = buscar("Qual a densidade do FLEXX AG 2032?")
+
+    assert resultado["correcao"] == []
+
+
+def test_correcao_sem_escopo_de_produto_depende_apenas_da_similaridade():
+    from app.rag.treinamento import _correcao_aplicavel
+
+    item = _payload(
+        "correcao", pergunta="Preciso de dureza 60 Shore A",
+        resposta="Use o produto indicado no boletim.",
+    )
+    assert _correcao_aplicavel("Preciso de dureza 80 Shore A", item) is True
+
+
+def test_correcao_exibe_escopo_e_fonte_para_conferencia():
+    from app.rag.treinamento import montar_bloco
+
+    item = _payload("correcao") | {
+        "produto": "FLEXX AG 2066", "aplicacao": "rolha de cortiça",
+        "fonte": "Boletim AG 2066 rev. 03",
+    }
+    with patch("app.rag.treinamento.buscar", return_value={
+        "correcao": [item], "conhecimento": [], "exemplo": [],
+    }):
+        bloco = montar_bloco("cola para cortiça")
+
+    assert "FLEXX AG 2066" in bloco
+    assert "rolha de cortiça" in bloco
+    assert "Boletim AG 2066 rev. 03" in bloco

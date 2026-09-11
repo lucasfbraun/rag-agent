@@ -20,7 +20,8 @@ from app.rag.treinamento import montar_bloco as montar_bloco_de_treinamento
 from app.rag.exceptions import RetrievalIndisponivelError
 from app.rag.spec_search import (
     buscar_produtos_por_especificacao,
-    interpretar_consulta_especificacao,
+    buscar_produtos_por_especificacoes,
+    interpretar_consulta_especificacoes,
     resumir_especificacoes_dos_documentos,
 )
 from app.config import QDRANT_HOST, QDRANT_PORT, COLLECTION_NAME, EMBEDDING_MODEL, DEFAULT_CHAT_MODEL
@@ -650,21 +651,63 @@ def _montar_bloco_busca_por_especificacao(query: str) -> str:
     codigos = _detectar_codigos_produto(query)
     if codigos:
         return ""
-    criterio = interpretar_consulta_especificacao(query, codigos_produto=codigos)
-    if not criterio:
+    criterios = interpretar_consulta_especificacoes(query, codigos_produto=codigos)
+    if not criterios:
         return ""
 
     try:
-        resultado = buscar_produtos_por_especificacao(
-            propriedade=criterio["propriedade"],
-            valor=criterio["valor"],
-            operador=criterio["operador"],
-            valor_maximo=criterio["valor_maximo"],
-            tolerancia_percentual=criterio["tolerancia_percentual"],
-        )
+        if len(criterios) == 1:
+            criterio = criterios[0]
+            resultado = buscar_produtos_por_especificacao(
+                propriedade=criterio["propriedade"],
+                valor=criterio["valor"],
+                operador=criterio["operador"],
+                valor_maximo=criterio["valor_maximo"],
+                tolerancia_percentual=criterio["tolerancia_percentual"],
+            )
+        else:
+            resultado = buscar_produtos_por_especificacoes(criterios)
     except RetrievalIndisponivelError as e:
         logger.warning("Busca por especificação indisponível (%s) — seguindo só com o RAG.", e)
         return ""
+
+    if len(criterios) > 1:
+        criterios_texto = "; ".join(c["criterio"] for c in resultado["criterios"])
+        linhas = [
+            "",
+            f"🔎 BUSCA COM REQUISITOS TÉCNICOS COMPOSTOS — {criterios_texto}.",
+            f"Produtos que atendem a TODOS os requisitos: {resultado['total']}.",
+        ]
+        if resultado["produtos"]:
+            linhas.append(
+                "A lista abaixo é a INTERSEÇÃO dos critérios. Não inclua candidatos que atendam "
+                "apenas parte deles e não transforme propriedade ausente em atendimento."
+            )
+            for item in resultado["produtos"]:
+                evidencias = "; ".join(
+                    f"{r['propriedade_titulo']} {r['valores']}"
+                    f"{(' ' + r['unidade']) if r['unidade'] else ''} [{r['documento']}]"
+                    for r in item["requisitos"]
+                )
+                linhas.append(f"- {item['produto']}: {evidencias}")
+            if resultado["truncado"]:
+                linhas.append(
+                    f"(prévia dos {len(resultado['produtos'])} primeiros de {resultado['total']})"
+                )
+        else:
+            linhas.append(
+                "NENHUM produto tem evidência de atendimento simultâneo. Diga isso claramente; "
+                "um produto que atende apenas um requisito não é um match completo."
+            )
+            for item in resultado["criterios"]:
+                faixa = item.get("faixa_no_acervo")
+                if faixa:
+                    linhas.append(
+                        f"- {item['criterio']}: acervo de {faixa['minimo']:g} a "
+                        f"{faixa['maximo']:g} {faixa['unidade']}"
+                    )
+        linhas.append(resultado["aviso"])
+        return "\n".join(linhas)
 
     linhas = [
         "",
@@ -751,52 +794,16 @@ def _montar_context_str(query: str, docs: List[Dict[str, Any]]) -> str:
     return context_str
 
 
-def _montar_licoes_str() -> str:
-    """Bloco de "lições aprendidas" com o feedback NEGATIVO mais recente
-    (útil/não útil, dado pelo vendedor na tela) — injetado em TODA consulta,
-    não é um recurso à parte que precisa ser pedido (pedido do usuário:
-    "é necessário que o agente sempre consulte essas memórias").
-
-    Import tardio de app.feedback_service (mesmo padrão de _get_qdrant_client
-    — lazy) pra engine.py não ganhar uma dependência de import-time do
-    Postgres/config de auth, que hoje não tem nenhuma. Falha ao consultar
-    (Postgres fora do ar, etc.) só é logada — uma consulta nunca pode falhar
-    porque o feedback de sessões anteriores está indisponível."""
-    try:
-        from app.feedback_service import obter_licoes_de_feedback
-        licoes = obter_licoes_de_feedback()
-    except Exception as e:
-        logger.warning("Falha ao consultar lições de feedback (%s) — seguindo sem elas.", e)
-        return ""
-
-    if not licoes:
-        return ""
-
-    linhas = []
-    for licao in licoes:
-        linha = f'- Pergunta parecida: "{licao["query"]}"'
-        if licao.get("comentario"):
-            linha += f' — motivo dado pelo usuário: "{licao["comentario"]}"'
-        linhas.append(linha)
-
-    return (
-        "\n\nLIÇÕES APRENDIDAS (feedback NEGATIVO recente de vendedores nesta pergunta ou "
-        "parecida — evite repetir os mesmos erros, mas não deixe de responder a pergunta atual "
-        "por causa disso):\n" + "\n".join(linhas)
-    )
-
-
 def _montar_system_instruction(template_id: str) -> str:
     """Monta o prompt de sistema completo — compartilhado por
     run_pu_matcher_agent e stream_pu_matcher_agent (antes duplicado nos
-    dois), garante que as lições aprendidas entrem em toda consulta pelos
-    dois caminhos sem precisar lembrar de chamar em cada um."""
+    dois). Feedback bruto não entra aqui: apenas treinamento aprovado e
+    pertinente é recuperado em `_montar_context_str`."""
     template_instruction = obter_instrucao_template(template_id)
     return f"""{AGENT_SYSTEM_PROMPT}
 
 DIRETRIZ DE PADRONIZAÇÃO DE RESPOSTA:
 {template_instruction}
-{_montar_licoes_str()}
 """
 
 

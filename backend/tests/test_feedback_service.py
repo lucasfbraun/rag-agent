@@ -1,8 +1,5 @@
 """
-Pedido do usuário: poder avaliar uma resposta do agente como útil/não útil
-(opcional) e o agente "sempre consultar essas memórias" — o feedback
-negativo mais recente entra automaticamente em toda consulta futura (ver
-app.rag.engine._montar_licoes_str).
+Testes do feedback persistente para análise e criação de correções revisáveis.
 
 Seam: `registrar_feedback`/`obter_licoes_de_feedback` contra o Postgres real
 de teste (mesmo padrão de test_sensitive_fields.py/test_user_service.py —

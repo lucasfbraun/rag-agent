@@ -568,7 +568,12 @@ def extrair_especificacoes(
 
             tipo = PROPRIEDADES[propriedade].get("tipo")
             janela_util = _remover_temperatura_qualificadora(janela, propriedade)
-            unidade, janela_sem_unidade = _detectar_unidade(janela_util)
+            # Algumas escalas fazem parte do próprio rótulo ("Dureza Shore A")
+            # e, portanto, ficam antes da janela de valores. Preserve essa
+            # informação para não considerar Shore A e Shore D equivalentes.
+            unidade_rotulo, _ = _detectar_unidade(ocorrencia.group(0))
+            unidade_janela, janela_sem_unidade = _detectar_unidade(janela_util)
+            unidade = unidade_rotulo or unidade_janela
             if not _celula_de_tabela(janela_sem_unidade):
                 continue
             valores, unidade_forcada, faixa_declarada = _valores_da_janela(
@@ -697,7 +702,10 @@ def interpretar_consulta_especificacao(
                 "operador": "entre",
                 "valor": min(minimo, maximo),
                 "valor_maximo": max(minimo, maximo),
-                "unidade": "s" if eh_tempo else _detectar_unidade(depois)[0],
+                "unidade": (
+                    "s" if eh_tempo
+                    else _detectar_unidade(f"{ocorrencia.group(0)} {depois}")[0]
+                ),
                 "tolerancia_percentual": 0.0,
             }
 
@@ -727,11 +735,43 @@ def interpretar_consulta_especificacao(
         "operador": operador,
         "valor": valor,
         "valor_maximo": None,
-        "unidade": "s" if eh_tempo else _detectar_unidade(depois)[0],
+        "unidade": (
+            "s" if eh_tempo
+            else _detectar_unidade(f"{ocorrencia.group(0)} {depois}")[0]
+        ),
         "tolerancia_percentual": (
             TOLERANCIA_PADRAO_PERCENTUAL if operador == "igual" else 0.0
         ),
     }
+
+
+def interpretar_consulta_especificacoes(
+    query: str, codigos_produto: Optional[List[str]] = None
+) -> List[Dict[str, Any]]:
+    """Extrai todos os requisitos numéricos independentes de uma pergunta.
+
+    Cada propriedade recebe apenas o trecho até a próxima propriedade. Isso
+    impede que o número de dureza seja atribuído à densidade, por exemplo.
+    A interface antiga continua disponível e representa o primeiro critério.
+    """
+    if not query:
+        return []
+    texto = _normalizar_alinhado(query)
+    for codigo in codigos_produto or []:
+        texto = texto.replace(_normalizar_alinhado(codigo), " ")
+
+    ocorrencias = list(_PADRAO_TERMOS_CONSULTA.finditer(texto))
+    criterios: List[Dict[str, Any]] = []
+    propriedades_vistas = set()
+    for indice, ocorrencia in enumerate(ocorrencias):
+        fim = ocorrencias[indice + 1].start() if indice + 1 < len(ocorrencias) else len(texto)
+        fragmento = texto[ocorrencia.start():fim]
+        criterio = interpretar_consulta_especificacao(fragmento)
+        if not criterio or criterio["propriedade"] in propriedades_vistas:
+            continue
+        propriedades_vistas.add(criterio["propriedade"])
+        criterios.append(criterio)
+    return criterios
 
 
 # ---------------------------------------------------------------------------
@@ -968,6 +1008,146 @@ def buscar_produtos_por_especificacao(
             "Valores lidos automaticamente da tabela do documento. Boletim Técnico é a "
             "especificação de referência; Certificado/Laudo vale para o lote analisado. "
             "Confirme no documento citado antes de fechar a proposta."
+        ),
+    }
+
+
+def _unidades_compativeis(unidade_pedida: Optional[str], unidade_documento: Optional[str]) -> bool:
+    """Compara escalas quando ambas estão explícitas; ausência permanece desconhecida."""
+    if not unidade_pedida or not unidade_documento:
+        return True
+    aliases = {
+        "cps": "viscosidade", "mpa.s": "viscosidade",
+        "shore a": "shore a", "shore d": "shore d",
+        "kg/m³": "kg/m³", "g/cm³": "g/cm³",
+    }
+    pedida = aliases.get(unidade_pedida.lower(), unidade_pedida.lower())
+    documento = aliases.get(unidade_documento.lower(), unidade_documento.lower())
+    return pedida == documento
+
+
+def buscar_produtos_por_especificacoes(
+    criterios: List[Dict[str, Any]], listar_todos: bool = False,
+) -> Dict[str, Any]:
+    """Aplica vários requisitos obrigatórios na mesma varredura do acervo.
+
+    Um produto só entra quando possui evidência compatível para TODOS os
+    critérios. Ausência de uma propriedade não é tratada como atendimento.
+    """
+    if len(criterios) < 2:
+        return {"erro": "Informe pelo menos dois critérios técnicos."}
+    invalidas = [c.get("propriedade") for c in criterios if c.get("propriedade") not in PROPRIEDADES]
+    if invalidas:
+        return {
+            "erro": f"Propriedade(s) não reconhecida(s): {', '.join(map(str, invalidas))}.",
+            "propriedades_suportadas": sorted(PROPRIEDADES.keys()),
+        }
+
+    melhores: List[Dict[str, Dict[str, Any]]] = [{} for _ in criterios]
+    faixas = [{"minimo": None, "maximo": None, "unidade": None} for _ in criterios]
+    try:
+        client = get_qdrant_client()
+        offset = None
+        while True:
+            pontos, offset = client.scroll(
+                collection_name=COLLECTION_NAME,
+                with_payload=["filepath", "filename", "content"],
+                with_vectors=False,
+                limit=1000,
+                offset=offset,
+            )
+            for ponto in pontos:
+                payload = ponto.payload or {}
+                filepath = payload.get("filepath") or ""
+                produto = _produto_do_filepath(filepath)
+                if not produto:
+                    continue
+                filename = payload.get("filename") or _SEPARADOR_CAMINHO.split(filepath)[-1]
+                content = payload.get("content") or ""
+                for indice, criterio in enumerate(criterios):
+                    for especificacao in extrair_especificacoes(
+                        content, propriedades=[criterio["propriedade"]]
+                    ):
+                        faixa = faixas[indice]
+                        faixa["minimo"] = (
+                            especificacao["minimo"] if faixa["minimo"] is None
+                            else min(faixa["minimo"], especificacao["minimo"])
+                        )
+                        faixa["maximo"] = (
+                            especificacao["maximo"] if faixa["maximo"] is None
+                            else max(faixa["maximo"], especificacao["maximo"])
+                        )
+                        faixa["unidade"] = faixa["unidade"] or especificacao["unidade"]
+                        if not _unidades_compativeis(
+                            criterio.get("unidade"), especificacao.get("unidade")
+                        ):
+                            continue
+                        if not _atende_criterio(
+                            especificacao, criterio["operador"], criterio["valor"],
+                            criterio.get("valor_maximo"), criterio["tolerancia_percentual"],
+                        ):
+                            continue
+                        tipo = _tipo_documento(filename)
+                        candidato = {
+                            "propriedade": criterio["propriedade"],
+                            "propriedade_titulo": PROPRIEDADES[criterio["propriedade"]]["titulo"],
+                            "valores": _formatar_valores(especificacao),
+                            "unidade": _unidade_para_exibicao(especificacao),
+                            "documento": filename,
+                            "tipo_documento": tipo,
+                            "trecho": especificacao["trecho"][:220],
+                            "_ordem": (
+                                _PRIORIDADE_DOCUMENTO.get(tipo, 9),
+                                _distancia_do_alvo(especificacao, criterio["valor"]),
+                            ),
+                        }
+                        atual = melhores[indice].get(produto)
+                        if atual is None or candidato["_ordem"] < atual["_ordem"]:
+                            melhores[indice][produto] = candidato
+            if offset is None:
+                break
+    except Exception as e:
+        raise RetrievalIndisponivelError(str(e)) from e
+
+    produtos_completos = set(melhores[0])
+    for por_produto in melhores[1:]:
+        produtos_completos.intersection_update(por_produto)
+
+    encontrados = []
+    for produto in produtos_completos:
+        requisitos = [por_produto[produto].copy() for por_produto in melhores]
+        ordem = sum(item["_ordem"][1] for item in requisitos)
+        for item in requisitos:
+            item.pop("_ordem", None)
+        encontrados.append({"produto": produto, "requisitos": requisitos, "_ordem": ordem})
+    encontrados.sort(key=lambda item: (item["_ordem"], item["produto"]))
+    for item in encontrados:
+        item.pop("_ordem", None)
+
+    descricoes = []
+    for criterio, faixa in zip(criterios, faixas):
+        descricoes.append({
+            "propriedade": criterio["propriedade"],
+            "criterio": _descrever_criterio(
+                criterio["propriedade"], criterio["operador"], criterio["valor"],
+                criterio.get("valor_maximo"), criterio["tolerancia_percentual"],
+            ),
+            "faixa_no_acervo": (
+                None if faixa["minimo"] is None else {
+                    "minimo": faixa["minimo"], "maximo": faixa["maximo"],
+                    "unidade": faixa["unidade"] or PROPRIEDADES[criterio["propriedade"]]["unidade_tipica"],
+                }
+            ),
+        })
+    limite = None if listar_todos else _LIMITE_PREVIA
+    return {
+        "criterios": descricoes,
+        "total": len(encontrados),
+        "produtos": encontrados if limite is None else encontrados[:limite],
+        "truncado": limite is not None and len(encontrados) > limite,
+        "aviso": (
+            "O produto só foi incluído quando todos os requisitos foram encontrados e atendidos. "
+            "Boletim Técnico é a especificação de referência; confirme os documentos citados."
         ),
     }
 

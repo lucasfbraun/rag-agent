@@ -56,6 +56,8 @@ def _validar(pergunta: str, resposta: str) -> None:
 def criar(
     session: Session, *, autor: User, tipo: TipoTreinamento,
     pergunta: str, resposta: str, resposta_original: str | None = None,
+    produto: str | None = None, aplicacao: str | None = None,
+    fonte: str | None = None,
 ) -> ItemTreinamento:
     """Cria o item. Exemplo já nasce aprovado e indexado; os outros, pendentes."""
     _validar(pergunta, resposta)
@@ -66,6 +68,9 @@ def criar(
         pergunta=pergunta.strip(),
         resposta=resposta.strip(),
         resposta_original=(resposta_original or "").strip() or None,
+        produto=(produto or "").strip() or None,
+        aplicacao=(aplicacao or "").strip() or None,
+        fonte=(fonte or "").strip() or None,
         status=StatusDocumento.APROVADO if entra_direto else StatusDocumento.PENDENTE,
         criado_por_id=autor.id,
         decidido_por_id=autor.id if entra_direto else None,

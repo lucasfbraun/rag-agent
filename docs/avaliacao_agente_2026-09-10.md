@@ -34,7 +34,7 @@ Recomendação: concluir a interface existente e ligar cada correção à respos
 
 Evidência: `backend/app/feedback_service.py:46` e `rag/engine.py:753`.
 
-`obter_licoes_de_feedback(limit=5)` seleciona os cinco últimos negativos globalmente. Não recebe a pergunta atual, nem mede relação com ela. `_montar_licoes_str` apresenta os registros como perguntas parecidas e os incorpora ao prompt de sistema. A consulta sequer retorna a resposta que recebeu o negativo.
+Na versão avaliada, `obter_licoes_de_feedback(limit=5)` selecionava os cinco últimos negativos globalmente, sem medir relação com a pergunta atual. Essa injeção foi removida: agora somente correções escritas, aprovadas e recuperadas por similaridade entram no contexto do agente.
 
 Consequência: uma reclamação sobre embalagem pode aparecer numa consulta sobre densidade; correções úteis desaparecem dessa janela quando chegam cinco feedbacks novos. Sem comentário, o modelo só sabe que alguém não gostou de alguma resposta àquela pergunta.
 

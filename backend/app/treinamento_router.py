@@ -12,6 +12,7 @@ from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
+from app.auth.dependencies import get_current_user
 from app.auth.permissions import Permission, has_permission, require_permission
 from app.db import get_session
 from app.models import ItemTreinamento, StatusDocumento, TipoTreinamento, User
@@ -29,12 +30,30 @@ from app.treinamento_service import (
 router = APIRouter(prefix="/api/treinamento", tags=["treinamento"])
 
 
+def _require_acesso_treinamento(
+    usuario: User = Depends(get_current_user),
+) -> User:
+    """A fila também precisa estar acessível a quem só tem poder de decisão."""
+    if not (
+        has_permission(usuario, Permission.TRAIN_AGENT)
+        or has_permission(usuario, Permission.APPROVE_TRAINING)
+    ):
+        raise HTTPException(
+            status.HTTP_403_FORBIDDEN,
+            f"O perfil '{usuario.perfil.nome}' não tem permissão para esta ação.",
+        )
+    return usuario
+
+
 class ItemResponse(BaseModel):
     id: str
     tipo: str
     pergunta: str
     resposta: str
     resposta_original: str | None
+    produto: str | None
+    aplicacao: str | None
+    fonte: str | None
     status: str
     motivo_decisao: str | None
     criado_por: str
@@ -46,6 +65,7 @@ class ItemResponse(BaseModel):
         return cls(
             id=str(item.id), tipo=item.tipo.value, pergunta=item.pergunta,
             resposta=item.resposta, resposta_original=item.resposta_original,
+            produto=item.produto, aplicacao=item.aplicacao, fonte=item.fonte,
             status=item.status.value, motivo_decisao=item.motivo_decisao,
             criado_por=item.criado_por.nome,
             decidido_por=item.decidido_por.nome if item.decidido_por else None,
@@ -54,11 +74,16 @@ class ItemResponse(BaseModel):
 
 
 class CriarItemRequest(BaseModel):
+    model_config = {"extra": "forbid"}
+
     tipo: TipoTreinamento
     pergunta: str = Field(min_length=1, max_length=4000)
     resposta: str = Field(min_length=1, max_length=8000)
     # Só em correção: o que o agente respondeu errado, guardado para auditoria.
     resposta_original: str | None = Field(default=None, max_length=20000)
+    produto: str | None = Field(default=None, max_length=200)
+    aplicacao: str | None = Field(default=None, max_length=500)
+    fonte: str | None = Field(default=None, max_length=2000)
 
 
 class MotivoRequest(BaseModel):
@@ -122,6 +147,7 @@ def criar_item(
         item = criar(
             session, autor=usuario, tipo=req.tipo, pergunta=req.pergunta,
             resposta=req.resposta, resposta_original=req.resposta_original,
+            produto=req.produto, aplicacao=req.aplicacao, fonte=req.fonte,
         )
     return ItemResponse.de(item)
 
@@ -129,7 +155,7 @@ def criar_item(
 @router.get("", response_model=list[ItemResponse])
 def listar_itens(
     tipo: str | None = None, status_filtro: str | None = None,
-    usuario: User = Depends(require_permission(Permission.TRAIN_AGENT)),
+    usuario: User = Depends(_require_acesso_treinamento),
     session: Session = Depends(get_session),
 ):
     """Quem aprova vê tudo; quem só treina vê o que escreveu.
