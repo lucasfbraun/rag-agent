@@ -276,6 +276,14 @@ O treinamento fica numa coleção separada do acervo, então **reindexar o acerv
 
 ## O que o agente consegue responder
 
+O PU Matcher responde somente sobre o catálogo e o domínio técnico de
+poliuretanos da empresa. Pedidos claramente alheios a esse escopo, como receitas
+culinárias, previsão do tempo, placares e piadas, são recusados antes da busca no
+Qdrant e antes da chamada ao modelo. Por exemplo, "como fazer um bolo de
+cenoura?" recebe uma explicação curta do escopo e não uma resposta de
+conhecimento geral. O filtro usa intenções inequívocas e preserva aplicações
+técnicas válidas, como "molde de bolo com poliuretano".
+
 O acervo é consultável por **quatro caminhos diferentes**, e o agente escolhe pelo formato da pergunta. Isso importa porque cada um falha nos casos dos outros — busca semântica pura, por exemplo, nunca acerta uma pergunta sobre número.
 
 | Tipo de pergunta | Exemplo | Como é resolvido |
@@ -365,7 +373,7 @@ python frontend/static/gerar_assets_marca.py
 
 Os derivados ficam versionados porque a imagem do frontend não tem Pillow; rode o script novamente se os originais mudarem. O ícone original é 4191×4500 (quase quadrado, mas não exatamente) — o script centraliza numa tela quadrada em vez de redimensionar direto, que distorceria a marca.
 
-**Instalar como app (PWA):** a tela de login mostra um card "Instalar aplicativo" quando o navegador permite (Chrome/Edge desktop ou Android, critérios de instalabilidade atendidos). Isso exigiu um proxy reverso (Caddy, serviço `proxy` no Compose) na frente do Streamlit — o Service Worker precisa ser servido em `/` pra controlar a página inteira, e o Streamlit só serve estático em `/app/static/*`. Sem o proxy (ex: `frontend/run_local.py`), o card aparece desabilitado com uma dica em vez de simular sucesso.
+**Instalar como app (PWA):** a tela de login mostra um card compacto "Instalar aplicativo" somente quando o navegador permite (Chrome/Edge desktop ou Android, critérios de instalabilidade atendidos). Isso exigiu um proxy reverso (Caddy, serviço `proxy` no Compose) na frente do Streamlit — o Service Worker precisa ser servido em `/` pra controlar a página inteira, e o Streamlit só serve estático em `/app/static/*`. Sem o proxy (ex: `frontend/run_local.py`) ou quando a instalação não está disponível, o card fica oculto e não ocupa espaço na tela.
 
 > **Não testado em navegador real** — este ambiente não tem Chrome/Chromium disponível pra automação. O que foi verificado: os arquivos (`manifest.json`, os 3 PNGs de ícone, `service-worker.js`) são servidos com o `Content-Type` e no caminho certos através do proxy (`docker compose up` + `curl`), e a suíte `frontend/tests/test_pwa_assets.py` trava se alguém quebrar essa forma no futuro. O comportamento de instalação em si (o Chrome de fato mostrar o prompt) precisa de verificação manual num navegador real antes de considerar a Fase 6 fechada.
 

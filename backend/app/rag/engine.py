@@ -207,6 +207,43 @@ def _normalizar_para_regra(texto: str) -> str:
     return "".join(c for c in decomposed if not unicodedata.combining(c))
 
 
+_RESPOSTA_FORA_DO_ESCOPO = (
+    "Essa pergunta está fora do escopo do PU Matcher. Posso ajudar com produtos "
+    "FLEXX®, especificações técnicas, aplicações, Boletins Técnicos, FISPQs e "
+    "informações do catálogo de poliuretanos da empresa."
+)
+
+# Casos de alta confiança apenas. Este filtro fica antes do Qdrant e do LLM para
+# que o modelo não use conhecimento geral em pedidos evidentemente alheios ao
+# catálogo. Perguntas técnicas abertas continuam no RAG: uma lista genérica de
+# palavras permitidas rejeitaria aplicações válidas que ainda não conhecemos.
+_MARCADORES_EXPLICITOS_DO_DOMINIO = re.compile(
+    r"\b(?:flexx|poliuretanos?|pu|produtos?|catalogo|boletins? tecnicos?|tds|fispq|"
+    r"espumas?|adesivos?|resinas?|isocianatos?|poliois?|densidade|viscosidade|"
+    r"dureza|nco|tempo de (?:creme|pega|gel|cura|reacao))\b"
+)
+_PADROES_FORA_DO_ESCOPO = (
+    re.compile(
+        r"\b(?:receita(?: de)?|modo de preparo|como (?:eu )?(?:faco|fazer|preparo|preparar|assar|cozinhar))"
+        r"\b.{0,100}\b(?:bolo|brigadeiro|pizza|pao|torta|comida|prato|sobremesa|"
+        r"arroz|feijao|macarrao|omelete|panqueca|pudim|biscoito|churrasco|molho|sopa)\b"
+    ),
+    re.compile(r"\b(?:previsao do tempo|vai chover|clima (?:hoje|amanha|em))\b"),
+    re.compile(r"\b(?:placar|resultado) (?:do|da|de) (?:jogo|partida)\b"),
+    re.compile(r"\b(?:conte|conta|me diga) (?:uma )?piada\b"),
+)
+
+
+def _responder_fora_do_escopo(query: str) -> Optional[str]:
+    """Recusa apenas intenções inequivocamente alheias ao domínio do produto."""
+    texto = _normalizar_para_regra(query)
+    if _MARCADORES_EXPLICITOS_DO_DOMINIO.search(texto):
+        return None
+    if any(padrao.search(texto) for padrao in _PADROES_FORA_DO_ESCOPO):
+        return _RESPOSTA_FORA_DO_ESCOPO
+    return None
+
+
 def _familias_rejeitadas(query: str) -> List[str]:
     """Extrai famílias curtas de correções explícitas do turno atual.
 
@@ -940,6 +977,14 @@ def run_pu_matcher_agent(
     (`incluir_sensivel`, AUD-002/ticket 6 — reaproveita VIEW_COSTS pra
     custo/fórmula, ver docs/spec_rbac.md "Pendências" item 2). engine.py não
     decide permissão, só encaminha a decisão já tomada."""
+    resposta_fora_do_escopo = _responder_fora_do_escopo(query)
+    if resposta_fora_do_escopo is not None:
+        return {
+            "answer": resposta_fora_do_escopo,
+            "sources": [],
+            "model_used": "escopo-deterministico",
+        }
+
     if _eh_pedido_listagem_elastomeros(query):
         return {
             "answer": _responder_listagem_elastomeros(query),
@@ -1019,6 +1064,17 @@ def stream_pu_matcher_agent(
     gerada de novo apenas para obter chunks.
     """
     import json as _json
+
+    resposta_fora_do_escopo = _responder_fora_do_escopo(query)
+    if resposta_fora_do_escopo is not None:
+        yield _json.dumps({
+            "type": "meta", "sources": [], "model_used": "escopo-deterministico"
+        }) + "\n"
+        yield _json.dumps({
+            "type": "delta", "content": resposta_fora_do_escopo
+        }) + "\n"
+        yield _json.dumps({"type": "done"}) + "\n"
+        return
 
     if _eh_pedido_listagem_elastomeros(query):
         yield _json.dumps({

@@ -5,6 +5,33 @@ Ver visão geral de fases em [CRONOGRAMA.md](CRONOGRAMA.md).
 
 ---
 
+## 2026-09-11 — Sessão 40: barreira determinística para perguntas fora do escopo
+
+Reproduzida a falha relatada com a pergunta "você pode me passar como fazer um
+bolo de cenoura?". A causa era arquitetural: embora o prompt descrevesse o PU
+Matcher como especialista em poliuretanos, não existia nenhuma validação antes
+da busca no Qdrant e da chamada ao LLM. O modelo podia ignorar essa descrição e
+responder com conhecimento geral, prejudicando a credibilidade do catálogo.
+
+O motor agora recusa intenções inequivocamente alheias ao domínio antes de
+qualquer recuperação ou geração. A resposta informa o escopo do PU Matcher e
+oferece ajuda com produtos FLEXX®, especificações, aplicações, Boletins
+Técnicos, FISPQs e o catálogo. Os fluxos síncrono e streaming usam a mesma regra,
+retornam fontes vazias e identificam o caminho como `escopo-deterministico`.
+
+O filtro foi mantido conservador para não depender de uma lista fechada de
+aplicações industriais. Consultas legítimas como "cola para rolha de cortiça",
+"produto para assento de ônibus", ajuda sobre correção de respostas e "molde de
+bolo com poliuretano" continuam seguindo para o agente. Testes de regressão
+garantem que a pergunta culinária não chama nem Qdrant nem LLM.
+
+Validação local: 196 testes unitários do motor RAG passaram e os arquivos Python
+alterados foram compilados. Outros 18 testes de integração chegaram ao acesso ao
+PostgreSQL local, mas não executaram porque a senha isolada usada nesta validação
+foi recusada pelo banco; 209 testes haviam passado antes dessas falhas externas.
+
+---
+
 ## 2026-09-11 — Sessão 39: aprendizado por correções e requisitos compostos
 
 Concluída a interface de treinamento: cadastro das três modalidades, listagem,
