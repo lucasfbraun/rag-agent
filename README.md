@@ -258,6 +258,19 @@ O que o agente faz com cada um:
 
 O treinamento fica numa coleção separada do acervo, então **reindexar o acervo não apaga o que a equipe ensinou**.
 
+### Evidência para aplicações
+
+Quando a pergunta pede produtos para uma aplicação, o agente só apresenta um
+candidato se o Boletim Técnico do próprio produto mencionar aquela aplicação.
+Uma categoria próxima não serve como comprovação: por exemplo, documentos sobre
+colchões ou sobre o setor automotivo não comprovam uso em assento de ônibus.
+FISPQ e certificado também não são usados para essa decisão.
+
+Pedidos claros por aplicação são consultados diretamente no catálogo, sem
+embedding e sem o LLM escolher sinônimos. Se não houver menção explícita, a
+resposta informa que nenhum boletim foi encontrado. Equivalências técnicas só
+devem ser adicionadas depois de validação da equipe técnica/P&D.
+
 ## Estrutura do projeto
 
 ```

@@ -11,6 +11,7 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 from app.rag.catalog_stats import (
+    buscar_evidencias_de_aplicacao_explicita,
     obter_estatisticas_catalogo,
     listar_produtos_por_aplicacao,
     _produto_do_filepath,
@@ -384,3 +385,56 @@ def test_falha_no_qdrant_ao_listar_levanta_erro_tipado():
     with patch("app.rag.catalog_stats.get_qdrant_client", return_value=fake_client):
         with pytest.raises(RetrievalIndisponivelError):
             listar_produtos_por_aplicacao("colchão")
+
+
+# --- evidência explícita de aplicação em Boletim Técnico -------------------
+
+def test_evidencia_explicita_nao_transforma_setor_vizinho_em_aplicacao():
+    """Automotivo e colchão não comprovam uso em assento de ônibus."""
+    fake_client = MagicMock()
+    fake_client.scroll.return_value = (
+        [
+            _ponto_com_conteudo(
+                r"...\FLEXX HR 3070\Boletim FLEXX HR 3070.pdf",
+                "Espuma para colchões e estofados residenciais.",
+            ),
+            _ponto_com_conteudo(
+                r"...\FLEXX CL 2001\Boletim FLEXX CL 2001.pdf",
+                "Produto destinado ao setor automotivo.",
+            ),
+            _ponto_com_conteudo(
+                r"...\FLEXX BUS 100\Boletim FLEXX BUS 100.pdf",
+                "Sistema indicado para assentos de ônibus urbanos.",
+            ),
+        ],
+        None,
+    )
+
+    with patch("app.rag.catalog_stats.get_qdrant_client", return_value=fake_client):
+        resultado = buscar_evidencias_de_aplicacao_explicita(
+            ["assento de ônibus", "banco de ônibus"]
+        )
+
+    assert resultado == [{
+        "produto": "FLEXX BUS 100",
+        "documentos": ["Boletim FLEXX BUS 100.pdf"],
+        "termos_encontrados": ["assento de ônibus"],
+    }]
+
+
+def test_evidencia_explicita_ignora_mencao_em_fispq():
+    fake_client = MagicMock()
+    fake_client.scroll.return_value = (
+        [
+            _ponto_com_conteudo(
+                r"...\FLEXX X 1\FISPQ FLEXX X 1.pdf",
+                "Uso em assentos de ônibus.",
+            ),
+        ],
+        None,
+    )
+
+    with patch("app.rag.catalog_stats.get_qdrant_client", return_value=fake_client):
+        resultado = buscar_evidencias_de_aplicacao_explicita(["assento de ônibus"])
+
+    assert resultado == []

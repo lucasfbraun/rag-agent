@@ -5,6 +5,38 @@ Ver visão geral de fases em [CRONOGRAMA.md](CRONOGRAMA.md).
 
 ---
 
+## 2026-09-11 — Sessão 43: aplicações exigem evidência do próprio boletim
+
+Reproduzida a resposta incorreta para "assento de ônibus". A causa era a regra
+que entregava ao LLM a expansão da aplicação para duas ou três categorias
+supostamente relacionadas. O modelo transformou o pedido em buscas por
+"assento", "automotivo" e "colchão" e apresentou os três grupos como se fossem
+evidência da aplicação solicitada.
+
+Pedidos claros por aplicação agora seguem uma consulta determinística. O motor
+extrai a expressão do usuário, varre o catálogo uma vez e só aceita menção
+literal no Boletim Técnico do próprio produto. FISPQ, certificado e categorias
+vizinhas não entram como evidência. Equivalências ficam numa lista explícita e
+conservadora; para assento de ônibus, somente as formas linguísticas diretas
+"assento de ônibus" e "banco de ônibus" são aceitas. Se nada for encontrado, a
+resposta informa a ausência e não oferece produtos apenas relacionados.
+
+O mesmo caminho atende as rotas síncrona e streaming sem chamar embedding nem
+LLM, reduzindo também a latência dessas consultas. Perguntas que combinam uma
+aplicação com especificações numéricas continuam no mecanismo estruturado de
+especificações, para nenhum requisito ser descartado.
+
+Validação contra o Qdrant local: nenhum Boletim Técnico do acervo atual menciona
+explicitamente "assento de ônibus" ou "banco de ônibus"; a pergunta relatada
+agora responde isso diretamente, com fontes vazias. Testes de regressão cobrem
+resultado vazio, resultado comprovado, exclusão de colchão/automotivo, rejeição
+de FISPQ, outra aplicação e paridade do streaming. A suíte focada passou com
+48 testes e a suíte ampliada do motor sem dependência do banco passou com 209.
+Em uma execução anterior que incluiu rotas integradas, 212 testes passaram e quatro foram
+impedidos pela senha isolada do PostgreSQL local, sem falha funcional observada.
+
+---
+
 ## 2026-09-11 — Sessão 42: opção "Manter conectado"
 
 A tela de login ganhou a opção **Manter conectado**. Quando marcada, o backend

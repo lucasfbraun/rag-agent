@@ -11,7 +11,7 @@ na ingestão hoje. Ver `_produto_do_filepath`.
 """
 import re
 import unicodedata
-from typing import Any, Dict, Optional
+from typing import Any, Dict, List, Optional
 
 from app.rag.ingestion import get_qdrant_client
 from app.rag.exceptions import RetrievalIndisponivelError
@@ -317,3 +317,65 @@ def listar_produtos_por_aplicacao(termo_busca: str = "", listar_todos: bool = Fa
         "por_nome_ou_familia": _resumo_lista(produtos_por_nome, listar_todos),
         "por_aplicacao_ou_tipo": _resumo_lista(produtos_por_conteudo, listar_todos),
     }
+
+
+def buscar_evidencias_de_aplicacao_explicita(termos_busca: List[str]) -> List[Dict[str, Any]]:
+    """Localiza menções literais da aplicação no Boletim do próprio produto.
+
+    Esta consulta é deliberadamente mais estrita que uma busca semântica. Uma
+    categoria vizinha, como ``automotivo``, não comprova uma aplicação mais
+    específica, como ``assento de ônibus``. FISPQ e certificado também não são
+    usados como evidência de aplicação.
+    """
+    termos = [termo.strip() for termo in termos_busca if termo and termo.strip()]
+    if not termos:
+        return []
+
+    try:
+        client = get_qdrant_client()
+        encontrados: Dict[str, Dict[str, set]] = {}
+        offset = None
+        while True:
+            pontos, offset = client.scroll(
+                collection_name=COLLECTION_NAME,
+                with_payload=["filepath", "content"],
+                with_vectors=False,
+                limit=1000,
+                offset=offset,
+            )
+            for ponto in pontos:
+                payload = ponto.payload or {}
+                filepath = payload.get("filepath") or ""
+                nome_arquivo = _SEPARADOR_CAMINHO.split(filepath)[-1]
+                if "boletim" not in _normalizar_sem_acentos(nome_arquivo):
+                    continue
+
+                produto = _produto_do_filepath(filepath)
+                if not produto:
+                    continue
+
+                content = payload.get("content") or ""
+                termos_encontrados = [
+                    termo for termo in termos if _termo_bate_no_conteudo(termo, content)
+                ]
+                if not termos_encontrados:
+                    continue
+
+                evidencia = encontrados.setdefault(
+                    produto, {"documentos": set(), "termos_encontrados": set()}
+                )
+                evidencia["documentos"].add(nome_arquivo)
+                evidencia["termos_encontrados"].update(termos_encontrados)
+            if offset is None:
+                break
+    except Exception as e:
+        raise RetrievalIndisponivelError(str(e)) from e
+
+    return [
+        {
+            "produto": produto,
+            "documentos": sorted(dados["documentos"]),
+            "termos_encontrados": sorted(dados["termos_encontrados"]),
+        }
+        for produto, dados in sorted(encontrados.items())
+    ]

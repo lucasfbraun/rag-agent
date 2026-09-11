@@ -11,6 +11,7 @@ import pytest
 
 from app.conversation_service import history_for_agent
 from app.rag.engine import run_pu_matcher_agent, stream_pu_matcher_agent
+from app.rag.exceptions import RetrievalIndisponivelError
 
 
 REJEICAO = "esses adts não são elastômeros"
@@ -150,7 +151,7 @@ def test_status_comercial_sem_erp_real_e_substituido(mock_completion, _mock_retr
         "Produto Recomendado: FLEXX TH T160DE1\nStatus: Produto ativo em linha."
     )
 
-    result = run_pu_matcher_agent(query="produto para correia")
+    result = run_pu_matcher_agent(query="qual o status comercial do FLEXX TH 16010?")
 
     assert "Produto ativo em linha" not in result["answer"]
     assert "Status comercial não verificado" in result["answer"]
@@ -223,3 +224,95 @@ def test_stream_listagem_elastomeros_tambem_e_deterministico(
     assert "FLEXX ADT" not in answer
     mock_completion.assert_not_called()
     mock_retrieve.assert_not_called()
+
+
+@patch("app.rag.engine.buscar_evidencias_de_aplicacao_explicita", return_value=[])
+@patch("app.rag.engine.retrieve_products_context", return_value=[])
+@patch("app.rag.engine.litellm.completion")
+def test_assento_de_onibus_sem_evidencia_nao_recomenda_categoria_proxima(
+    mock_completion, mock_retrieve, _mock_busca
+):
+    mock_completion.return_value = _completion(
+        "Produtos relacionados: FLEXX HR 3070 para colchão e FLEXX CL 2001 automotivo."
+    )
+
+    result = run_pu_matcher_agent(query="em nenhum boletim tem nada para assento de ônibus?")
+
+    assert "não encontrei" in result["answer"].lower()
+    assert "assento" in result["answer"].lower()
+    assert "colchão" not in result["answer"].lower()
+    assert "automotivo" not in result["answer"].lower()
+    assert result["sources"] == []
+    assert result["model_used"] == "catalogo-estruturado"
+    mock_completion.assert_not_called()
+    mock_retrieve.assert_not_called()
+
+
+@patch("app.rag.engine.buscar_evidencias_de_aplicacao_explicita")
+@patch("app.rag.engine.retrieve_products_context", return_value=[])
+@patch("app.rag.engine.litellm.completion")
+def test_assento_de_onibus_so_retorna_produto_com_boletim_que_comprova_aplicacao(
+    mock_completion, mock_retrieve, mock_busca
+):
+    mock_busca.return_value = [{
+        "produto": "FLEXX BUS 100",
+        "documentos": ["Boletim FLEXX BUS 100.pdf"],
+        "termos_encontrados": ["assento de ônibus"],
+    }]
+
+    result = run_pu_matcher_agent(query="quero um produto para assento de onibus")
+
+    assert "FLEXX BUS 100" in result["answer"]
+    assert "Boletim FLEXX BUS 100.pdf" in result["answer"]
+    assert result["sources"] == ["Boletim FLEXX BUS 100.pdf"]
+    mock_completion.assert_not_called()
+    mock_retrieve.assert_not_called()
+
+
+@patch("app.rag.engine.buscar_evidencias_de_aplicacao_explicita", return_value=[])
+@patch("app.rag.engine.retrieve_products_context", return_value=[])
+@patch("app.rag.engine.litellm.completion")
+def test_stream_assento_de_onibus_aplica_mesma_validacao(
+    mock_completion, mock_retrieve, _mock_busca
+):
+    events = [
+        json.loads(line)
+        for line in stream_pu_matcher_agent(query="produto para assento de ônibus")
+    ]
+    answer = "".join(event.get("content", "") for event in events if event["type"] == "delta")
+
+    assert "não encontrei" in answer.lower()
+    assert "colchão" not in answer.lower()
+    assert events[0]["model_used"] == "catalogo-estruturado"
+    mock_completion.assert_not_called()
+    mock_retrieve.assert_not_called()
+
+
+@patch("app.rag.engine.buscar_evidencias_de_aplicacao_explicita", return_value=[])
+@patch("app.rag.engine.retrieve_products_context", return_value=[])
+@patch("app.rag.engine.litellm.completion")
+def test_outra_aplicacao_tambem_usa_expressao_literal_sem_expansao_do_modelo(
+    mock_completion, mock_retrieve, mock_busca
+):
+    result = run_pu_matcher_agent(query="preciso de um produto para rolha de cortiça")
+
+    mock_busca.assert_called_once_with(["rolha de cortiça"])
+    assert "rolha de cortiça" in result["answer"].lower()
+    mock_completion.assert_not_called()
+    mock_retrieve.assert_not_called()
+
+
+@patch(
+    "app.rag.engine.buscar_evidencias_de_aplicacao_explicita",
+    side_effect=RetrievalIndisponivelError("qdrant fora do ar"),
+)
+@patch("app.rag.engine.litellm.completion")
+def test_stream_aplicacao_nao_responde_sem_catalogo(mock_completion, _mock_busca):
+    events = [
+        json.loads(line)
+        for line in stream_pu_matcher_agent(query="produto para assento de ônibus")
+    ]
+
+    assert [event["type"] for event in events] == ["error", "done"]
+    assert "indisponível" in events[0]["message"].lower()
+    mock_completion.assert_not_called()

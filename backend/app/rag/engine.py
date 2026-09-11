@@ -18,6 +18,7 @@ from app.rag.doc_sections import (
 from app.rag.embeddings import get_embedding, reutilizar_embeddings_na_consulta
 from app.rag.treinamento import montar_bloco as montar_bloco_de_treinamento
 from app.rag.exceptions import RetrievalIndisponivelError
+from app.rag.catalog_stats import buscar_evidencias_de_aplicacao_explicita
 from app.rag.spec_search import (
     buscar_produtos_por_especificacao,
     buscar_produtos_por_especificacoes,
@@ -164,7 +165,7 @@ C) PEDIDO DE LISTAGEM/CATEGORIA (o usuário quer VER AS OPÇÕES ou SABER QUANTO
    - Por TIPO/NATUREZA DO PRODUTO (o que o produto É, não pra que ele serve): "me traga produtos que são colas", "quais são as espumas que temos", "produtos do tipo selante" — aqui não importa a aplicação final, é sobre a classificação do produto em si (cola, espuma, verniz, adesivo, resina, catalisador...).
    - SEM NENHUMA CATEGORIA — o CATÁLOGO INTEIRO: "liste todos os produtos", "quais produtos vocês têm" (sem citar aplicação/tipo/família nenhum). Isso NÃO é a mesma coisa que "quantos produtos catalogados" (que só quer o número) — se o pedido é pra LISTAR (ver os nomes), mesmo sem categoria, é esta situação.
    - Reconheça pelo formato: "produtos para X" / "produtos que são X" / "produtos X" (sigla curta sozinha) / "quais produtos" / "o que temos para" / "lista de produtos" / "liste todos os produtos" / "quantos produtos para/que são X" — TODOS esses pedem a ferramenta de listagem.
-   - REGRA FIXA PRA TODO PEDIDO POR APLICAÇÃO/USO (item acima) — SEM EXCEÇÃO, NÃO É OPCIONAL: o vendedor usa a expressão do dia a dia do CLIENTE ("cadeia de frios", "assento de ônibus"), não o vocabulário técnico dos documentos. NUNCA chame a ferramenta só com a frase literal do vendedor. Em vez disso, pense em 2 a 3 termos TÉCNICOS de poliuretano que significam a mesma coisa (ex: "cadeia de frios" → "isolamento térmico", "refrigeração"; use seu próprio conhecimento do domínio) e CHAME A FERRAMENTA UMA VEZ PRA CADA TERMO TÉCNICO (múltiplas tool_calls na mesma resposta) — nunca com fragmentos soltos da frase original do vendedor (ex: NÃO chame com só "frio" ou só "cadeia"). Combine os resultados de todas as chamadas numa lista só, removendo duplicata, ANTES de responder — mesmo que a primeira chamada já tenha achado alguma coisa, as outras ainda são obrigatórias. Prefira termos específicos de 2+ palavras ("isolamento térmico", "refrigeração") a palavras soltas genéricas demais ("temperatura" sozinha aparece em quase TODO documento do acervo — vira ruído, não filtro).
+   - REGRA FIXA PRA TODO PEDIDO POR APLICAÇÃO/USO: uma categoria parecida NÃO comprova a aplicação solicitada. Pesquise primeiro a expressão específica do vendedor. Não transforme "assento de ônibus" em "colchão", "estofado" ou "automotivo", nem combine resultados dessas categorias como se fossem equivalentes. Um sinônimo técnico só pode ser usado quando for uma equivalência direta já validada; associação por conhecimento geral do modelo não é evidência. Se nenhum Boletim Técnico do próprio produto mencionar a aplicação pedida, informe que não encontrou evidência explícita e não recomende produtos de categorias vizinhas.
    - CHAME A FERRAMENTA `consultar_produtos_por_aplicacao` com o termo (ex: "CAT", "colchão" ou "cola") — ou SEM `termo_busca` nenhum quando for o catálogo inteiro, sem categoria. SEM `listar_todos` na primeira chamada. O contexto de busca normal (RAG) só traz um punhado de trechos e NUNCA representa a categoria (ou o catálogo inteiro) de forma fiel — pode haver dezenas ou centenas de produtos, e usar só o contexto faria você listar/contar um subconjunto arbitrário como se fosse tudo.
 
    ENTENDENDO A RESPOSTA — ELA VEM EM DOIS BLOCOS SEPARADOS, NUNCA MISTURE:
@@ -278,6 +279,119 @@ def _eh_pedido_listagem_elastomeros(query: str) -> bool:
         "elastomero" in texto
         and bool(re.search(r"\b(?:list\w*|produtos?|quais|traga|mostre)\b", texto))
     )
+
+
+_PADROES_APLICACAO_EXPLICITA = (
+    re.compile(
+        r"\b(?:produtos?|sistemas?|colas?|espumas?|adesivos?|resinas?)\b"
+        r".{0,60}\b(?:para|pra)\s+"
+        r"(?:(?:o|a|os|as|um|uma)\s+)?(?P<aplicacao>[^?.,;\n]{2,100})"
+    ),
+    re.compile(
+        r"\b(?:temos|tem|existe|existem)\b.{0,45}\b(?:para|pra)\s+"
+        r"(?:(?:o|a|os|as|um|uma)\s+)?(?P<aplicacao>[^?.,;\n]{2,100})"
+    ),
+    re.compile(
+        r"\b(?:boletim|boletins|catalogo)\b.{0,70}\b(?:para|pra|sobre)\s+"
+        r"(?:(?:o|a|os|as|um|uma)\s+)?(?P<aplicacao>[^?.,;\n]{2,100})"
+    ),
+)
+
+_EQUIVALENCIAS_DE_APLICACAO = {
+    # Equivalência linguística estrita; termos setoriais amplos como
+    # "automotivo" não entram aqui porque não comprovam uso em ônibus.
+    "assento de onibus": ["assento de ônibus", "banco de ônibus"],
+    "assentos de onibus": ["assento de ônibus", "banco de ônibus"],
+    "banco de onibus": ["assento de ônibus", "banco de ônibus"],
+    "bancos de onibus": ["assento de ônibus", "banco de ônibus"],
+}
+
+
+def _extrair_aplicacao_explicita(query: str) -> Optional[str]:
+    """Extrai aplicações de pedidos claros sem pedir ao LLM para ampliá-las."""
+    codigos = _detectar_codigos_produto(query)
+    if codigos or interpretar_consulta_especificacoes(query, codigos_produto=codigos):
+        return None
+    texto = _normalizar_para_regra(query)
+    if "onibus" in texto and re.search(r"\b(?:assentos?|bancos?)\b", texto):
+        return "assento de ônibus"
+    for padrao in _PADROES_APLICACAO_EXPLICITA:
+        match = padrao.search(texto)
+        if not match:
+            continue
+        inicio, fim = match.span("aplicacao")
+        # A normalização mantém o tamanho dos caracteres latinos usados aqui;
+        # o span permite devolver a grafia original ("cortiça", não "cortica").
+        aplicacao = query[inicio:fim].strip().lower()
+        aplicacao = re.sub(
+            r"^(?:ramo|setor|segmento)\s+(?:de\s+)?", "", aplicacao,
+            flags=re.IGNORECASE,
+        )
+        aplicacao = re.split(
+            r"\s+(?:com|que tenha|e densidade|e viscosidade|abaixo|acima|entre)\b",
+            aplicacao,
+            maxsplit=1,
+        )[0].strip()
+        if 1 <= len(aplicacao.split()) <= 8:
+            return aplicacao
+    return None
+
+
+def _responder_aplicacao_com_evidencia(query: str) -> Optional[Dict[str, Any]]:
+    """Responde listagem/aplicação só com evidência literal do boletim.
+
+    Ao retirar do modelo a expansão livre de categorias, o mesmo mecanismo
+    protege aplicações novas sem exigir uma nova regra de prompt para cada
+    resposta ruim relatada.
+    """
+    aplicacao = _extrair_aplicacao_explicita(query)
+    if not aplicacao:
+        return None
+
+    termos = _EQUIVALENCIAS_DE_APLICACAO.get(
+        _normalizar_para_regra(aplicacao), [aplicacao]
+    )
+    evidencias = buscar_evidencias_de_aplicacao_explicita(termos)
+    if not evidencias:
+        fontes = []
+        answer = (
+            f'Não encontrei nenhum Boletim Técnico do acervo que mencione '
+            f'explicitamente a aplicação "{aplicacao}". Por isso, não vou indicar '
+            "produtos de categorias apenas relacionadas como se atendessem a essa "
+            "aplicação. Uma equivalência técnica precisa ser validada pela equipe "
+            "técnica/P&D antes de virar recomendação."
+        )
+    else:
+        exibidas = evidencias[:10]
+        fontes = sorted({
+            documento
+            for evidencia in exibidas
+            for documento in evidencia["documentos"]
+        })
+        quantidade = len(evidencias)
+        substantivo = "produto" if quantidade == 1 else "produtos"
+        linhas = [
+            f'Encontrei {quantidade} {substantivo} cujo próprio Boletim Técnico '
+            f'menciona explicitamente a aplicação "{aplicacao}":',
+            "",
+        ]
+        for indice, evidencia in enumerate(exibidas, start=1):
+            documentos = ", ".join(evidencia["documentos"])
+            linhas.append(f'{indice}. **{evidencia["produto"]}** — Fonte: {documentos}')
+        if len(evidencias) > len(exibidas):
+            linhas.extend(["", f"A prévia mostra 10 dos {quantidade} produtos encontrados."])
+        linhas.extend([
+            "",
+            "A lista considera somente menção explícita no Boletim Técnico do próprio "
+            "produto; categorias apenas relacionadas foram excluídas.",
+        ])
+        answer = "\n".join(linhas)
+
+    return {
+        "answer": answer,
+        "sources": fontes,
+        "model_used": "catalogo-estruturado",
+    }
 
 
 def _responder_listagem_elastomeros(query: str) -> str:
@@ -996,6 +1110,10 @@ def run_pu_matcher_agent(
     if resposta_composta is not None:
         return resposta_composta
 
+    resposta_aplicacao = _responder_aplicacao_com_evidencia(query)
+    if resposta_aplicacao is not None:
+        return resposta_aplicacao
+
     query_recuperacao = _montar_query_recuperacao(query, history)
     docs, context_str = _preparar_contexto(query_recuperacao, ver_custos)
     system_instruction = _montar_system_instruction(template_id)
@@ -1096,6 +1214,19 @@ def stream_pu_matcher_agent(
             }) + "\n"
             yield _json.dumps({
                 "type": "delta", "content": resposta_composta["answer"],
+            }) + "\n"
+            yield _json.dumps({"type": "done"}) + "\n"
+            return
+
+        resposta_aplicacao = _responder_aplicacao_com_evidencia(query)
+        if resposta_aplicacao is not None:
+            yield _json.dumps({
+                "type": "meta",
+                "sources": resposta_aplicacao["sources"],
+                "model_used": resposta_aplicacao["model_used"],
+            }) + "\n"
+            yield _json.dumps({
+                "type": "delta", "content": resposta_aplicacao["answer"],
             }) + "\n"
             yield _json.dumps({"type": "done"}) + "\n"
             return
