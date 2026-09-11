@@ -5,6 +5,30 @@ Ver visão geral de fases em [CRONOGRAMA.md](CRONOGRAMA.md).
 
 ---
 
+## 2026-09-11 — Sessão 48: busca reversa completa de menções
+
+Implementada a consulta "o produto X é utilizado em algum produto?" quando o
+usuário informa apenas X e quer descobrir todos os possíveis produtos Y. Esse
+caso não é uma relação entre códigos já nomeados: exige uma busca reversa no
+catálogo inteiro.
+
+O motor agora percorre todas as páginas da coleção, considera somente Boletins
+Técnicos de outros produtos, confirma localmente o código completo e agrupa as
+menções por produto. A confirmação tolera espaço, hífen e ausência de separador
+(`AG 2032`, `AG-2032`, `AG2032`). Não há top-k, prévia de dez ou seleção pelo
+LLM: todos os produtos encontrados são formatados diretamente com documento e
+trecho da menção.
+
+A resposta distingue menção de comprovação de uso, porque uma citação também
+pode ser comparação ou restrição. Testes cobrem paginação, exclusão do boletim
+do próprio X e de FISPQ, duas grafias alternativas, doze resultados sem corte,
+resultado vazio e paridade entre resposta síncrona e streaming. Validação
+focada: 37 testes; suíte ampliada do motor: 214 testes aprovados. A validação
+direta no Qdrant local ficou indisponível fora da rede Docker, onde o hostname
+interno `qdrant` não é resolvido.
+
+---
+
 ## 2026-09-11 — Sessão 47: relações com qualquer quantidade de produtos
 
 A busca relacional foi generalizada para três ou mais produtos sem crescimento

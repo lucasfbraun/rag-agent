@@ -18,7 +18,10 @@ from app.rag.doc_sections import (
 from app.rag.embeddings import get_embedding, reutilizar_embeddings_na_consulta
 from app.rag.treinamento import montar_bloco as montar_bloco_de_treinamento
 from app.rag.exceptions import RetrievalIndisponivelError
-from app.rag.catalog_stats import buscar_evidencias_de_aplicacao_explicita
+from app.rag.catalog_stats import (
+    buscar_evidencias_de_aplicacao_explicita,
+    buscar_produtos_que_mencionam,
+)
 from app.rag.spec_search import (
     buscar_produtos_por_aplicacao_e_especificacoes,
     buscar_produtos_por_especificacao,
@@ -363,6 +366,86 @@ def _termos_para_aplicacao(aplicacao: str) -> List[str]:
     return _EQUIVALENCIAS_DE_APLICACAO.get(
         _normalizar_para_regra(aplicacao), [aplicacao]
     )
+
+
+_PADROES_BUSCA_REVERSA_PRODUTO = (
+    re.compile(
+        r"\b(?:em|por)\s+(?:um|algum|outro|quais?|que)\s+"
+        r"(?:outro\s+)?(?:produto|sistema|formulacao)\b"
+    ),
+    re.compile(
+        r"\b(?:quais?|que)\s+(?:outros?\s+)?"
+        r"(?:produtos?|sistemas?|formulacoes?).{0,80}"
+        r"\b(?:utiliz|usad|aplic|empreg|adicion|mistur|combin|mencion|contem|leva)"
+    ),
+    re.compile(
+        r"\b(?:onde|quem)\b.{0,80}"
+        r"\b(?:utiliz|usad|aplic|empreg|adicion|mistur|combin|mencion|contem|leva)"
+    ),
+    re.compile(
+        r"\b(?:produtos?|sistemas?|formulacoes?)\s+que\s+"
+        r"(?:utiliz|usam|aplic|empreg|adicion|mistur|combin|mencion|contem|levam)"
+    ),
+)
+
+
+def _responder_busca_reversa_produto(
+    query: str,
+    incluir_sensivel: bool,
+) -> Optional[Dict[str, Any]]:
+    """Lista todo Boletim de outro produto que menciona o código pedido."""
+    codigos = _detectar_codigos_produto(query)
+    if len(codigos) != 1:
+        return None
+    texto = _normalizar_para_regra(query)
+    if not any(padrao.search(texto) for padrao in _PADROES_BUSCA_REVERSA_PRODUTO):
+        return None
+
+    codigo = codigos[0]
+    resultados = buscar_produtos_que_mencionam(
+        codigo, incluir_sensivel=incluir_sensivel
+    )
+    fontes = sorted({
+        documento
+        for item in resultados
+        for documento in item["documentos"]
+    })
+    if not resultados:
+        answer = (
+            f'Não encontrei outro produto cujo Boletim Técnico mencione "{codigo.upper()}". '
+            "A busca reversa percorreu todos os resultados do catálogo, sem limite de top-k."
+        )
+    else:
+        total = len(resultados)
+        linhas = [
+            f'Encontrei {total} produto{"s" if total != 1 else ""} cujo próprio '
+            f'Boletim Técnico menciona "{codigo.upper()}":',
+            "",
+        ]
+        for indice, item in enumerate(resultados, start=1):
+            linhas.append(f"{indice}. **{item['produto']}**")
+            linhas.append(f"   - Fonte(s): {', '.join(item['documentos'])}")
+            if item["mencoes"]:
+                linhas.append(f"   - Contexto: {item['mencoes'][0]['trecho']}")
+                adicionais = len(item["mencoes"]) - 1
+                if adicionais:
+                    substantivo = "menção" if adicionais == 1 else "menções"
+                    linhas.append(
+                        f"   - Mais {adicionais} {substantivo} "
+                        "encontrada(s) nos documentos citados."
+                    )
+        linhas.extend([
+            "",
+            "A lista contém todos os produtos com menção confirmada no Boletim Técnico. "
+            "Uma menção pode descrever uso, comparação ou restrição; o trecho citado deve "
+            "ser considerado antes de afirmar compatibilidade.",
+        ])
+        answer = "\n".join(linhas)
+    return {
+        "answer": answer,
+        "sources": fontes,
+        "model_used": "catalogo-estruturado",
+    }
 
 
 def _responder_aplicacao_com_evidencia(query: str) -> Optional[Dict[str, Any]]:
@@ -1278,6 +1361,10 @@ def run_pu_matcher_agent(
             "model_used": "catalogo-estruturado",
         }
 
+    resposta_reversa = _responder_busca_reversa_produto(query, ver_custos)
+    if resposta_reversa is not None:
+        return resposta_reversa
+
     resposta_composta = _responder_requisitos_compostos(query)
     if resposta_composta is not None:
         return resposta_composta
@@ -1377,6 +1464,19 @@ def stream_pu_matcher_agent(
         return
 
     try:
+        resposta_reversa = _responder_busca_reversa_produto(query, ver_custos)
+        if resposta_reversa is not None:
+            yield _json.dumps({
+                "type": "meta",
+                "sources": resposta_reversa["sources"],
+                "model_used": resposta_reversa["model_used"],
+            }) + "\n"
+            yield _json.dumps({
+                "type": "delta", "content": resposta_reversa["answer"],
+            }) + "\n"
+            yield _json.dumps({"type": "done"}) + "\n"
+            return
+
         resposta_composta = _responder_requisitos_compostos(query)
         if resposta_composta is not None:
             yield _json.dumps({

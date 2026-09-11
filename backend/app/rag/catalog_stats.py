@@ -215,6 +215,106 @@ def _termo_bate_no_conteudo(termo_busca: str, content_lower: str) -> bool:
     return False
 
 
+def _codigo_bate_no_texto(codigo: str, texto: str) -> bool:
+    """Confirma código completo, tolerando espaço, hífen ou quebra de linha."""
+    partes = re.findall(r"[a-z0-9]+", _normalizar_sem_acentos(codigo))
+    if not partes:
+        return False
+    separador = r"[\s\-_®]*"
+    padrao = r"(?<![a-z0-9])" + separador.join(map(re.escape, partes))
+    padrao += r"(?![a-z0-9])"
+    return bool(re.search(padrao, _normalizar_sem_acentos(texto)))
+
+
+def _trecho_da_mencao(codigo: str, content: str, largura: int = 320) -> str:
+    """Recorta contexto suficiente para distinguir uso, comparação e negação."""
+    texto = re.sub(r"\s+", " ", content or "").strip()
+    partes = re.findall(r"[a-z0-9]+", _normalizar_sem_acentos(codigo))
+    if not texto or not partes:
+        return ""
+    padrao = r"(?<![a-z0-9])" + r"[\s\-_®]*".join(map(re.escape, partes))
+    padrao += r"(?![a-z0-9])"
+    match = re.search(padrao, _normalizar_sem_acentos(texto))
+    if not match:
+        return ""
+    metade = largura // 2
+    inicio = max(0, match.start() - metade)
+    fim = min(len(texto), match.end() + metade)
+    prefixo = "…" if inicio else ""
+    sufixo = "…" if fim < len(texto) else ""
+    return f"{prefixo}{texto[inicio:fim].strip()}{sufixo}"
+
+
+def buscar_produtos_que_mencionam(
+    codigo: str,
+    incluir_sensivel: bool = False,
+) -> List[Dict[str, Any]]:
+    """Busca reversa completa: outros Boletins que mencionam ``codigo``.
+
+    O catálogo inteiro é paginado até o fim e o resultado não usa top-k nem
+    prévia. A confirmação local cobre código separado por espaço, hífen ou
+    quebra de linha, sem depender da tokenização do índice textual do Qdrant.
+    O documento do próprio produto é excluído, pois seu cabeçalho normalmente
+    menciona o código sem representar uma relação com outro item.
+    """
+    codigo = (codigo or "").strip()
+    if not codigo:
+        return []
+    encontrados: Dict[str, Dict[str, Any]] = {}
+    try:
+        client = get_qdrant_client()
+        offset = None
+        while True:
+            pontos, offset = client.scroll(
+                collection_name=COLLECTION_NAME,
+                with_payload=["filepath", "filename", "content", "sensivel"],
+                with_vectors=False,
+                limit=1000,
+                offset=offset,
+            )
+            for ponto in pontos:
+                payload = ponto.payload or {}
+                if payload.get("sensivel") is True and not incluir_sensivel:
+                    continue
+                filepath = payload.get("filepath") or ""
+                filename = payload.get("filename") or (
+                    _SEPARADOR_CAMINHO.split(filepath)[-1] if filepath else ""
+                )
+                if "boletim" not in _normalizar_sem_acentos(filename):
+                    continue
+                produto = _produto_do_filepath(filepath)
+                content = payload.get("content") or ""
+                if (
+                    not produto
+                    or _codigo_bate_no_texto(codigo, produto)
+                    or _codigo_bate_no_texto(codigo, filename)
+                ):
+                    continue
+                if not _codigo_bate_no_texto(codigo, content):
+                    continue
+                trecho = _trecho_da_mencao(codigo, content)
+                dados = encontrados.setdefault(
+                    produto, {"documentos": set(), "mencoes": []}
+                )
+                dados["documentos"].add(filename)
+                mencao = {"documento": filename, "trecho": trecho}
+                if mencao not in dados["mencoes"]:
+                    dados["mencoes"].append(mencao)
+            if offset is None:
+                break
+    except Exception as e:
+        raise RetrievalIndisponivelError(str(e)) from e
+
+    return [
+        {
+            "produto": produto,
+            "documentos": sorted(dados["documentos"]),
+            "mencoes": dados["mencoes"],
+        }
+        for produto, dados in sorted(encontrados.items())
+    ]
+
+
 def _resumo_lista(produtos: set, listar_todos: bool) -> Dict[str, Any]:
     lista = sorted(produtos)
     limite = None if listar_todos else 10

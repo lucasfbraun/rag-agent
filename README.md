@@ -324,7 +324,7 @@ O acervo é consultável por **cinco caminhos diferentes**, e o agente escolhe p
 | Tipo de pergunta | Exemplo | Como é resolvido |
 |---|---|---|
 | **Produto/documento nomeado** | "traga o boletim do AG 2032" | Busca híbrida: match exato do código no nome do arquivo + busca semântica (`rag/engine.py`) |
-| **Relação entre produtos** | "AG 2032, CAT 136 e RG 2464 são utilizados juntos?" | Busca individualmente todos os produtos citados e prioriza referências cruzadas em todas as direções (`rag/engine.py`) |
+| **Relação entre produtos** | "AG 2032, CAT 136 e RG 2464 são utilizados juntos?" ou "em quais produtos o AG 2032 é usado?" | Busca individualmente todos os produtos citados; quando o destino não é informado, varre o catálogo inteiro e lista todo Boletim de outro produto que menciona o código (`rag/engine.py`, `rag/catalog_stats.py`) |
 | **Aplicação, tipo ou família** | "produtos para colchão", "quais são as colas", "produtos da família CAT" | Varredura do acervo por nome e por conteúdo, em blocos separados (`rag/catalog_stats.py`) |
 | **Valor(es) de especificação técnica** | "hidroxila de 180", "densidade abaixo de 32 kg/m³ e pega livre abaixo de 220 s" | Leitura estruturada da tabela, varredura do acervo e interseção dos requisitos (`rag/spec_search.py`) |
 | **Seção do boletim** | "quais as vantagens do AG 2032", "como armazenar", "vem em tambor?", "qual a validade" | Detecção da seção pedida, filtro de recuperação dentro do produto e instrução explícita no contexto (`rag/doc_sections.py`) |

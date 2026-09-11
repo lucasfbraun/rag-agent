@@ -12,6 +12,7 @@ import pytest
 
 from app.rag.catalog_stats import (
     buscar_evidencias_de_aplicacao_explicita,
+    buscar_produtos_que_mencionam,
     obter_estatisticas_catalogo,
     listar_produtos_por_aplicacao,
     _produto_do_filepath,
@@ -438,3 +439,59 @@ def test_evidencia_explicita_ignora_mencao_em_fispq():
         resultado = buscar_evidencias_de_aplicacao_explicita(["assento de ônibus"])
 
     assert resultado == []
+
+
+def test_busca_reversa_lista_todos_os_outros_produtos_que_mencionam_codigo():
+    fake_client = MagicMock()
+    fake_client.scroll.side_effect = [
+        ([
+            _ponto_com_conteudo(
+                r"...\FLEXX AG 2032\Boletim Técnico.pdf",
+                "Boletim Técnico do próprio AG 2032.",
+            ),
+            _ponto_com_conteudo(
+                r"...\FLEXX SIST 100\Boletim FLEXX SIST 100.pdf",
+                "Parte A: FLEXX AG-2032. Misturar conforme a relação indicada.",
+            ),
+            _ponto_com_conteudo(
+                r"...\FLEXX SIST 200\FISPQ FLEXX SIST 200.pdf",
+                "Esta FISPQ também cita AG 2032.",
+            ),
+        ], "pagina-2"),
+        ([
+            _ponto_com_conteudo(
+                r"...\FLEXX SIST 200\Boletim FLEXX SIST 200.pdf",
+                "O componente AG2032 integra o sistema.",
+            ),
+        ], None),
+    ]
+
+    with patch("app.rag.catalog_stats.get_qdrant_client", return_value=fake_client):
+        resultado = buscar_produtos_que_mencionam("AG 2032")
+
+    assert [item["produto"] for item in resultado] == [
+        "FLEXX SIST 100", "FLEXX SIST 200",
+    ]
+    assert resultado[0]["documentos"] == ["Boletim FLEXX SIST 100.pdf"]
+    assert "AG-2032" in resultado[0]["mencoes"][0]["trecho"]
+    assert "AG2032" in resultado[1]["mencoes"][0]["trecho"]
+    assert fake_client.scroll.call_count == 2
+    assert fake_client.scroll.call_args_list[1].kwargs["offset"] == "pagina-2"
+
+
+def test_busca_reversa_nao_corta_resultado_em_dez_produtos():
+    fake_client = MagicMock()
+    fake_client.scroll.return_value = ([
+        _ponto_com_conteudo(
+            rf"...\FLEXX SIST {indice:03d}\Boletim FLEXX SIST {indice:03d}.pdf",
+            "Este sistema utiliza o componente FLEXX AG 2032.",
+        )
+        for indice in range(1, 13)
+    ], None)
+
+    with patch("app.rag.catalog_stats.get_qdrant_client", return_value=fake_client):
+        resultado = buscar_produtos_que_mencionam("AG 2032")
+
+    assert len(resultado) == 12
+    assert resultado[0]["produto"] == "FLEXX SIST 001"
+    assert resultado[-1]["produto"] == "FLEXX SIST 012"
