@@ -41,9 +41,14 @@ com texto curto e botão "Instalar". Ele só aparece quando o navegador dispara
 recolhido e não ocupa espaço com mensagem longa ou botão desabilitado. Em telas
 estreitas, a frase auxiliar também é ocultada.
 
+Confirmado o controle de correção direta por perfil: o formulário após feedback
+negativo só aparece com `train_agent`, e o endpoint de criação exige a mesma
+permissão. Ter apenas `approve_training` permite revisar a fila, sem criar
+correções. A interface ganhou regressão explícita para os dois casos sem acesso.
+
 Migration `e7c4a2f913b0` adiciona `produto`, `aplicacao` e `fonte`; o startup do
 backend executa `alembic upgrade head` antes da aplicação. Validação local:
-126 testes de regressão do backend e 59 testes do frontend passaram; compilação
+126 testes de regressão do backend e 61 testes do frontend passaram; compilação
 Python e cabeça única do Alembic também passaram.
 
 ---

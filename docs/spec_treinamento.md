@@ -122,6 +122,10 @@ Nada — é o ponto da coleção separada. Mas vale registrar explicitamente que
 5. [x] Escopo por produto/aplicação/fonte e bloqueio de código de produto divergente.
 6. [x] Testes dos fluxos de recuperação, governança e interface.
 
+O formulário aberto pelo feedback negativo exige `TRAIN_AGENT`. A mesma
+permissão é validada novamente pelo endpoint de criação; `APPROVE_TRAINING`
+isoladamente permite revisar a fila, mas não cadastrar uma correção.
+
 **Estimativa de risco:** o passo 3 é o mais delicado. Mexer no prompt do agente já produziu regressão neste projeto, e a validação vai precisar de chamadas reais ao LLM comparando resposta antes/depois — não só teste de unidade.
 
 ---

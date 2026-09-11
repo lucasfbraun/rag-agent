@@ -220,6 +220,8 @@ Quem tem a permissão *Treinar o agente* vê o atalho **Treinar agente** na barr
 lateral. Também pode marcar uma resposta como não útil e escrever a correção
 diretamente abaixo da resposta. Correções ficam pendentes até alguém com
 *Aprovar treinamento* revisar; só então podem influenciar novas respostas.
+Sem *Treinar o agente*, o usuário ainda pode avaliar a resposta como não útil,
+mas o formulário de correção não é exibido e a API recusa qualquer tentativa de cadastro.
 
 Quem tem a permissão *Treinar o agente* pode registrar conhecimento que melhora as respostas. **Não é fine-tuning:** o aprendizado fica em dado, o que o torna legível, editável e removível apagando uma linha — e mantém o projeto livre para trocar de modelo de IA.
 

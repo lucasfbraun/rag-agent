@@ -137,3 +137,28 @@ def test_feedback_negativo_abre_formulario_e_envia_correcao_com_escopo():
     assert payload["aplicacao"] == "rolha de cortiça"
     assert payload["fonte"] == "Boletim AG 2066 rev. 03"
     assert payload["resposta_original"] == "Use outro produto."
+
+
+@pytest.mark.parametrize(
+    "permissoes",
+    [
+        ["view_catalog"],
+        ["view_catalog", "approve_training"],
+    ],
+)
+def test_feedback_negativo_sem_permissao_de_treinar_nao_exibe_correcao(permissoes):
+    """Aprovar itens não concede implicitamente o direito de criar correções."""
+    app = _app(permissoes, pagina="chat")
+    app.session_state.messages = [
+        {"role": "user", "content": "Qual cola usar para cortiça?"},
+        {"role": "assistant", "content": "Use outro produto.", "sources": []},
+    ]
+
+    _run(app)
+    app.feedback[0].set_value(0)
+    _run(app)
+
+    assert not any(
+        area.label == "Qual seria a resposta correta?" for area in app.text_area
+    )
+    assert "Enviar correção para aprovação" not in [button.label for button in app.button]
