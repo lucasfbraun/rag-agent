@@ -5,6 +5,30 @@ Ver visão geral de fases em [CRONOGRAMA.md](CRONOGRAMA.md).
 
 ---
 
+## 2026-09-14 — Sessão 57: classificação estrutural para qualquer linha
+
+A regra de tecnologia deixou de ser uma exceção exclusiva para rígidos. Foi
+criada a consulta `listar_produtos_por_classificacao_catalogo`, exposta pela
+ferramenta MCP `consultar_produtos_por_classificacao_catalogo`. Ela descobre em
+cada caminho do Qdrant todas as tecnologias, linhas e sublinhas entre a raiz
+`Documentação de Produto` e a pasta do produto. Códigos novos passam a funcionar
+sem alteração de prompt ou inclusão de uma regra por linha.
+
+O motor reconhece pedidos explícitos como “tecnologia de rígidos”, “linha FLEXX
+BT” e “sublinha RGE” nas rotas síncrona e streaming. A resolução usa igualdade
+do nome/código estrutural; somente o alias comercial comprovado `rígidos` →
+`FLEXX RG` é necessário porque o caminho contém a sigla. Se a classificação não
+existir, a resposta informa zero e não procura produtos que apenas mencionem o
+termo em seus documentos.
+
+Validação no Qdrant real: `rígidos` → FLEXX RG/229 produtos; `FLEXX BT` → 5;
+`TH` → 68; `RGE` → 44; classificação inexistente → zero. As listagens descartam
+boletins históricos, pastas administrativas e marcadores de indisponibilidade,
+incluindo `INATIVO`, `NÃO OFERTAR`, `DESCONTINUADO`, `FORA DE LINHA` e `ERRADO`.
+Foram aprovados 78 testes focados e 191 testes da suíte ampliada de RAG/MCP.
+
+---
+
 ## 2026-09-14 — Sessão 56: tecnologia exata não é produto relacionado
 
 A validação da Sessão 55 ainda aceitava produtos de outras tecnologias quando

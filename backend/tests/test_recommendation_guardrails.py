@@ -285,11 +285,10 @@ def test_produtos_da_tecnologia_de_rigidos_usam_classificacao_estrita(
     mock_completion, mock_execute, mock_retrieve
 ):
     mock_execute.return_value = json.dumps({
-        "por_aplicacao_ou_tipo": {
-            "total": 2,
-            "produtos": ["FLEXX POL 3670", "FLEXX RGE 2859"],
-            "truncado": False,
-        }
+        "classificacoes": ["FLEXX® RG"],
+        "total": 1,
+        "produtos": ["FLEXX RGE 2859"],
+        "truncado": False,
     })
 
     result = run_pu_matcher_agent(
@@ -297,11 +296,10 @@ def test_produtos_da_tecnologia_de_rigidos_usam_classificacao_estrita(
     )
 
     mock_execute.assert_called_once_with(
-        "consultar_produtos_por_aplicacao",
+        "consultar_produtos_por_classificacao_catalogo",
         {
-            "termo_busca": "rígido",
+            "termo_classificacao": "rigidos",
             "listar_todos": False,
-            "exigir_natureza": True,
         },
     )
     assert "FLEXX CAT" not in result["answer"]
@@ -318,11 +316,10 @@ def test_stream_tecnologia_de_rigidos_tambem_descarta_inativos_e_auxiliares(
     mock_completion, mock_execute, mock_retrieve
 ):
     mock_execute.return_value = json.dumps({
-        "por_aplicacao_ou_tipo": {
-            "total": 1,
-            "produtos": ["FLEXX RGE 2859"],
-            "truncado": False,
-        }
+        "classificacoes": ["FLEXX® RG"],
+        "total": 1,
+        "produtos": ["FLEXX RGE 2859"],
+        "truncado": False,
     })
 
     events = [
@@ -336,6 +333,87 @@ def test_stream_tecnologia_de_rigidos_tambem_descarta_inativos_e_auxiliares(
     )
 
     assert "FLEXX RGE 2859" in answer
+    assert events[0]["model_used"] == "catalogo-estruturado"
+    mock_completion.assert_not_called()
+    mock_retrieve.assert_not_called()
+
+
+@patch("app.rag.engine.retrieve_products_context", return_value=[])
+@patch("app.rag.engine.execute_mcp_tool")
+@patch("app.rag.engine.litellm.completion")
+def test_listagem_de_qualquer_linha_usa_classificacao_estrutural(
+    mock_completion, mock_execute, mock_retrieve
+):
+    mock_execute.return_value = json.dumps({
+        "termo_buscado": "FLEXX BT",
+        "classificacoes": ["FLEXX® BT"],
+        "total": 2,
+        "produtos": ["FLEXX BT 2559", "FLEXX BT 2560"],
+        "truncado": False,
+    })
+
+    result = run_pu_matcher_agent(query="me retorne os produtos da linha FLEXX BT")
+
+    mock_execute.assert_called_once_with(
+        "consultar_produtos_por_classificacao_catalogo",
+        {"termo_classificacao": "flexx bt", "listar_todos": False},
+    )
+    assert "FLEXX BT 2559" in result["answer"]
+    assert "classificados" in result["answer"]
+    mock_completion.assert_not_called()
+    mock_retrieve.assert_not_called()
+
+
+@patch("app.rag.engine.retrieve_products_context", return_value=[])
+@patch("app.rag.engine.execute_mcp_tool")
+@patch("app.rag.engine.litellm.completion")
+def test_classificacao_desconhecida_nao_cai_em_busca_textual(
+    mock_completion, mock_execute, mock_retrieve
+):
+    mock_execute.return_value = json.dumps({
+        "termo_buscado": "linha inventada",
+        "classificacoes": [],
+        "total": 0,
+        "produtos": [],
+        "truncado": False,
+        "classificacoes_disponiveis": ["FLEXX® BT", "FLEXX® RG"],
+    })
+
+    result = run_pu_matcher_agent(
+        query="quais produtos são da tecnologia de linha inventada?"
+    )
+
+    assert "não encontrei a tecnologia ou linha" in result["answer"].lower()
+    assert "apenas mencionam" in result["answer"].lower()
+    mock_completion.assert_not_called()
+    mock_retrieve.assert_not_called()
+
+
+@patch("app.rag.engine.retrieve_products_context", return_value=[])
+@patch("app.rag.engine.execute_mcp_tool")
+@patch("app.rag.engine.litellm.completion")
+def test_stream_de_qualquer_linha_tambem_usa_classificacao_estrutural(
+    mock_completion, mock_execute, mock_retrieve
+):
+    mock_execute.return_value = json.dumps({
+        "termo_buscado": "th",
+        "classificacoes": ["FLEXX® TH"],
+        "total": 1,
+        "produtos": ["FLEXX TH M185AH2"],
+        "truncado": False,
+    })
+
+    events = [
+        json.loads(line)
+        for line in stream_pu_matcher_agent(
+            query="mostre os produtos da linha de produtos TH"
+        )
+    ]
+    answer = "".join(
+        event.get("content", "") for event in events if event["type"] == "delta"
+    )
+
+    assert "FLEXX TH M185AH2" in answer
     assert events[0]["model_used"] == "catalogo-estruturado"
     mock_completion.assert_not_called()
     mock_retrieve.assert_not_called()

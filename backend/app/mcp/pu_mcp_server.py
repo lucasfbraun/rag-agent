@@ -15,7 +15,11 @@ precisar conhecer User/Role/Permission.
 import json
 from typing import Dict, Any
 
-from app.rag.catalog_stats import obter_estatisticas_catalogo, listar_produtos_por_aplicacao
+from app.rag.catalog_stats import (
+    listar_produtos_por_aplicacao,
+    listar_produtos_por_classificacao_catalogo as _listar_produtos_por_classificacao_catalogo,
+    obter_estatisticas_catalogo,
+)
 from app.rag.exceptions import RetrievalIndisponivelError
 from app.rag.spec_search import (
     PROPRIEDADES,
@@ -85,14 +89,27 @@ def consultar_produtos_por_aplicacao(
     `listar_todos` (pedido do usuário): por padrão devolve prévia de 10 + o
     total real; quando True, devolve todos, sem limite nenhum.
 
-    `exigir_natureza` ativa classificadores de alta precisão para perguntas
-    sobre a natureza/tecnologia do próprio produto; ele rejeita itens que
-    apenas mencionam ou auxiliam aquela tecnologia."""
+    `exigir_natureza` ativa a comprovação da natureza do material. Para
+    tecnologia/linha da hierarquia, use a ferramenta de classificação."""
     try:
         return listar_produtos_por_aplicacao(
             termo_busca,
             listar_todos=listar_todos,
             exigir_natureza=exigir_natureza,
+        )
+    except RetrievalIndisponivelError as e:
+        return {"erro": f"Catálogo indisponível no momento: {e}"}
+
+
+def consultar_produtos_por_classificacao_catalogo(
+    termo_classificacao: str,
+    listar_todos: bool = False,
+) -> Dict[str, Any]:
+    """Lista pela tecnologia/linha registrada na hierarquia do catálogo."""
+    try:
+        return _listar_produtos_por_classificacao_catalogo(
+            termo_classificacao,
+            listar_todos=listar_todos,
         )
     except RetrievalIndisponivelError as e:
         return {"erro": f"Catálogo indisponível no momento: {e}"}
@@ -153,8 +170,23 @@ MCP_TOOLS_DEFINITIONS = [
                 "properties": {
                     "termo_busca": {"type": "string", "description": "Família/código do nome do produto (ex: 'CAT', 'TH', 'AG'), OU aplicação/uso, OU tipo de produto (ex: 'colchão', 'cortiça', 'cola', 'espuma'). Omita ou deixe vazio para listar TODOS os produtos, sem filtro."},
                     "listar_todos": {"type": "boolean", "description": "true para listar TODOS os produtos encontrados, sem limite nenhum (só use depois que o usuário confirmar que quer a lista completa); false (padrão) devolve uma prévia de até 10"},
-                    "exigir_natureza": {"type": "boolean", "description": "true quando a pergunta pedir a natureza/tecnologia do próprio produto (classificação estrita disponível para elastômeros e rígidos); exclui simples menções, auxiliares e categorias próximas. Use false para busca ampla por aplicação/finalidade."}
+                    "exigir_natureza": {"type": "boolean", "description": "true quando a pergunta pedir a natureza do próprio material, como 'produtos que são elastômeros'. Para tecnologia/linha/sublinha do catálogo, use consultar_produtos_por_classificacao_catalogo. Use false para busca ampla por aplicação/finalidade."}
                 }
+            }
+        }
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "consultar_produtos_por_classificacao_catalogo",
+            "description": "Lista produtos que PERTENCEM a uma tecnologia, linha ou sublinha na hierarquia real do catálogo (ex.: 'rígidos', 'FLEXX BT', 'TH', 'RGE', 'ISO'). Use quando a pergunta disser 'são da tecnologia', 'pertencem à linha' ou 'produtos da linha'. NÃO substitua pela busca de aplicação: mencionar, produzir ou ser usado em um material não muda a classificação do produto. As linhas são descobertas dinamicamente nos caminhos do Qdrant; uma classificação desconhecida retorna zero em vez de produtos relacionados.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "termo_classificacao": {"type": "string", "description": "Nome ou código exato da tecnologia/linha/sublinha solicitado pelo usuário."},
+                    "listar_todos": {"type": "boolean", "description": "true devolve todos os produtos; false devolve prévia de 10 + total."}
+                },
+                "required": ["termo_classificacao"]
             }
         }
     },
@@ -255,6 +287,11 @@ def execute_mcp_tool(
             arguments.get("termo_busca", ""),
             listar_todos=arguments.get("listar_todos", False),
             exigir_natureza=arguments.get("exigir_natureza", False),
+        ))
+    elif tool_name == "consultar_produtos_por_classificacao_catalogo":
+        return json.dumps(consultar_produtos_por_classificacao_catalogo(
+            arguments.get("termo_classificacao", ""),
+            listar_todos=arguments.get("listar_todos", False),
         ))
     elif tool_name == "consultar_produtos_por_especificacao":
         try:

@@ -182,6 +182,7 @@ B) PEDIDO ABERTO DE RECOMENDAÇÃO (o usuário ainda não sabe qual produto quer
    - QUANDO VOCÊ TIVER DADOS SUFICIENTES (seja de cara, seja depois de perguntar): busque e cruze os dados com os documentos de produtos (TDS) e ferramentas MCP fornecidas, apresente a recomendação no FORMATO PADRÃO DO TEMPLATE CONFIGURADO, e seja opinativo — se o cliente pedir algo incompatível (ex: densidade baixíssima com ultra resiliência sem antichama), alerte e sugira a melhor prática de mercado.
 
 C) PEDIDO DE LISTAGEM/CATEGORIA (o usuário quer VER AS OPÇÕES ou SABER QUANTOS PRODUTOS existem — com ou sem categoria — não uma recomendação única nem um dado de produto específico). Quatro variações:
+   - Por TECNOLOGIA/LINHA/SUBLINHA: "produtos que são da tecnologia de rígidos", "produtos da linha FLEXX BT", "produtos da sublinha RGE". CHAME `consultar_produtos_por_classificacao_catalogo`. Classificação estrutural é diferente de aplicação: um boletim mencionar, produzir ou usar material de outra tecnologia NÃO muda a linha do produto. Se a classificação não existir, informe isso; nunca substitua por produtos relacionados encontrados no texto.
    - Por FAMÍLIA/CÓDIGO DO NOME (o acervo segue o padrão FLEXX <FAMÍLIA> <NÚMERO>, ex: "FLEXX CAT 42", "FLEXX TH M60AMA3", "FLEXX AG 2032", "FLEXX COLOR PRETO"): o usuário cita só a sigla da família, sem mais nada — "traga os produtos CAT", "quais produtos TH vocês têm", só "AG" ou só "Color". Isso é DIFERENTE de citar um código completo com número (ex: "AG 2032", que é a Situação A, pedido específico) — aqui é só a família, sem número, pedindo TODOS os produtos daquela família.
    - Por APLICAÇÃO/USO: "produtos para colchão", "quais produtos temos para automotivo", "o que vocês têm pra calçados", "quantos produtos para o ramo automotivo temos".
    - Por TIPO/NATUREZA DO PRODUTO (o que o produto É, não pra que ele serve): "me traga produtos que são colas", "quais são as espumas que temos", "produtos do tipo selante" — aqui não importa a aplicação final, é sobre a classificação do produto em si (cola, espuma, verniz, adesivo, resina, catalisador...).
@@ -323,15 +324,32 @@ def _pede_produtos_que_sao_elastomeros(query: str) -> bool:
     return any(re.search(padrao, texto) for padrao in padroes_identidade)
 
 
-def _eh_pedido_listagem_tecnologia_rigidos(query: str) -> bool:
+def _extrair_pedido_classificacao_catalogo(query: str) -> Optional[str]:
+    """Extrai qualquer tecnologia/linha pedida explicitamente em uma listagem."""
     texto = re.sub(r"[-_]", " ", _normalizar_para_regra(query))
-    if re.search(r"\bsemi\s+rigid[oa]s?\b", texto):
-        return False
-    return (
-        bool(re.search(r"\brigid[oa]s?\b", texto))
-        and "tecnologia" in texto
-        and bool(re.search(r"\b(?:list\w*|retorn\w*|produtos?|quais|traga|mostre)\b", texto))
+    if not re.search(
+        r"\b(?:list\w*|retorn\w*|produtos\b|quantos?|quais|traga|mostre)\b",
+        texto,
+    ):
+        return None
+    padroes = (
+        r"\btecnologias?\s+(?:(?:de|do|da|dos|das)\s+)?(?P<termo>[^?.,;\n]+)",
+        r"\b(?:sub)?linhas?(?:\s+de\s+produtos?)?\s+"
+        r"(?:(?:de|do|da|dos|das)\s+)?(?P<termo>[^?.,;\n]+)",
     )
+    for padrao in padroes:
+        match = re.search(padrao, texto)
+        if not match:
+            continue
+        termo = match.group("termo").strip()
+        termo = re.split(
+            r"\b(?:ativos?|disponiveis?|catalogados?|temos?|existem?|por favor)\b",
+            termo,
+            maxsplit=1,
+        )[0].strip()
+        if termo:
+            return termo
+    return None
 
 
 _PADROES_APLICACAO_EXPLICITA = (
@@ -691,41 +709,54 @@ def _responder_listagem_elastomeros(query: str) -> str:
     return "\n".join(linhas)
 
 
-def _responder_listagem_tecnologia_rigidos(query: str) -> str:
-    """Lista somente produtos classificados na árvore tecnológica de rígidos."""
+def _responder_listagem_classificacao_catalogo(
+    query: str,
+    termo_classificacao: str,
+) -> str:
+    """Responde qualquer tecnologia/linha pela hierarquia, sem inferência do LLM."""
     texto = _normalizar_para_regra(query)
     listar_todos = bool(re.search(r"\b(?:todos|todas|completa|completo)\b", texto))
     payload = json.loads(execute_mcp_tool(
-        "consultar_produtos_por_aplicacao",
+        "consultar_produtos_por_classificacao_catalogo",
         {
-            "termo_busca": "rígido",
+            "termo_classificacao": termo_classificacao,
             "listar_todos": listar_todos,
-            "exigir_natureza": True,
         },
     ))
     if payload.get("erro"):
         return "Catálogo de produtos indisponível no momento. Tente novamente em instantes."
 
-    bucket = payload.get("por_aplicacao_ou_tipo") or {}
-    total = int(bucket.get("total") or 0)
-    produtos = bucket.get("produtos") or []
+    classificacoes = payload.get("classificacoes") or []
+    if not classificacoes:
+        disponiveis = payload.get("classificacoes_disponiveis") or []
+        sugestoes = ", ".join(disponiveis[:10])
+        complemento = f" Classificações encontradas no acervo incluem: {sugestoes}." if sugestoes else ""
+        return (
+            f"Não encontrei a tecnologia ou linha “{termo_classificacao}” na estrutura "
+            "do catálogo. Não usei produtos que apenas mencionam ou se relacionam com "
+            f"esse termo.{complemento}"
+        )
+
+    total = int(payload.get("total") or 0)
+    produtos = payload.get("produtos") or []
+    nomes_classificacao = ", ".join(classificacoes)
     if not produtos:
         return (
-            "Não encontrei produto ativo classificado na tecnologia de poliuretano rígido "
-            "na estrutura do catálogo. Menções, usos e produtos de outras tecnologias "
-            "não foram considerados."
+            f"Encontrei a classificação {nomes_classificacao}, mas nenhum produto com "
+            "Boletim atual e sem marcador de indisponibilidade. Produtos apenas relacionados "
+            "não foram incluídos."
         )
 
     linhas = [
-        f"Encontrei {total} produtos ativos classificados na tecnologia de poliuretano rígido "
-        "na estrutura do catálogo.",
+        f"Encontrei {total} produtos classificados em {nomes_classificacao} na estrutura "
+        "do catálogo, com Boletim atual e sem marcador de indisponibilidade.",
         "",
         *[f"{indice}. {produto}" for indice, produto in enumerate(produtos, start=1)],
         "",
-        "Foram excluídos produtos inativos ou marcados como não ofertáveis e produtos de "
-        "outras tecnologias que apenas mencionam, produzem ou são usados em materiais rígidos.",
+        "Produtos de outras tecnologias ou linhas que apenas mencionam, produzem ou usam "
+        "o termo solicitado não foram incluídos.",
     ]
-    if bucket.get("truncado"):
+    if payload.get("truncado"):
         linhas.extend(["", f"Quer que eu liste todos os {total} produtos?"])
     return "\n".join(linhas)
 
@@ -1521,6 +1552,7 @@ def _preparar_contexto(query: str, incluir_sensivel: bool):
 _FERRAMENTAS_DE_LEITURA_PARALELAS = frozenset({
     "consultar_estatisticas_catalogo",
     "consultar_produtos_por_aplicacao",
+    "consultar_produtos_por_classificacao_catalogo",
     "consultar_produtos_por_especificacao",
 })
 
@@ -1584,16 +1616,19 @@ def run_pu_matcher_agent(
     if resposta_composta is not None:
         return resposta_composta
 
-    if _eh_pedido_listagem_tecnologia_rigidos(query):
+    if _eh_pedido_listagem_elastomeros(query):
         return {
-            "answer": _responder_listagem_tecnologia_rigidos(query),
+            "answer": _responder_listagem_elastomeros(query),
             "sources": [],
             "model_used": "catalogo-estruturado",
         }
 
-    if _eh_pedido_listagem_elastomeros(query):
+    classificacao_catalogo = _extrair_pedido_classificacao_catalogo(query)
+    if classificacao_catalogo:
         return {
-            "answer": _responder_listagem_elastomeros(query),
+            "answer": _responder_listagem_classificacao_catalogo(
+                query, classificacao_catalogo
+            ),
             "sources": [],
             "model_used": "catalogo-estruturado",
         }
@@ -1709,22 +1744,26 @@ def stream_pu_matcher_agent(
             yield _json.dumps({"type": "done"}) + "\n"
             return
 
-        if _eh_pedido_listagem_tecnologia_rigidos(query):
-            yield _json.dumps({
-                "type": "meta", "sources": [], "model_used": "catalogo-estruturado"
-            }) + "\n"
-            yield _json.dumps({
-                "type": "delta", "content": _responder_listagem_tecnologia_rigidos(query)
-            }) + "\n"
-            yield _json.dumps({"type": "done"}) + "\n"
-            return
-
         if _eh_pedido_listagem_elastomeros(query):
             yield _json.dumps({
                 "type": "meta", "sources": [], "model_used": "catalogo-estruturado"
             }) + "\n"
             yield _json.dumps({
                 "type": "delta", "content": _responder_listagem_elastomeros(query)
+            }) + "\n"
+            yield _json.dumps({"type": "done"}) + "\n"
+            return
+
+        classificacao_catalogo = _extrair_pedido_classificacao_catalogo(query)
+        if classificacao_catalogo:
+            yield _json.dumps({
+                "type": "meta", "sources": [], "model_used": "catalogo-estruturado"
+            }) + "\n"
+            yield _json.dumps({
+                "type": "delta",
+                "content": _responder_listagem_classificacao_catalogo(
+                    query, classificacao_catalogo
+                ),
             }) + "\n"
             yield _json.dumps({"type": "done"}) + "\n"
             return

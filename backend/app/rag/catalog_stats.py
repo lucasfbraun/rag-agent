@@ -80,6 +80,8 @@ def _produto_esta_indisponivel(referencia: str) -> bool:
         bool(re.search(r"\binativ[oa]s?\b", texto))
         or "nao ofertar" in texto
         or bool(re.search(r"\bdescontinuad[oa]s?\b", texto))
+        or "fora de linha" in texto
+        or bool(re.search(r"\berrad[oa]s?\b", texto))
     )
 
 
@@ -626,6 +628,174 @@ def listar_produtos_por_aplicacao(
         "termo_buscado": termo_busca,
         "por_nome_ou_familia": _resumo_lista(produtos_por_nome, listar_todos),
         "por_aplicacao_ou_tipo": _resumo_lista(produtos_por_conteudo, listar_todos),
+    }
+
+
+_ROTULO_RAIZ_CATALOGO = "documentacao de produto"
+_ROTULOS_DOCUMENTO_HISTORICO = {"obsoleto", "obsoletos", "revisao anterior"}
+_ALIASES_CLASSIFICACAO_CATALOGO = {
+    # O acervo usa o código corporativo RG no caminho, enquanto as pessoas
+    # normalmente dizem "rígidos". Códigos e nomes das demais linhas são
+    # descobertos dinamicamente e não precisam entrar neste mapa.
+    "rigido": {"flexx rg"},
+    "rigidos": {"flexx rg"},
+    "rigida": {"flexx rg"},
+    "rigidas": {"flexx rg"},
+    "poliuretano rigido": {"flexx rg"},
+    "poliuretanos rigidos": {"flexx rg"},
+}
+
+
+def _classificacoes_do_filepath(filepath: str, produto: str) -> List[tuple[str, str]]:
+    """Extrai todas as linhas/sublinhas ancestrais do produto no catálogo."""
+    partes = [
+        parte.strip()
+        for parte in _SEPARADOR_CAMINHO.split(filepath)
+        if parte.strip()
+    ]
+    rotulos = [_rotulo_estrutural_catalogo(parte) for parte in partes]
+    try:
+        indice_raiz = rotulos.index(_ROTULO_RAIZ_CATALOGO)
+    except ValueError:
+        return []
+
+    rotulo_produto = _rotulo_estrutural_catalogo(produto)
+    indices_produto = [
+        indice
+        for indice, rotulo in enumerate(rotulos[:-1])
+        if rotulo == rotulo_produto
+    ]
+    if not indices_produto:
+        return []
+    indice_produto = indices_produto[-1]
+    if indice_produto <= indice_raiz:
+        return []
+
+    resultado = []
+    for parte, rotulo in zip(
+        partes[indice_raiz + 1 : indice_produto],
+        rotulos[indice_raiz + 1 : indice_produto],
+    ):
+        if not rotulo or _eh_pasta_administrativa(parte):
+            continue
+        if rotulo in _ROTULOS_DOCUMENTO_HISTORICO:
+            continue
+        resultado.append((rotulo, parte))
+    return resultado
+
+
+def _documento_atual_com_produto_catalogavel(filepath: str, produto: str) -> bool:
+    """Aceita somente um Boletim atual pertencente a uma pasta-produto real."""
+    partes = [
+        parte.strip()
+        for parte in _SEPARADOR_CAMINHO.split(filepath)
+        if parte.strip()
+    ]
+    if not partes or "boletim" not in _normalizar_sem_acentos(partes[-1]):
+        return False
+    rotulos = [_rotulo_estrutural_catalogo(parte) for parte in partes]
+    if any(rotulo in _ROTULOS_DOCUMENTO_HISTORICO for rotulo in rotulos[:-1]):
+        return False
+    if _produto_esta_indisponivel(filepath):
+        return False
+
+    rotulo_produto = _rotulo_estrutural_catalogo(produto)
+    if not rotulo_produto or rotulo_produto.startswith("com "):
+        return False
+    # Pastas de família sem um código/nome adicional não são produtos. Isso
+    # elimina, por exemplo, FLEXX RGB e FLEXX RGT quando um arquivo está solto.
+    if re.fullmatch(r"flexx\s+[a-z]{1,10}", rotulo_produto):
+        return False
+    if not re.search(r"\d", rotulo_produto) and not re.match(
+        r"^(?:flexx|flexcolor|softflex|pro\b|angeltech\b|polivedo\b)",
+        rotulo_produto,
+    ):
+        return False
+    return True
+
+
+def _aliases_de_rotulo_classificacao(rotulo: str) -> set[str]:
+    aliases = {rotulo}
+    if rotulo.startswith("flexx "):
+        aliases.add(rotulo.removeprefix("flexx ").strip())
+    if rotulo.endswith(" flexx"):
+        prefixo = rotulo.removesuffix(" flexx").strip()
+        aliases.update({prefixo, f"flexx {prefixo}"})
+    if rotulo.startswith("iso "):
+        aliases.add("iso")
+    return aliases
+
+
+def _resolver_classificacoes_catalogo(
+    termo_classificacao: str,
+    classificacoes_disponiveis: set[str],
+) -> set[str]:
+    termo = _rotulo_estrutural_catalogo(termo_classificacao)
+    alvos_semanticos = _ALIASES_CLASSIFICACAO_CATALOGO.get(termo)
+    if alvos_semanticos:
+        return classificacoes_disponiveis.intersection(alvos_semanticos)
+    return {
+        classificacao
+        for classificacao in classificacoes_disponiveis
+        if termo in _aliases_de_rotulo_classificacao(classificacao)
+    }
+
+
+def listar_produtos_por_classificacao_catalogo(
+    termo_classificacao: str,
+    listar_todos: bool = False,
+) -> Dict[str, Any]:
+    """Lista produtos pela tecnologia/linha estrutural, sem busca textual.
+
+    Toda linha ou sublinha presente entre a raiz ``Documentação de Produto``
+    e a pasta do produto é descoberta automaticamente. Assim, linhas novas e
+    consultas por código (BT, TH, RGE etc.) não exigem mudança de prompt.
+    """
+    try:
+        client = get_qdrant_client()
+        classificacoes_por_produto: Dict[str, set[str]] = {}
+        nomes_classificacoes: Dict[str, str] = {}
+        offset = None
+        while True:
+            pontos, offset = client.scroll(
+                collection_name=COLLECTION_NAME,
+                with_payload=["filepath"],
+                with_vectors=False,
+                limit=1000,
+                offset=offset,
+            )
+            for ponto in pontos:
+                filepath = ((ponto.payload or {}).get("filepath") or "").strip()
+                produto = _produto_do_filepath(filepath)
+                if not produto or not _documento_atual_com_produto_catalogavel(
+                    filepath, produto
+                ):
+                    continue
+                classificacoes = _classificacoes_do_filepath(filepath, produto)
+                if not classificacoes:
+                    continue
+                bucket = classificacoes_por_produto.setdefault(produto, set())
+                for rotulo, nome in classificacoes:
+                    bucket.add(rotulo)
+                    nomes_classificacoes.setdefault(rotulo, nome)
+            if offset is None:
+                break
+    except Exception as e:
+        raise RetrievalIndisponivelError(str(e)) from e
+
+    disponiveis = set(nomes_classificacoes)
+    alvos = _resolver_classificacoes_catalogo(termo_classificacao, disponiveis)
+    produtos = {
+        produto
+        for produto, classificacoes in classificacoes_por_produto.items()
+        if classificacoes.intersection(alvos)
+    }
+    resumo = _resumo_lista(produtos, listar_todos)
+    return {
+        "termo_buscado": termo_classificacao,
+        "classificacoes": sorted(nomes_classificacoes[alvo] for alvo in alvos),
+        **resumo,
+        "classificacoes_disponiveis": sorted(nomes_classificacoes.values()),
     }
 
 

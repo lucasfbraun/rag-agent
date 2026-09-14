@@ -15,6 +15,7 @@ from app.rag.catalog_stats import (
     buscar_produtos_que_mencionam,
     obter_estatisticas_catalogo,
     listar_produtos_por_aplicacao,
+    listar_produtos_por_classificacao_catalogo,
     _produto_do_filepath,
     _termo_bate_no_nome_produto,
     _termo_bate_no_conteudo,
@@ -493,6 +494,73 @@ def test_tecnologia_rigidos_nao_confunde_produto_relacionado_com_classificacao()
         )
 
     assert resultado["por_aplicacao_ou_tipo"]["produtos"] == ["FLEXX RGE 2859"]
+
+
+def test_classificacao_catalogo_funciona_para_qualquer_linha_e_sublinha():
+    fake_client = MagicMock()
+    fake_client.scroll.return_value = (
+        [
+            _ponto_com_conteudo(
+                r"...\Documentação de Produto\FLEXX® RG\FLEXX® RGE\FLEXX RGE 2859\Boletim FLEXX RGE 2859.pdf",
+                "Produz espuma rígida.",
+            ),
+            _ponto_com_conteudo(
+                r"...\Documentação de Produto\FLEXX® RG\FLEXX® RGT\FLEXX RGT 2487\Boletim FLEXX RGT 2487.pdf",
+                "Produz espuma rígida.",
+            ),
+            _ponto_com_conteudo(
+                r"...\Documentação de Produto\FLEXX® BT\FLEXX BT 2559\Boletim FLEXX BT 2559.pdf",
+                "Linha de elastômeros.",
+            ),
+            _ponto_com_conteudo(
+                r"...\Documentação de Produto\FLEXX® BT\FLEXX BT 2500 INATIVO\Boletim FLEXX BT 2500.pdf",
+                "Registro inativo.",
+            ),
+            _ponto_com_conteudo(
+                r"...\Documentação de Produto\FLEXX® BT\FLEXX BT 2501\Obsoletos\Boletim FLEXX BT 2501.pdf",
+                "Registro histórico.",
+            ),
+            _ponto_com_conteudo(
+                r"...\Documentação de Produto\FLEXX® SB\FLEXX SB 2460\Boletim FLEXX SB 2460.pdf",
+                "Produz espuma rígida.",
+            ),
+        ],
+        None,
+    )
+
+    with patch("app.rag.catalog_stats.get_qdrant_client", return_value=fake_client):
+        rigid = listar_produtos_por_classificacao_catalogo("rígidos", listar_todos=True)
+        rge = listar_produtos_por_classificacao_catalogo("RGE", listar_todos=True)
+        bt = listar_produtos_por_classificacao_catalogo("FLEXX BT", listar_todos=True)
+
+    assert rigid["classificacoes"] == ["FLEXX® RG"]
+    assert rigid["produtos"] == ["FLEXX RGE 2859", "FLEXX RGT 2487"]
+    assert rge["classificacoes"] == ["FLEXX® RGE"]
+    assert rge["produtos"] == ["FLEXX RGE 2859"]
+    assert bt["classificacoes"] == ["FLEXX® BT"]
+    assert bt["produtos"] == ["FLEXX BT 2559"]
+
+
+def test_classificacao_desconhecida_nao_vira_busca_por_produto_relacionado():
+    fake_client = MagicMock()
+    fake_client.scroll.return_value = (
+        [
+            _ponto_com_conteudo(
+                r"...\Documentação de Produto\FLEXX® SB\FLEXX SB 2460\Boletim FLEXX SB 2460.pdf",
+                "Produto relacionado a uma tecnologia inventada.",
+            ),
+        ],
+        None,
+    )
+
+    with patch("app.rag.catalog_stats.get_qdrant_client", return_value=fake_client):
+        resultado = listar_produtos_por_classificacao_catalogo(
+            "tecnologia inventada", listar_todos=True
+        )
+
+    assert resultado["classificacoes"] == []
+    assert resultado["produtos"] == []
+    assert resultado["total"] == 0
 
 
 def test_termo_de_varias_palavras_continua_usando_substring():

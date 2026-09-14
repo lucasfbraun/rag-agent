@@ -57,6 +57,29 @@ def test_ferramenta_de_listagem_esta_registrada_na_lista_do_agente():
     assert "exigir_natureza" in ferramenta["function"]["parameters"]["properties"]
 
 
+def test_ferramenta_de_classificacao_catalogo_e_generica():
+    nomes = [t["function"]["name"] for t in MCP_TOOLS_DEFINITIONS]
+    assert "consultar_produtos_por_classificacao_catalogo" in nomes
+
+    with patch(
+        "app.mcp.pu_mcp_server.consultar_produtos_por_classificacao_catalogo",
+        return_value={
+            "termo_buscado": "BT",
+            "classificacoes": ["FLEXX® BT"],
+            "total": 2,
+            "produtos": ["FLEXX BT 2559", "FLEXX BT 2560"],
+            "truncado": False,
+        },
+    ) as mock_listar:
+        resultado = execute_mcp_tool(
+            "consultar_produtos_por_classificacao_catalogo",
+            {"termo_classificacao": "BT", "listar_todos": True},
+        )
+
+    mock_listar.assert_called_once_with("BT", listar_todos=True)
+    assert json.loads(resultado)["classificacoes"] == ["FLEXX® BT"]
+
+
 def test_ferramentas_simuladas_nao_sao_expostas_ao_modelo():
     """ERP/LIMS ainda são mocks fixos. O LLM não pode apresentá-los como
     evidência real de status comercial, código ou homologação."""

@@ -143,8 +143,12 @@ espuma rígida. Documentos históricos e referências inativas, não ofertáveis
 descontinuadas são excluídos. No acervo validado, a classificação estrutural
 encontrou 229 produtos e removeu os falsos positivos `FLEXX POL 3670`, `FLEXX
 SB 2460` e `FLEXX SB 2484` observados na regra intermediária.
-O catálogo estruturado de natureza recomendado acima continua sendo a solução
-mais geral para outras tecnologias e relações ainda não modeladas.
+Essa solução foi generalizada na Sessão 57: tecnologias, linhas e sublinhas são
+descobertas automaticamente nos caminhos do Qdrant. Consultas por qualquer
+nome/código estrutural seguem o mesmo contrato de correspondência exata. Termo
+desconhecido não cai em busca textual e, portanto, não gera uma lista de produtos
+apenas relacionados. Continua sendo necessário manter somente aliases de negócio
+cujo nome legível não aparece na árvore, como `rígidos` → `FLEXX RG`.
 
 ### 9. Histórico e fontes ajudam, mas não explicam por que uma resposta falhou
 
