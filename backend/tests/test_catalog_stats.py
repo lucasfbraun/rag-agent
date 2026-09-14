@@ -531,3 +531,58 @@ def test_busca_reversa_restringe_todos_os_resultados_a_familia_destino():
         "ISO 13100", "iso 13100", "iso-13100", "iso13100",
     }
     assert all(condicao.key == "content" for condicao in filtro.should)
+
+
+def test_busca_reversa_com_varios_codigos_exige_todos_no_mesmo_produto():
+    fake_client = MagicMock()
+    fake_client.scroll.side_effect = [
+        ([
+            _ponto_com_conteudo(
+                r"...\FLEXX SIST 100\Boletim FLEXX SIST 100.pdf",
+                "Componentes FLEXX AG 2032 e FLEXX CAT 136.",
+            ),
+            _ponto_com_conteudo(
+                r"...\FLEXX SIST 200\Boletim FLEXX SIST 200.pdf",
+                "Combina AG2032, CAT-136 e RG 2464 no mesmo sistema.",
+            ),
+            _ponto_com_conteudo(
+                r"...\FLEXX SIST 300\Boletim FLEXX SIST 300.pdf",
+                "Combina somente AG 2032 e CAT 136.",
+            ),
+            _ponto_com_conteudo(
+                r"...\FLEXX SIST 350\Boletim FLEXX SIST 350 rev 01.pdf",
+                "Esta revisão menciona AG 2032 e CAT 136.",
+            ),
+        ], "pagina-2"),
+        ([
+            _ponto_com_conteudo(
+                r"...\FLEXX SIST 100\Boletim FLEXX SIST 100.pdf",
+                "O terceiro componente é FLEXX RG-2464.",
+            ),
+            _ponto_com_conteudo(
+                r"...\FLEXX ESP 400\Boletim FLEXX ESP 400.pdf",
+                "Combina AG 2032, CAT 136 e RG 2464, mas é de outra família.",
+            ),
+            _ponto_com_conteudo(
+                r"...\FLEXX SIST 350\Boletim FLEXX SIST 350 rev 02.pdf",
+                "Esta outra revisão menciona somente RG 2464.",
+            ),
+        ], None),
+    ]
+
+    with patch("app.rag.catalog_stats.get_qdrant_client", return_value=fake_client):
+        resultado = buscar_produtos_que_mencionam(
+            ["AG 2032", "CAT 136", "RG 2464"],
+            familias_destino=["SIST"],
+        )
+
+    assert [item["produto"] for item in resultado] == [
+        "FLEXX SIST 100", "FLEXX SIST 200",
+    ]
+    assert {
+        mencao["codigo"]
+        for item in resultado
+        for mencao in item["mencoes"]
+    } == {"AG 2032", "CAT 136", "RG 2464"}
+    assert fake_client.scroll.call_count == 2
+    assert fake_client.scroll.call_args_list[1].kwargs["offset"] == "pagina-2"

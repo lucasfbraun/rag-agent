@@ -179,6 +179,72 @@ def test_busca_reversa_por_familia_aceita_outros_produtos_e_familias():
         assert resposta["model_used"] == "catalogo-estruturado"
 
 
+def test_mais_de_dois_codigos_sao_intersectados_na_familia_de_destino():
+    resultados = [{
+        "produto": "FLEXX SIST 100",
+        "documentos": ["Boletim FLEXX SIST 100.pdf"],
+        "mencoes": [
+            {
+                "codigo": "ag 2032",
+                "documento": "Boletim FLEXX SIST 100.pdf",
+                "trecho": "Formulação com AG 2032.",
+            },
+            {
+                "codigo": "cat 136",
+                "documento": "Boletim FLEXX SIST 100.pdf",
+                "trecho": "Utilizar CAT 136.",
+            },
+            {
+                "codigo": "rg 2464",
+                "documento": "Boletim FLEXX SIST 100.pdf",
+                "trecho": "Combinar com RG 2464.",
+            },
+        ],
+    }]
+
+    with patch(
+        "app.rag.engine.buscar_produtos_que_mencionam", return_value=resultados
+    ) as busca, patch("app.rag.engine._preparar_contexto") as preparar, patch(
+        "app.rag.engine.litellm.completion"
+    ) as completion:
+        resposta = run_pu_matcher_agent(
+            "O AG 2032, CAT 136 e RG 2464 são utilizados em algum FLEXX SIST?"
+        )
+
+    busca.assert_called_once_with(
+        ["ag 2032", "cat 136", "rg 2464"],
+        incluir_sensivel=False,
+        familias_destino=["sist"],
+    )
+    preparar.assert_not_called()
+    completion.assert_not_called()
+    assert resposta["model_used"] == "catalogo-estruturado"
+    assert "todos os códigos" in resposta["answer"]
+    assert "FLEXX SIST 100" in resposta["answer"]
+    assert "AG 2032:" in resposta["answer"]
+    assert "CAT 136:" in resposta["answer"]
+    assert "RG 2464:" in resposta["answer"]
+
+
+def test_mais_de_dois_codigos_sao_intersectados_sem_familia_de_destino():
+    with patch(
+        "app.rag.engine.buscar_produtos_que_mencionam", return_value=[]
+    ) as busca, patch("app.rag.engine._preparar_contexto") as preparar, patch(
+        "app.rag.engine.litellm.completion"
+    ) as completion:
+        resposta = run_pu_matcher_agent(
+            "Em quais produtos AG 2032, CAT 136 e RG 2464 são utilizados?"
+        )
+
+    busca.assert_called_once_with(
+        ["ag 2032", "cat 136", "rg 2464"], incluir_sensivel=False
+    )
+    preparar.assert_not_called()
+    completion.assert_not_called()
+    assert resposta["model_used"] == "catalogo-estruturado"
+    assert "todos os códigos" in resposta["answer"]
+
+
 def test_produto_usado_em_familia_funciona_tambem_no_streaming():
     with patch(
         "app.rag.engine.buscar_produtos_que_mencionam", return_value=[]

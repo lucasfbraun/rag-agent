@@ -5,6 +5,25 @@ Ver visão geral de fases em [CRONOGRAMA.md](CRONOGRAMA.md).
 
 ---
 
+## 2026-09-14 — Sessão 52: busca reversa com qualquer quantidade de itens
+
+Eliminado o limite de um único código na busca reversa. Perguntas com três ou
+mais itens, como "AG 2032, CAT 136 e RG 2464 são utilizados em algum FLEXX
+SIST?", agora pesquisam todas as ocorrências dos códigos em uma única varredura
+paginada. A mesma garantia vale quando nenhuma família de destino é informada.
+
+As evidências são agrupadas por produto e por código. Os códigos podem aparecer
+em trechos e páginas diferentes do mesmo Boletim Técnico; o candidato só é
+devolvido depois que todos foram encontrados. Um produto que menciona dois dos
+três itens é excluído. Todos os produtos que completam a interseção são listados
+com um trecho de evidência para cada código, sem top-k e sem LLM. A busca
+relacional entre vários produtos já nomeados continua consultando a documentação
+de cada um nos dois sentidos, conforme as Sessões 46 e 47.
+
+Validação: 75 testes focados e 236 testes na suíte ampliada do motor.
+
+---
+
 ## 2026-09-14 — Sessão 51: generalização da relação produto–família
 
 Reforçada a garantia de que a Sessão 50 não contém uma solução específica para

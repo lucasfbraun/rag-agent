@@ -22,6 +22,12 @@ confirmação local do código completo. A validação real encontrou FLEXX BT 2
 FLEXX BT 2560 e FLEXX BT 2563. Isso corrige essa classe de pergunta, mas os
 detectores de intenção ainda estão distribuídos no motor.
 
+A busca reversa também aceita qualquer quantidade de códigos de origem. Ela
+pagina todas as ocorrências, reúne evidências que estejam em trechos diferentes
+do mesmo Boletim e só aceita um destino quando todos os itens obrigatórios foram
+confirmados. Assim, acrescentar um terceiro ou quarto componente não reduz a
+consulta aos dois primeiros nem encerra a varredura no primeiro resultado.
+
 A arquitetura alvo permanece: **planejar → recuperar → verificar → responder**.
 O próximo refactor arquitetural recomendado é centralizar num plano tipado as
 entidades e seus papéis (produto procurado, insumo disponível, família de

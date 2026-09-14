@@ -450,9 +450,9 @@ def _responder_busca_reversa_produto(
     query: str,
     incluir_sensivel: bool,
 ) -> Optional[Dict[str, Any]]:
-    """Lista todo Boletim de outro produto que menciona o código pedido."""
+    """Lista todo Boletim de destino que menciona todos os códigos pedidos."""
     codigos = _detectar_codigos_produto(query)
-    if len(codigos) != 1:
+    if not codigos:
         return None
     texto = _normalizar_para_regra(query)
     familias_destino = _extrair_familias_destino(query)
@@ -464,11 +464,11 @@ def _responder_busca_reversa_produto(
     ):
         return None
 
-    codigo = codigos[0]
     opcoes_busca: Dict[str, Any] = {"incluir_sensivel": incluir_sensivel}
     if familias_destino:
         opcoes_busca["familias_destino"] = familias_destino
-    resultados = buscar_produtos_que_mencionam(codigo, **opcoes_busca)
+    codigo_ou_codigos: str | List[str] = codigos[0] if len(codigos) == 1 else codigos
+    resultados = buscar_produtos_que_mencionam(codigo_ou_codigos, **opcoes_busca)
     descricao_destino = (
         " da família "
         + " ou ".join(f"FLEXX {familia.upper()}" for familia in familias_destino)
@@ -479,13 +479,20 @@ def _responder_busca_reversa_produto(
         for item in resultados
         for documento in item["documentos"]
     })
+    descricao_codigos = (
+        f'"{codigos[0].upper()}"'
+        if len(codigos) == 1
+        else "todos os códigos " + ", ".join(
+            f'"{item.upper()}"' for item in codigos
+        )
+    )
     if not resultados:
         alvo_sem_resultado = (
             f"produto{descricao_destino}" if familias_destino else "outro produto"
         )
         answer = (
             f'Não encontrei {alvo_sem_resultado} cujo Boletim Técnico '
-            f'mencione "{codigo.upper()}". '
+            f'mencione {descricao_codigos}. '
             "A busca reversa percorreu todos os resultados do catálogo, sem limite de top-k."
         )
     else:
@@ -493,13 +500,13 @@ def _responder_busca_reversa_produto(
         linhas = [
             f'Encontrei {total} produto{"s" if total != 1 else ""}{descricao_destino} '
             "cujo próprio "
-            f'Boletim Técnico menciona "{codigo.upper()}":',
+            f'Boletim Técnico menciona {descricao_codigos}:',
             "",
         ]
         for indice, item in enumerate(resultados, start=1):
             linhas.append(f"{indice}. **{item['produto']}**")
             linhas.append(f"   - Fonte(s): {', '.join(item['documentos'])}")
-            if item["mencoes"]:
+            if len(codigos) == 1 and item["mencoes"]:
                 linhas.append(f"   - Contexto: {item['mencoes'][0]['trecho']}")
                 adicionais = len(item["mencoes"]) - 1
                 if adicionais:
@@ -508,6 +515,20 @@ def _responder_busca_reversa_produto(
                         f"   - Mais {adicionais} {substantivo} "
                         "encontrada(s) nos documentos citados."
                     )
+            elif item["mencoes"]:
+                for codigo_pedido in codigos:
+                    mencao = next(
+                        (
+                            evidencia for evidencia in item["mencoes"]
+                            if evidencia.get("codigo") == codigo_pedido
+                        ),
+                        None,
+                    )
+                    if mencao:
+                        linhas.append(
+                            f"   - {codigo_pedido.upper()}: {mencao['trecho']} "
+                            f"({mencao['documento']})"
+                        )
         linhas.extend([
             "",
             "A lista contém todos os produtos com menção confirmada no Boletim Técnico. "

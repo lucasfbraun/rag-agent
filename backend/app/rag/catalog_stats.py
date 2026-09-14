@@ -248,31 +248,46 @@ def _trecho_da_mencao(codigo: str, content: str, largura: int = 320) -> str:
 
 
 def buscar_produtos_que_mencionam(
-    codigo: str,
+    codigo: str | List[str],
     incluir_sensivel: bool = False,
     familias_destino: Optional[List[str]] = None,
 ) -> List[Dict[str, Any]]:
-    """Busca reversa completa: outros Boletins que mencionam ``codigo``.
+    """Busca reversa completa: Boletins que mencionam todos os códigos.
 
     Todas as ocorrências textuais indexadas são paginadas até o fim e o
     resultado não usa top-k nem prévia. A confirmação local cobre código
     separado por espaço, hífen ou quebra de linha; o filtro inicial inclui
     também as grafias compactas para não perder resultados por tokenização.
-    O documento do próprio produto é excluído, pois seu cabeçalho normalmente
-    menciona o código sem representar uma relação com outro item.
+    Quando há vários códigos, eles podem estar em trechos diferentes do mesmo
+    Boletim, mas o produto só entra no resultado se todos forem confirmados no
+    mesmo documento. Os documentos dos próprios produtos de origem são
+    excluídos, pois seus
+    cabeçalhos não representam uma relação com outro item.
     """
-    codigo = (codigo or "").strip()
-    if not codigo:
+    codigos_recebidos = [codigo] if isinstance(codigo, str) else codigo
+    codigos = list(dict.fromkeys(
+        item.strip()
+        for item in (codigos_recebidos or [])
+        if item and item.strip()
+    ))
+    if not codigos:
         return []
-    partes_codigo = re.findall(r"[a-z0-9]+", _normalizar_sem_acentos(codigo))
-    if not partes_codigo:
+    partes_por_codigo = {
+        item: re.findall(r"[a-z0-9]+", _normalizar_sem_acentos(item))
+        for item in codigos
+    }
+    if any(not partes for partes in partes_por_codigo.values()):
         return []
-    variantes_codigo = list(dict.fromkeys([
-        codigo,
-        " ".join(partes_codigo),
-        "-".join(partes_codigo),
-        "".join(partes_codigo),
-    ]))
+    variantes_codigo = list(dict.fromkeys(
+        variante
+        for item, partes in partes_por_codigo.items()
+        for variante in (
+            item,
+            " ".join(partes),
+            "-".join(partes),
+            "".join(partes),
+        )
+    ))
     familias = list(dict.fromkeys(
         familia.strip().lower()
         for familia in (familias_destino or [])
@@ -317,33 +332,62 @@ def buscar_produtos_que_mencionam(
                             for familia in familias
                         )
                     )
-                    or _codigo_bate_no_texto(codigo, produto)
-                    or _codigo_bate_no_texto(codigo, filename)
+                    or any(
+                        _codigo_bate_no_texto(item, produto)
+                        or _codigo_bate_no_texto(item, filename)
+                        for item in codigos
+                    )
                 ):
                     continue
-                if not _codigo_bate_no_texto(codigo, content):
+                codigos_no_conteudo = [
+                    item for item in codigos
+                    if _codigo_bate_no_texto(item, content)
+                ]
+                if not codigos_no_conteudo:
                     continue
-                trecho = _trecho_da_mencao(codigo, content)
                 dados = encontrados.setdefault(
-                    produto, {"documentos": set(), "mencoes": []}
+                    produto, {
+                        "documentos": set(),
+                        "mencoes": [],
+                        "codigos_por_documento": {},
+                    }
                 )
                 dados["documentos"].add(filename)
-                mencao = {"documento": filename, "trecho": trecho}
-                if mencao not in dados["mencoes"]:
-                    dados["mencoes"].append(mencao)
+                dados["codigos_por_documento"].setdefault(filename, set()).update(
+                    codigos_no_conteudo
+                )
+                for codigo_encontrado in codigos_no_conteudo:
+                    mencao = {
+                        "documento": filename,
+                        "trecho": _trecho_da_mencao(codigo_encontrado, content),
+                    }
+                    if len(codigos) > 1:
+                        mencao["codigo"] = codigo_encontrado
+                    if mencao not in dados["mencoes"]:
+                        dados["mencoes"].append(mencao)
             if offset is None:
                 break
     except Exception as e:
         raise RetrievalIndisponivelError(str(e)) from e
 
-    return [
-        {
+    resultados = []
+    for produto, dados in sorted(encontrados.items()):
+        documentos_completos = sorted(
+            documento
+            for documento, codigos_encontrados in dados["codigos_por_documento"].items()
+            if all(item in codigos_encontrados for item in codigos)
+        )
+        if not documentos_completos:
+            continue
+        resultados.append({
             "produto": produto,
-            "documentos": sorted(dados["documentos"]),
-            "mencoes": dados["mencoes"],
-        }
-        for produto, dados in sorted(encontrados.items())
-    ]
+            "documentos": documentos_completos,
+            "mencoes": [
+                mencao for mencao in dados["mencoes"]
+                if mencao["documento"] in documentos_completos
+            ],
+        })
+    return resultados
 
 
 def _resumo_lista(produtos: set, listar_todos: bool) -> Dict[str, Any]:
