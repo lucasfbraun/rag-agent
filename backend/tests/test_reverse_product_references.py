@@ -144,6 +144,41 @@ def test_familia_destino_e_generica_e_nao_confunde_produto_completo():
     completion.assert_not_called()
 
 
+def test_busca_reversa_por_familia_aceita_outros_produtos_e_familias():
+    casos = [
+        (
+            "O CAT 1 é utilizado em algum FLEXX TH?",
+            "cat 1",
+            ["th"],
+        ),
+        (
+            "O AG 2032 aparece em algum FLEXX SIST ou FLEXX ESP?",
+            "ag 2032",
+            ["sist", "esp"],
+        ),
+        (
+            "Quais FLEXX ESP usam o RG 2464?",
+            "rg 2464",
+            ["esp"],
+        ),
+    ]
+
+    for pergunta, codigo, familias in casos:
+        with patch(
+            "app.rag.engine.buscar_produtos_que_mencionam", return_value=[]
+        ) as busca, patch("app.rag.engine._preparar_contexto") as preparar, patch(
+            "app.rag.engine.litellm.completion"
+        ) as completion:
+            resposta = run_pu_matcher_agent(pergunta)
+
+        busca.assert_called_once_with(
+            codigo, incluir_sensivel=False, familias_destino=familias
+        )
+        preparar.assert_not_called()
+        completion.assert_not_called()
+        assert resposta["model_used"] == "catalogo-estruturado"
+
+
 def test_produto_usado_em_familia_funciona_tambem_no_streaming():
     with patch(
         "app.rag.engine.buscar_produtos_que_mencionam", return_value=[]

@@ -5,6 +5,19 @@ Ver visão geral de fases em [CRONOGRAMA.md](CRONOGRAMA.md).
 
 ---
 
+## 2026-09-14 — Sessão 51: generalização da relação produto–família
+
+Reforçada a garantia de que a Sessão 50 não contém uma solução específica para
+`ISO 13100` ou `FLEXX BT`. O código de produção trabalha com o código extraído da
+pergunta e uma lista dinâmica de famílias de destino; não contém esses valores
+fixos. A regressão de ponta a ponta agora cobre também `CAT 1` → `FLEXX TH`,
+`RG 2464` → `FLEXX ESP` e `AG 2032` → duas famílias simultâneas (`FLEXX SIST` e
+`FLEXX ESP`). Em todos os casos, a consulta segue a busca reversa estruturada,
+sem recuperação semântica e sem LLM. Validação: 42 testes focados e 233 testes
+na suíte ampliada do motor.
+
+---
+
 ## 2026-09-14 — Sessão 50: produto de origem e família de destino
 
 Reproduzida a pergunta "O ISO 13100 é utilizado em algum FLEXX BT?". O código
