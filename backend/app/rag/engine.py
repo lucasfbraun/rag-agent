@@ -692,7 +692,7 @@ def _responder_listagem_elastomeros(query: str) -> str:
 
 
 def _responder_listagem_tecnologia_rigidos(query: str) -> str:
-    """Lista somente produtos cuja evidência os vincula à tecnologia rígida."""
+    """Lista somente produtos classificados na árvore tecnológica de rígidos."""
     texto = _normalizar_para_regra(query)
     listar_todos = bool(re.search(r"\b(?:todos|todas|completa|completo)\b", texto))
     payload = json.loads(execute_mcp_tool(
@@ -711,19 +711,19 @@ def _responder_listagem_tecnologia_rigidos(query: str) -> str:
     produtos = bucket.get("produtos") or []
     if not produtos:
         return (
-            "Não encontrei produto ativo cujo Boletim Técnico comprove vínculo direto com "
-            "a tecnologia de poliuretano rígido. Menções auxiliares e produtos semirrígidos "
+            "Não encontrei produto ativo classificado na tecnologia de poliuretano rígido "
+            "na estrutura do catálogo. Menções, usos e produtos de outras tecnologias "
             "não foram considerados."
         )
 
     linhas = [
-        f"Encontrei {total} produtos ativos com vínculo direto à tecnologia de poliuretano rígido "
-        "comprovado no próprio Boletim Técnico.",
+        f"Encontrei {total} produtos ativos classificados na tecnologia de poliuretano rígido "
+        "na estrutura do catálogo.",
         "",
         *[f"{indice}. {produto}" for indice, produto in enumerate(produtos, start=1)],
         "",
-        "Foram excluídos produtos inativos ou marcados como não ofertáveis, itens auxiliares "
-        "que apenas mencionam rígidos e produtos destinados somente a espuma semirrígida.",
+        "Foram excluídos produtos inativos ou marcados como não ofertáveis e produtos de "
+        "outras tecnologias que apenas mencionam, produzem ou são usados em materiais rígidos.",
     ]
     if bucket.get("truncado"):
         linhas.extend(["", f"Quer que eu liste todos os {total} produtos?"])

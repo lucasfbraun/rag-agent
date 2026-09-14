@@ -430,13 +430,25 @@ def test_tecnologia_rigidos_exclui_catalisador_semirrigido_e_inativo():
                 "FLEXX PI 2078 é um poliol que produz artigos semi-rígidos moldados.",
             ),
             _ponto_com_conteudo(
-                r"...\FLEXX RGE 2800 INATIVO\Boletim FLEXX RGE 2800.pdf",
+                r"...\FLEXX® RG\FLEXX® RGE\FLEXX RGE 2800 INATIVO\Boletim FLEXX RGE 2800.pdf",
                 "FLEXX RGE 2800 é um poliol que produz espuma de poliuretano rígido.",
             ),
             _ponto_com_conteudo(
-                r"...\FLEXX RGE 2859\Boletim FLEXX RGE 2859.pdf",
+                r"...\FLEXX® RG\FLEXX® RGE\FLEXX RGE 2859\Boletim FLEXX RGE 2859.pdf",
                 "FLEXX RGE 2859 é um poliol aditivado que, combinado com ISO, "
                 "produz espuma de poliuretano rígido estrutural.",
+            ),
+            _ponto_com_conteudo(
+                r"...\FLEXX® RG\FLEXX® RGT\FLEXX RGT 2483\Obsoletos\Boletim FLEXX RGT 2483.pdf",
+                "FLEXX RGT 2483 foi desenvolvido para espumas rígidas.",
+            ),
+            _ponto_com_conteudo(
+                r"...\FLEXX® RG\FLEXX® RGS\FLEXX RGS 2911 descontinuada a venda\Boletim FLEXX RGS 2911.pdf",
+                "FLEXX RGS 2911 foi desenvolvido para espumas rígidas.",
+            ),
+            _ponto_com_conteudo(
+                r"...\FLEXX® RG\FLEXX® RGE\COM ISO 4416\Boletim combinação.pdf",
+                "Combinação destinada a espuma rígida.",
             ),
             _ponto_com_conteudo(
                 r"...\FLEXX POL 3670\Boletim FLEXX POL 3670.pdf",
@@ -451,10 +463,36 @@ def test_tecnologia_rigidos_exclui_catalisador_semirrigido_e_inativo():
             "rígido", listar_todos=True, exigir_natureza=True
         )
 
-    assert resultado["por_aplicacao_ou_tipo"]["produtos"] == [
-        "FLEXX POL 3670",
-        "FLEXX RGE 2859",
-    ]
+    assert resultado["por_aplicacao_ou_tipo"]["produtos"] == ["FLEXX RGE 2859"]
+
+
+def test_tecnologia_rigidos_nao_confunde_produto_relacionado_com_classificacao():
+    """Produzir espuma rígida não muda a tecnologia catalogada do produto."""
+    fake_client = MagicMock()
+    fake_client.scroll.return_value = (
+        [
+            _ponto_com_conteudo(
+                r"...\FLEXX® SB\FLEXX SB 2460\Boletim FLEXX SB 2460.pdf",
+                "FLEXX SB 2460, combinado com ISO, produz espuma rígida para prancha.",
+            ),
+            _ponto_com_conteudo(
+                r"...\FLEXX® POL\FLEXX POL 3670\Boletim FLEXX POL 3670.pdf",
+                "FLEXX POL 3670 é um poliol poliéter rígido destinado a espumas rígidas.",
+            ),
+            _ponto_com_conteudo(
+                r"...\FLEXX® RG\FLEXX® RGE\FLEXX RGE 2859\Boletim FLEXX RGE 2859.pdf",
+                "FLEXX RGE 2859, combinado com ISO, produz espuma rígida estrutural.",
+            ),
+        ],
+        None,
+    )
+
+    with patch("app.rag.catalog_stats.get_qdrant_client", return_value=fake_client):
+        resultado = listar_produtos_por_aplicacao(
+            "rígido", listar_todos=True, exigir_natureza=True
+        )
+
+    assert resultado["por_aplicacao_ou_tipo"]["produtos"] == ["FLEXX RGE 2859"]
 
 
 def test_termo_de_varias_palavras_continua_usando_substring():

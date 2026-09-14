@@ -5,6 +5,28 @@ Ver visão geral de fases em [CRONOGRAMA.md](CRONOGRAMA.md).
 
 ---
 
+## 2026-09-14 — Sessão 56: tecnologia exata não é produto relacionado
+
+A validação da Sessão 55 ainda aceitava produtos de outras tecnologias quando
+o próprio Boletim dizia que eles produziam espuma rígida. Isso incluía `FLEXX
+POL 3670`, `FLEXX SB 2460` e `FLEXX SB 2484`: havia relação com material
+rígido, mas eles não estavam classificados na tecnologia de rígidos.
+
+A pergunta “produtos que são da tecnologia de rígidos” agora usa como fonte de
+verdade a hierarquia do catálogo. Somente produtos sob a árvore tecnológica
+`FLEXX RG` entram. O texto do documento não pode promover um produto de `FLEXX
+POL`, `FLEXX SB` ou outra árvore para essa tecnologia. Boletins localizados
+somente em `Obsoleto(s)`/`Revisão anterior`, nomes sem código e marcadores
+`INATIVO`, `NÃO OFERTAR` ou `DESCONTINUADO` são descartados.
+
+Validação real no Qdrant: **229 produtos catalogados na árvore FLEXX RG**;
+`FLEXX POL 3670`, `FLEXX SB 2460` e `FLEXX SB 2484` ausentes, nenhum nome sem
+código e nenhum marcador de descontinuação. O teste de regressão falhou antes
+da mudança e passou depois; 62 testes focados e 179 testes da suíte ampliada
+de RAG/MCP aprovados.
+
+---
+
 ## 2026-09-14 — Sessão 55: tecnologia de rígidos e descarte de inativos
 
 Reproduzida a pergunta “me retorne produtos que são da tecnologia de rígidos”.

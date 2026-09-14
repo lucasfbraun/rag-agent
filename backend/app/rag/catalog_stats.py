@@ -76,7 +76,11 @@ _PROFUNDIDADE_MAXIMA_BUSCA_PRODUTO = 4
 def _produto_esta_indisponivel(referencia: str) -> bool:
     """True para marcadores explícitos que impedem oferecer o produto."""
     texto = _normalizar_sem_acentos(referencia)
-    return bool(re.search(r"\binativ[oa]s?\b", texto)) or "nao ofertar" in texto
+    return (
+        bool(re.search(r"\binativ[oa]s?\b", texto))
+        or "nao ofertar" in texto
+        or bool(re.search(r"\bdescontinuad[oa]s?\b", texto))
+    )
 
 
 def _produto_do_filepath(filepath: str) -> Optional[str]:
@@ -209,40 +213,46 @@ def _conteudo_declara_produto_como_elastomero(filepath: str, content: str) -> bo
     ))
 
 
+def _rotulo_estrutural_catalogo(valor: str) -> str:
+    """Normaliza um segmento da hierarquia sem preservar marcas/símbolos."""
+    return re.sub(r"[^a-z0-9]+", " ", _normalizar_sem_acentos(valor)).strip()
+
+
 def _conteudo_comprova_tecnologia_rigido(filepath: str, content: str) -> bool:
-    """Confirma tecnologia rígida sem aceitar uso auxiliar ou semirrígido."""
+    """Confirma que o produto está classificado na tecnologia ``FLEXX RG``.
+
+    O texto do boletim não basta para esta classificação: produtos de outras
+    tecnologias podem produzir, compor ou ser destinados a espumas rígidas.
+    A fonte de verdade é a árvore tecnológica do catálogo, onde RG agrupa os
+    produtos rígidos e pode conter subfamílias como RGE e RGT.
+    """
     nome_arquivo = _SEPARADOR_CAMINHO.split(filepath)[-1]
     if "boletim" not in _normalizar_sem_acentos(nome_arquivo):
         return False
-    texto = _normalizar_sem_acentos(content)
-    # ``rígido`` não pode ser extraído de ``semi-rígido``. A extração de PDF
-    # varia os espaços ao redor do hífen, então normalizamos todas as formas.
-    texto = re.sub(r"\bsemi\s*-?\s*rigid[oa]s?\b", "", texto)
-    produto = _produto_do_filepath(filepath)
-    # CAT/ADT/AC são famílias auxiliares (catalisadores e aditivos). Mesmo
-    # quando atendem processos de espuma rígida, isso é aplicação do auxiliar,
-    # não classificação do produto como integrante primário da tecnologia.
+    del content  # A classificação vem da hierarquia, não de menção textual.
+    partes = [
+        parte.strip()
+        for parte in _SEPARADOR_CAMINHO.split(filepath)
+        if parte.strip()
+    ]
+    rotulos = [_rotulo_estrutural_catalogo(parte) for parte in partes]
+    # Um documento histórico não comprova que o produto continua ativo. Se
+    # também existir um boletim atual, outro ponto do Qdrant incluirá o produto.
     if any(
-        _termo_bate_no_nome_produto(familia, produto or "")
-        for familia in ("CAT", "ADT", "AC")
+        rotulo in {"obsoleto", "obsoletos", "revisao anterior"}
+        for rotulo in rotulos[:-1]
     ):
         return False
-    partes_produto = re.findall(r"[a-z0-9]+", _normalizar_sem_acentos(produto))
-    if not partes_produto:
+    produto = _produto_do_filepath(filepath)
+    rotulo_produto = _rotulo_estrutural_catalogo(produto or "")
+    # Evita transformar subpastas como ``OB``, ``COM ISO 4416`` e os nomes das
+    # próprias famílias (sem código) em produtos do resultado.
+    if not re.match(r"^flexx\s+rg[a-z]*\b.*\d", rotulo_produto):
         return False
-    padrao_produto = r"(?<![a-z0-9])" + r"[^a-z0-9]*".join(
-        map(re.escape, partes_produto)
+    return any(
+        rotulo == "flexx rg"
+        for rotulo in rotulos[:-1]
     )
-    padrao_produto += r"(?![a-z0-9])"
-    padroes = (
-        padrao_produto
-        + r"[^.;\n]{0,220}\bproduz\w*\b[^.;\n]{0,100}\b"
-        + r"(?:poliuretano\s+)?rigid[oa]s?\b",
-        padrao_produto
-        + r"\s*(?:,|-)?\s*(?:e|trata-se\s+de|consiste\s+em)\s+"
-        + r"(?:um\s+|uma\s+)?[^.;\n]{0,120}\brigid[oa]s?\b",
-    )
-    return any(re.search(padrao, texto) for padrao in padroes)
 
 
 def _conteudo_comprova_tipo_elastomero(filepath: str, content: str) -> bool:
