@@ -618,8 +618,8 @@ def _responder_listagem_elastomeros(query: str) -> str:
     if not produtos:
         return (
             "Não encontrei produtos cujo Boletim Técnico comprove a produção de um "
-            "sistema elastomérico. Aditivos e catalisadores auxiliares não são classificados "
-            "como elastômeros."
+            "sistema elastomérico. Aditivos, catalisadores/curativos e isocianatos "
+            "que apenas participam da combinação não são classificados como elastômeros."
         )
 
     linhas = [
@@ -628,8 +628,9 @@ def _responder_listagem_elastomeros(query: str) -> str:
         "",
         *[f"{indice}. {produto}" for indice, produto in enumerate(produtos, start=1)],
         "",
-        "Aditivos ADT e catalisadores/curativos CAT foram excluídos: são auxiliares de "
-        "processo, não o sistema ou pré-polímero que produz o elastômero.",
+        "Aditivos ADT, catalisadores/curativos CAT e produtos declarados como "
+        "isocianatos foram excluídos: participação na combinação não comprova que o "
+        "produto pertence à tecnologia de elastômeros.",
     ]
     if bucket.get("truncado"):
         linhas.extend(["", f"Quer que eu liste todos os {total} produtos?"])

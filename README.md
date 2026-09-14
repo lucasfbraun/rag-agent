@@ -338,6 +338,12 @@ O LLM redige respostas abertas; consultas verificáveis usam os caminhos
 estruturados acima. A direção arquitetural e as etapas ainda pendentes estão em
 [Avaliação da qualidade e arquitetura do agente](docs/avaliacao_agente_2026-09-10.md).
 
+Na listagem de elastômeros, participar de uma combinação não classifica por si
+só a tecnologia do componente. O motor exclui aditivos, catalisadores/curativos
+e produtos que o próprio Boletim declara como isocianatos, mesmo que outro
+trecho do documento diga que a combinação produz poliuretano elastomérico. A
+regra é consolidada por produto e prevalece entre páginas/chunks do Boletim.
+
 ### Busca por especificação técnica
 
 Perguntas com **nome de propriedade + número** não são respondíveis por busca vetorial: o embedding não compara grandezas, então "hidroxila 180" e "hidroxila 34" geram vetores quase idênticos e o agente responderia com o valor errado sem dar sinal disso. Por isso essa consulta tem caminho próprio:

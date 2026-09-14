@@ -5,6 +5,29 @@ Ver visão geral de fases em [CRONOGRAMA.md](CRONOGRAMA.md).
 
 ---
 
+## 2026-09-14 — Sessão 53: isocianato não é classificado como elastômero
+
+Reproduzida a pergunta "temos quantos produtos que são elastômeros?". A resposta
+estruturada incluía `FLEXX ISO 131001` entre 46 resultados. O próprio Boletim
+declara que ele é um **isocianato modificado** e, em seguida, informa que sua
+combinação com `FLEXX SL ECO 2535` forma um sistema adequado à produção de
+poliuretano elastomérico. A regra anterior reconhecia apenas a segunda frase e
+confundia participação no sistema com a tecnologia/natureza do produto.
+
+Foi criado primeiro um teste de regressão que reproduziu exatamente o falso
+positivo. O classificador agora vincula a declaração de natureza ao nome do
+produto do próprio Boletim e exclui qualquer item explicitamente declarado como
+isocianato. A exclusão é consolidada no produto inteiro: continua valendo quando
+"é um isocianato" e "produção de elastômero" estão em chunks ou páginas
+diferentes. Não há código fixo para a família ISO nem para o número 131001.
+
+Validação no Qdrant real e na resposta completa: **45 produtos**, nenhum produto
+`ISO`, rota `catalogo-estruturado` e explicação explícita da exclusão. O teste
+específico falhou antes da correção e passou depois; 133 testes relacionados e
+237 testes da suíte ampliada do motor foram aprovados.
+
+---
+
 ## 2026-09-14 — Sessão 52: busca reversa com qualquer quantidade de itens
 
 Eliminado o limite de um único código na busca reversa. Perguntas com três ou

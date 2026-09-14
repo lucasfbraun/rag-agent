@@ -346,6 +346,35 @@ def test_listagem_de_elastomeros_exclui_aditivo_e_catalisador():
     assert resultado["por_aplicacao_ou_tipo"]["produtos"] == ["FLEXX TH T160DE1"]
 
 
+def test_listagem_de_elastomeros_exclui_isocianato_que_so_compoe_sistema():
+    """Regressão real: produzir elastômero em combinação não torna o
+    isocianato um produto da tecnologia elastômero."""
+    fake_client = MagicMock()
+    fake_client.scroll.return_value = (
+        [
+            _ponto_com_conteudo(
+                r"...\FLEXX ISO 131001\Boletim FLEXX ISO 131001.pdf",
+                "FLEXX SL ECO 2535 em combinação com FLEXX ISO é um sistema "
+                "bicomponente adequado para a produção de poliuretano elastomérico.",
+            ),
+            _ponto_com_conteudo(
+                r"...\FLEXX ISO 131001\Boletim FLEXX ISO 131001.pdf",
+                "FLEXX ISO 131001 é um isocianato modificado.",
+            ),
+            _ponto_com_conteudo(
+                r"...\FLEXX TH T160DE1\Boletim FLEXX TH T160DE1.pdf",
+                "Pré-polímero que, combinado com CAT 1, produz elastômero de poliuretano.",
+            ),
+        ],
+        None,
+    )
+
+    with patch("app.rag.catalog_stats.get_qdrant_client", return_value=fake_client):
+        resultado = listar_produtos_por_aplicacao("elastômero", listar_todos=True)
+
+    assert resultado["por_aplicacao_ou_tipo"]["produtos"] == ["FLEXX TH T160DE1"]
+
+
 def test_termo_de_varias_palavras_continua_usando_substring():
     """Frase (não 1 palavra só) — risco de falso positivo por fragmento é
     baixo o bastante pra manter o comportamento simples de antes."""

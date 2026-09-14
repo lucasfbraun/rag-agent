@@ -124,6 +124,14 @@ Na listagem por aplicação/tipo, a regra geral procura o termo no conteúdo. H�
 
 Recomendação: catálogo estruturado com `product_id`, família, natureza, aplicações comprovadas e respectivas fontes. Separar “menciona determinada aplicação” de “tem aplicação comprovada”. Conservar a possibilidade de resultados desconhecidos e revisão humana das classificações ambíguas.
 
+**Implementado parcialmente em 14/09/2026:** a listagem de elastômeros passou a
+excluir também produtos que o próprio Boletim identifica como isocianatos. O
+caso real `FLEXX ISO 131001` dizia que o isocianato participa de uma combinação
+que produz poliuretano elastomérico; essa relação não é mais convertida em
+classificação do produto. A consolidação atravessa todos os chunks do Boletim.
+O catálogo estruturado de natureza recomendado acima continua sendo a solução
+mais geral para outras tecnologias e relações ainda não modeladas.
+
 ### 9. Histórico e fontes ajudam, mas não explicam por que uma resposta falhou
 
 Evidência: `backend/app/conversation_service.py`, `models.py` e `rag/engine.py:344`, `:831`, `:889`.

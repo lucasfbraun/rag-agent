@@ -151,14 +151,39 @@ def _normalizar_sem_acentos(texto: str) -> str:
     return "".join(c for c in decomposed if not unicodedata.combining(c))
 
 
+def _conteudo_declara_produto_como_isocianato(filepath: str, content: str) -> bool:
+    """Detecta quando o próprio produto é explicitamente um isocianato."""
+    nome_arquivo = _SEPARADOR_CAMINHO.split(filepath)[-1]
+    if "boletim" not in _normalizar_sem_acentos(nome_arquivo):
+        return False
+    texto = _normalizar_sem_acentos(content)
+    produto = _produto_do_filepath(filepath)
+    partes_produto = re.findall(r"[a-z0-9]+", _normalizar_sem_acentos(produto))
+    if not partes_produto:
+        return False
+    padrao_produto = r"(?<![a-z0-9])" + r"[^a-z0-9]*".join(
+        map(re.escape, partes_produto)
+    )
+    padrao_produto += r"(?![a-z0-9])"
+    return bool(re.search(
+        padrao_produto
+        + r"\s*(?:,|-)?\s*(?:e|trata-se\s+de|consiste\s+em)\s+"
+        + r"(?:um\s+)?isocianato\b",
+        texto,
+    ))
+
+
 def _conteudo_comprova_tipo_elastomero(filepath: str, content: str) -> bool:
     """True somente para evidência positiva no Boletim do próprio produto.
 
-    "Aditivo para elastômeros" e "catalisador usado em elastômeros" são
-    relações de uso, não classificação da natureza do produto.
+    "Aditivo para elastômeros", "catalisador usado em elastômeros" e um
+    isocianato que participa da combinação são relações de uso, não
+    classificação da natureza/tecnologia do produto.
     """
     nome_arquivo = _SEPARADOR_CAMINHO.split(filepath)[-1]
     if "boletim" not in _normalizar_sem_acentos(nome_arquivo):
+        return False
+    if _conteudo_declara_produto_como_isocianato(filepath, content):
         return False
 
     texto = _normalizar_sem_acentos(content)
@@ -446,6 +471,7 @@ def listar_produtos_por_aplicacao(termo_busca: str = "", listar_todos: bool = Fa
         client = get_qdrant_client()
         produtos_por_nome = set()
         produtos_por_conteudo = set()
+        produtos_declarados_isocianatos = set()
         offset = None
         while True:
             pontos, offset = client.scroll(
@@ -475,6 +501,11 @@ def listar_produtos_por_aplicacao(termo_busca: str = "", listar_todos: bool = Fa
                     "elastomero", "elastomeros", "elastomerico", "elastomericos",
                 }
                 if busca_tipo_elastomero:
+                    if _conteudo_declara_produto_como_isocianato(
+                        payload.get("filepath") or "", content
+                    ):
+                        produtos_declarados_isocianatos.add(produto)
+                        continue
                     bate = _conteudo_comprova_tipo_elastomero(
                         payload.get("filepath") or "", content
                     )
@@ -487,6 +518,7 @@ def listar_produtos_por_aplicacao(termo_busca: str = "", listar_todos: bool = Fa
     except Exception as e:
         raise RetrievalIndisponivelError(str(e)) from e
 
+    produtos_por_conteudo.difference_update(produtos_declarados_isocianatos)
     return {
         "termo_buscado": termo_busca,
         "por_nome_ou_familia": _resumo_lista(produtos_por_nome, listar_todos),
