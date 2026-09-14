@@ -78,6 +78,14 @@ def test_produto_do_filepath_arquivo_solto_sem_pasta_de_produto_retorna_none():
     assert _produto_do_filepath(fp) is None
 
 
+@pytest.mark.parametrize("marcador", [
+    "FLEXX PI 2101 INATIVO",
+    "FLEXX RGE 2838 (NÃO OFERTAR ESSA REFERÊNCIA)",
+])
+def test_produto_do_filepath_descarta_referencia_indisponivel(marcador):
+    assert _produto_do_filepath(rf"...\{marcador}\Boletim.pdf") is None
+
+
 # --- obter_estatisticas_catalogo: agregação sobre a coleção -----------------
 
 def _ponto(filepath):
@@ -403,6 +411,50 @@ def test_natureza_elastomero_nao_inclui_produto_que_apenas_produz_elastomero():
         )
 
     assert resultado["por_aplicacao_ou_tipo"]["produtos"] == ["FLEXX EL 100"]
+
+
+def test_tecnologia_rigidos_exclui_catalisador_semirrigido_e_inativo():
+    fake_client = MagicMock()
+    fake_client.scroll.return_value = (
+        [
+            _ponto_com_conteudo(
+                r"...\FLEXX CAT 136\Boletim FLEXX CAT 136.pdf",
+                "Catalisador para aplicação em tecnologias de espuma para o ramo de rígido telha.",
+            ),
+            _ponto_com_conteudo(
+                r"...\FLEXX AC 301\Boletim FLEXX AC 301.pdf",
+                "FLEXX AC 301 é uma blenda retardante indicada para espumas rígidas.",
+            ),
+            _ponto_com_conteudo(
+                r"...\FLEXX PI 2078\Boletim FLEXX PI 2078.pdf",
+                "FLEXX PI 2078 é um poliol que produz artigos semi-rígidos moldados.",
+            ),
+            _ponto_com_conteudo(
+                r"...\FLEXX RGE 2800 INATIVO\Boletim FLEXX RGE 2800.pdf",
+                "FLEXX RGE 2800 é um poliol que produz espuma de poliuretano rígido.",
+            ),
+            _ponto_com_conteudo(
+                r"...\FLEXX RGE 2859\Boletim FLEXX RGE 2859.pdf",
+                "FLEXX RGE 2859 é um poliol aditivado que, combinado com ISO, "
+                "produz espuma de poliuretano rígido estrutural.",
+            ),
+            _ponto_com_conteudo(
+                r"...\FLEXX POL 3670\Boletim FLEXX POL 3670.pdf",
+                "O FLEXX POL 3670 é um poliol poliéter rígido base sorbitol.",
+            ),
+        ],
+        None,
+    )
+
+    with patch("app.rag.catalog_stats.get_qdrant_client", return_value=fake_client):
+        resultado = listar_produtos_por_aplicacao(
+            "rígido", listar_todos=True, exigir_natureza=True
+        )
+
+    assert resultado["por_aplicacao_ou_tipo"]["produtos"] == [
+        "FLEXX POL 3670",
+        "FLEXX RGE 2859",
+    ]
 
 
 def test_termo_de_varias_palavras_continua_usando_substring():

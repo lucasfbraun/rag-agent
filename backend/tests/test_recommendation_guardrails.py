@@ -278,6 +278,69 @@ def test_produtos_para_produzir_elastomero_mantem_consulta_de_finalidade(
     mock_retrieve.assert_not_called()
 
 
+@patch("app.rag.engine.retrieve_products_context", return_value=[])
+@patch("app.rag.engine.execute_mcp_tool")
+@patch("app.rag.engine.litellm.completion")
+def test_produtos_da_tecnologia_de_rigidos_usam_classificacao_estrita(
+    mock_completion, mock_execute, mock_retrieve
+):
+    mock_execute.return_value = json.dumps({
+        "por_aplicacao_ou_tipo": {
+            "total": 2,
+            "produtos": ["FLEXX POL 3670", "FLEXX RGE 2859"],
+            "truncado": False,
+        }
+    })
+
+    result = run_pu_matcher_agent(
+        query="me retorne produtos que são da tecnologia de rígidos"
+    )
+
+    mock_execute.assert_called_once_with(
+        "consultar_produtos_por_aplicacao",
+        {
+            "termo_busca": "rígido",
+            "listar_todos": False,
+            "exigir_natureza": True,
+        },
+    )
+    assert "FLEXX CAT" not in result["answer"]
+    assert "INATIVO" not in result["answer"]
+    assert "FLEXX RGE 2859" in result["answer"]
+    mock_completion.assert_not_called()
+    mock_retrieve.assert_not_called()
+
+
+@patch("app.rag.engine.retrieve_products_context", return_value=[])
+@patch("app.rag.engine.execute_mcp_tool")
+@patch("app.rag.engine.litellm.completion")
+def test_stream_tecnologia_de_rigidos_tambem_descarta_inativos_e_auxiliares(
+    mock_completion, mock_execute, mock_retrieve
+):
+    mock_execute.return_value = json.dumps({
+        "por_aplicacao_ou_tipo": {
+            "total": 1,
+            "produtos": ["FLEXX RGE 2859"],
+            "truncado": False,
+        }
+    })
+
+    events = [
+        json.loads(line)
+        for line in stream_pu_matcher_agent(
+            query="me retorne produtos que são da tecnologia de rígidos"
+        )
+    ]
+    answer = "".join(
+        event.get("content", "") for event in events if event["type"] == "delta"
+    )
+
+    assert "FLEXX RGE 2859" in answer
+    assert events[0]["model_used"] == "catalogo-estruturado"
+    mock_completion.assert_not_called()
+    mock_retrieve.assert_not_called()
+
+
 @patch("app.rag.engine.buscar_evidencias_de_aplicacao_explicita", return_value=[])
 @patch("app.rag.engine.retrieve_products_context", return_value=[])
 @patch("app.rag.engine.litellm.completion")

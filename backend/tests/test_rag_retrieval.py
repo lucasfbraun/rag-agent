@@ -103,6 +103,32 @@ def test_busca_bem_sucedida_retorna_payloads():
     assert result == [{"filename": "boletim.pdf", "content": "texto"}]
 
 
+def test_busca_semantica_descarta_produto_marcado_como_inativo():
+    from app.config import COLLECTION_NAME
+
+    fake_client = MagicMock()
+    fake_client.get_collections.return_value = _fake_collections([COLLECTION_NAME])
+    ativo = MagicMock()
+    ativo.payload = {
+        "filepath": r"...\FLEXX RGE 2859\Boletim.pdf",
+        "filename": "Boletim ativo.pdf",
+        "content": "espuma rígida",
+    }
+    inativo = MagicMock()
+    inativo.payload = {
+        "filepath": r"...\FLEXX PI 2101 INATIVO\Boletim.pdf",
+        "filename": "Boletim inativo.pdf",
+        "content": "espuma rígida",
+    }
+    fake_client.search.return_value = [inativo, ativo]
+
+    with patch("app.rag.engine._get_qdrant_client", return_value=fake_client), \
+         patch("app.rag.engine.get_embedding", return_value=[0.1, 0.2]):
+        result = retrieve_products_context("consulta qualquer")
+
+    assert result == [ativo.payload]
+
+
 # --- busca híbrida: código de produto detectado na pergunta ------------------
 # Motivo: busca puramente semântica confundia códigos parecidos (ex: "AG 2032"
 # trazia "AG 2062" ou produto totalmente diferente) — ver PROGRESS.md.

@@ -85,8 +85,9 @@ def consultar_produtos_por_aplicacao(
     `listar_todos` (pedido do usuário): por padrão devolve prévia de 10 + o
     total real; quando True, devolve todos, sem limite nenhum.
 
-    `exigir_natureza` só deve ser usado quando a pergunta pedir produtos que
-    SÃO elastômeros; ele rejeita itens que apenas servem para produzi-los."""
+    `exigir_natureza` ativa classificadores de alta precisão para perguntas
+    sobre a natureza/tecnologia do próprio produto; ele rejeita itens que
+    apenas mencionam ou auxiliam aquela tecnologia."""
     try:
         return listar_produtos_por_aplicacao(
             termo_busca,
@@ -152,7 +153,7 @@ MCP_TOOLS_DEFINITIONS = [
                 "properties": {
                     "termo_busca": {"type": "string", "description": "Família/código do nome do produto (ex: 'CAT', 'TH', 'AG'), OU aplicação/uso, OU tipo de produto (ex: 'colchão', 'cortiça', 'cola', 'espuma'). Omita ou deixe vazio para listar TODOS os produtos, sem filtro."},
                     "listar_todos": {"type": "boolean", "description": "true para listar TODOS os produtos encontrados, sem limite nenhum (só use depois que o usuário confirmar que quer a lista completa); false (padrão) devolve uma prévia de até 10"},
-                    "exigir_natureza": {"type": "boolean", "description": "Para termo elastômero: true somente se a pergunta disser que os produtos SÃO elastômeros; exclui matérias-primas e sistemas que apenas produzem elastômero. Use false para produtos destinados a produzir peças/elastômeros."}
+                    "exigir_natureza": {"type": "boolean", "description": "true quando a pergunta pedir a natureza/tecnologia do próprio produto (classificação estrita disponível para elastômeros e rígidos); exclui simples menções, auxiliares e categorias próximas. Use false para busca ampla por aplicação/finalidade."}
                 }
             }
         }

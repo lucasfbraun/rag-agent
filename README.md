@@ -327,6 +327,7 @@ O acervo é consultável por **seis caminhos diferentes**, e o agente escolhe pe
 | **Produto/documento nomeado** | "traga o boletim do AG 2032" | Busca híbrida: match exato do código no nome do arquivo + busca semântica (`rag/engine.py`) |
 | **Relação entre produtos** | "AG 2032, CAT 136 e RG 2464 são utilizados juntos?", "em quais produtos o AG 2032 é usado?" ou "ISO 13100 é utilizado em algum FLEXX BT?" | Busca todos os produtos citados. Na busca reversa com vários itens, agrupa evidências mesmo quando estão em trechos diferentes e só aceita o produto de destino que comprova todos eles; uma família de destino vira filtro. Sempre pagina todas as ocorrências, sem top-k nem seleção do LLM (`rag/engine.py`, `rag/catalog_stats.py`) |
 | **Aplicação, tipo ou família** | "produtos para colchão", "quais são as colas", "produtos da família CAT" | Varredura do acervo por nome e por conteúdo, em blocos separados (`rag/catalog_stats.py`) |
+| **Tecnologia do produto** | "produtos que são da tecnologia de rígidos" | Classificação determinística no Boletim do próprio produto; exclui menções auxiliares, semirrígidos e referências indisponíveis (`rag/catalog_stats.py`, `rag/engine.py`) |
 | **Valor(es) de especificação técnica** | "hidroxila de 180", "densidade abaixo de 32 kg/m³ e pega livre abaixo de 220 s" | Leitura estruturada da tabela, varredura do acervo e interseção dos requisitos (`rag/spec_search.py`) |
 | **Aplicação + especificação + insumo disponível** | "elastômero acima de 85 Shore A usando o curativo CAT 1" | Interseção determinística no mesmo Boletim Técnico: natureza/aplicação, todos os valores e menção exata ao insumo (`rag/engine.py`, `rag/spec_search.py`) |
 | **Seção do boletim** | "quais as vantagens do AG 2032", "como armazenar", "vem em tambor?", "qual a validade" | Detecção da seção pedida, filtro de recuperação dentro do produto e instrução explícita no contexto (`rag/doc_sections.py`) |
@@ -346,6 +347,12 @@ Participar da combinação não transforma o componente no material produzido;
 por isso aditivos, catalisadores/curativos e produtos declarados como
 isocianatos não entram na classificação de identidade. No acervo atualmente
 indexado, a consulta ampla encontra 45 produtos e a estrita encontra zero.
+
+Produtos marcados no nome/caminho como `INATIVO`, `INATIVA` ou `NÃO OFERTAR`
+são excluídos das listagens, buscas estruturadas e do contexto entregue ao LLM.
+Na tecnologia de rígidos, o motor também separa sistemas que produzem espuma
+rígida de catalisadores/aditivos que apenas atendem ou mencionam esse processo,
+e não confunde “semirrígido” com “rígido”.
 
 ### Busca por especificação técnica
 

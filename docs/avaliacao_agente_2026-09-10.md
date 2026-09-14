@@ -135,6 +135,11 @@ Na primeira, só uma declaração direta vinculada ao nome do próprio produto �
 aceita; no acervo atual isso produz zero resultados, enquanto a consulta ampla
 de sistemas/matérias-primas mantém 45. A ausência é apresentada como ausência de
 classificação explícita, sem transformar uso ou produção em natureza química.
+O mesmo princípio foi aplicado à tecnologia de rígidos: a ocorrência lexical
+não basta; o próprio Boletim precisa vincular o produto à produção de espuma
+rígida ou declará-lo como poliol rígido. Catalisadores/aditivos auxiliares,
+semirrígidos e referências marcadas como inativas/não ofertáveis são excluídos.
+No acervo validado, isso reduziu a lista de 30 menções para 21 produtos ativos.
 O catálogo estruturado de natureza recomendado acima continua sendo a solução
 mais geral para outras tecnologias e relações ainda não modeladas.
 

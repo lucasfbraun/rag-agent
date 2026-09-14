@@ -21,6 +21,7 @@ from app.rag.exceptions import RetrievalIndisponivelError
 from app.rag.catalog_stats import (
     buscar_evidencias_de_aplicacao_explicita,
     buscar_produtos_que_mencionam,
+    _produto_esta_indisponivel,
 )
 from app.rag.spec_search import (
     buscar_produtos_por_aplicacao_e_especificacoes,
@@ -320,6 +321,17 @@ def _pede_produtos_que_sao_elastomeros(query: str) -> bool:
         r"\bquais\s+sao\b.{0,30}\belastomer\w*\b",
     )
     return any(re.search(padrao, texto) for padrao in padroes_identidade)
+
+
+def _eh_pedido_listagem_tecnologia_rigidos(query: str) -> bool:
+    texto = re.sub(r"[-_]", " ", _normalizar_para_regra(query))
+    if re.search(r"\bsemi\s+rigid[oa]s?\b", texto):
+        return False
+    return (
+        bool(re.search(r"\brigid[oa]s?\b", texto))
+        and "tecnologia" in texto
+        and bool(re.search(r"\b(?:list\w*|retorn\w*|produtos?|quais|traga|mostre)\b", texto))
+    )
 
 
 _PADROES_APLICACAO_EXPLICITA = (
@@ -673,6 +685,45 @@ def _responder_listagem_elastomeros(query: str) -> str:
             "isocianatos foram excluídos: participação na combinação não comprova que o "
             "produto pertence à tecnologia de elastômeros."
         ),
+    ]
+    if bucket.get("truncado"):
+        linhas.extend(["", f"Quer que eu liste todos os {total} produtos?"])
+    return "\n".join(linhas)
+
+
+def _responder_listagem_tecnologia_rigidos(query: str) -> str:
+    """Lista somente produtos cuja evidência os vincula à tecnologia rígida."""
+    texto = _normalizar_para_regra(query)
+    listar_todos = bool(re.search(r"\b(?:todos|todas|completa|completo)\b", texto))
+    payload = json.loads(execute_mcp_tool(
+        "consultar_produtos_por_aplicacao",
+        {
+            "termo_busca": "rígido",
+            "listar_todos": listar_todos,
+            "exigir_natureza": True,
+        },
+    ))
+    if payload.get("erro"):
+        return "Catálogo de produtos indisponível no momento. Tente novamente em instantes."
+
+    bucket = payload.get("por_aplicacao_ou_tipo") or {}
+    total = int(bucket.get("total") or 0)
+    produtos = bucket.get("produtos") or []
+    if not produtos:
+        return (
+            "Não encontrei produto ativo cujo Boletim Técnico comprove vínculo direto com "
+            "a tecnologia de poliuretano rígido. Menções auxiliares e produtos semirrígidos "
+            "não foram considerados."
+        )
+
+    linhas = [
+        f"Encontrei {total} produtos ativos com vínculo direto à tecnologia de poliuretano rígido "
+        "comprovado no próprio Boletim Técnico.",
+        "",
+        *[f"{indice}. {produto}" for indice, produto in enumerate(produtos, start=1)],
+        "",
+        "Foram excluídos produtos inativos ou marcados como não ofertáveis, itens auxiliares "
+        "que apenas mencionam rígidos e produtos destinados somente a espuma semirrígida.",
     ]
     if bucket.get("truncado"):
         linhas.extend(["", f"Quer que eu liste todos os {total} produtos?"])
@@ -1240,6 +1291,18 @@ def retrieve_products_context(
 
     semantic_hits = [hit.payload for hit in results]
 
+    def disponivel(payload: Dict[str, Any]) -> bool:
+        referencia = " ".join(filter(None, [
+            payload.get("filepath"), payload.get("filename"),
+        ]))
+        return not _produto_esta_indisponivel(referencia)
+
+    relation_hits = [hit for hit in relation_hits if disponivel(hit)]
+    exact_hits = [hit for hit in exact_hits if disponivel(hit)]
+    secao_hits = [hit for hit in secao_hits if disponivel(hit)]
+    keyword_hits = [hit for hit in keyword_hits if disponivel(hit)]
+    semantic_hits = [hit for hit in semantic_hits if disponivel(hit)]
+
     # Referência cruzada vem primeiro: em perguntas sobre X dentro de Y, a
     # evidência frequentemente mora apenas no boletim de Y.
     # Depois: seção pedida > match exato de código > palavra-chave > semântico.
@@ -1521,6 +1584,13 @@ def run_pu_matcher_agent(
     if resposta_composta is not None:
         return resposta_composta
 
+    if _eh_pedido_listagem_tecnologia_rigidos(query):
+        return {
+            "answer": _responder_listagem_tecnologia_rigidos(query),
+            "sources": [],
+            "model_used": "catalogo-estruturado",
+        }
+
     if _eh_pedido_listagem_elastomeros(query):
         return {
             "answer": _responder_listagem_elastomeros(query),
@@ -1635,6 +1705,16 @@ def stream_pu_matcher_agent(
             }) + "\n"
             yield _json.dumps({
                 "type": "delta", "content": resposta_composta["answer"],
+            }) + "\n"
+            yield _json.dumps({"type": "done"}) + "\n"
+            return
+
+        if _eh_pedido_listagem_tecnologia_rigidos(query):
+            yield _json.dumps({
+                "type": "meta", "sources": [], "model_used": "catalogo-estruturado"
+            }) + "\n"
+            yield _json.dumps({
+                "type": "delta", "content": _responder_listagem_tecnologia_rigidos(query)
             }) + "\n"
             yield _json.dumps({"type": "done"}) + "\n"
             return

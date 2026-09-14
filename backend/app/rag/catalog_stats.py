@@ -73,12 +73,20 @@ def _eh_pasta_administrativa(pasta: str) -> bool:
 _PROFUNDIDADE_MAXIMA_BUSCA_PRODUTO = 4
 
 
+def _produto_esta_indisponivel(referencia: str) -> bool:
+    """True para marcadores explícitos que impedem oferecer o produto."""
+    texto = _normalizar_sem_acentos(referencia)
+    return bool(re.search(r"\binativ[oa]s?\b", texto)) or "nao ofertar" in texto
+
+
 def _produto_do_filepath(filepath: str) -> Optional[str]:
     """Extrai o nome da pasta-produto mais próxima do arquivo, pulando
     subpastas administrativas/de referência conhecidas. Retorna None se o
     caminho não tiver profundidade suficiente para conter uma pasta de
     produto, ou se nenhuma pasta não-administrativa aparecer dentro do
     limite de busca."""
+    if _produto_esta_indisponivel(filepath):
+        return None
     partes = [p.strip() for p in _SEPARADOR_CAMINHO.split(filepath) if p.strip()]
     if len(partes) < 2:
         return None
@@ -199,6 +207,42 @@ def _conteudo_declara_produto_como_elastomero(filepath: str, content: str) -> bo
         + r"(?:produto|material)\s+elastomerico\b)",
         texto,
     ))
+
+
+def _conteudo_comprova_tecnologia_rigido(filepath: str, content: str) -> bool:
+    """Confirma tecnologia rígida sem aceitar uso auxiliar ou semirrígido."""
+    nome_arquivo = _SEPARADOR_CAMINHO.split(filepath)[-1]
+    if "boletim" not in _normalizar_sem_acentos(nome_arquivo):
+        return False
+    texto = _normalizar_sem_acentos(content)
+    # ``rígido`` não pode ser extraído de ``semi-rígido``. A extração de PDF
+    # varia os espaços ao redor do hífen, então normalizamos todas as formas.
+    texto = re.sub(r"\bsemi\s*-?\s*rigid[oa]s?\b", "", texto)
+    produto = _produto_do_filepath(filepath)
+    # CAT/ADT/AC são famílias auxiliares (catalisadores e aditivos). Mesmo
+    # quando atendem processos de espuma rígida, isso é aplicação do auxiliar,
+    # não classificação do produto como integrante primário da tecnologia.
+    if any(
+        _termo_bate_no_nome_produto(familia, produto or "")
+        for familia in ("CAT", "ADT", "AC")
+    ):
+        return False
+    partes_produto = re.findall(r"[a-z0-9]+", _normalizar_sem_acentos(produto))
+    if not partes_produto:
+        return False
+    padrao_produto = r"(?<![a-z0-9])" + r"[^a-z0-9]*".join(
+        map(re.escape, partes_produto)
+    )
+    padrao_produto += r"(?![a-z0-9])"
+    padroes = (
+        padrao_produto
+        + r"[^.;\n]{0,220}\bproduz\w*\b[^.;\n]{0,100}\b"
+        + r"(?:poliuretano\s+)?rigid[oa]s?\b",
+        padrao_produto
+        + r"\s*(?:,|-)?\s*(?:e|trata-se\s+de|consiste\s+em)\s+"
+        + r"(?:um\s+|uma\s+)?[^.;\n]{0,120}\brigid[oa]s?\b",
+    )
+    return any(re.search(padrao, texto) for padrao in padroes)
 
 
 def _conteudo_comprova_tipo_elastomero(filepath: str, content: str) -> bool:
@@ -538,18 +582,26 @@ def listar_produtos_por_aplicacao(
                 busca_tipo_elastomero = termo_normalizado in {
                     "elastomero", "elastomeros", "elastomerico", "elastomericos",
                 }
-                if busca_tipo_elastomero:
+                busca_tecnologia_rigido = termo_normalizado in {
+                    "rigido", "rigidos", "rigida", "rigidas",
+                }
+                if exigir_natureza and busca_tipo_elastomero:
+                    bate = _conteudo_declara_produto_como_elastomero(
+                        payload.get("filepath") or "", content
+                    )
+                elif exigir_natureza and busca_tecnologia_rigido:
+                    bate = _conteudo_comprova_tecnologia_rigido(
+                        payload.get("filepath") or "", content
+                    )
+                elif busca_tipo_elastomero:
                     if _conteudo_declara_produto_como_isocianato(
                         payload.get("filepath") or "", content
                     ):
                         produtos_declarados_isocianatos.add(produto)
                         continue
-                    verificador = (
-                        _conteudo_declara_produto_como_elastomero
-                        if exigir_natureza
-                        else _conteudo_comprova_tipo_elastomero
+                    bate = _conteudo_comprova_tipo_elastomero(
+                        payload.get("filepath") or "", content
                     )
-                    bate = verificador(payload.get("filepath") or "", content)
                 else:
                     bate = _termo_bate_no_conteudo(termo_busca, content)
                 if bate:

@@ -5,6 +5,34 @@ Ver visão geral de fases em [CRONOGRAMA.md](CRONOGRAMA.md).
 
 ---
 
+## 2026-09-14 — Sessão 55: tecnologia de rígidos e descarte de inativos
+
+Reproduzida a pergunta “me retorne produtos que são da tecnologia de rígidos”.
+A resposta anterior usava ocorrência lexical e misturava 30 produtos de papéis
+diferentes: catalisadores que apenas citam rígidos, sistemas para espuma
+semirrígida, poliol de uso genérico em várias tecnologias e produtos cujo nome
+estava marcado como `INATIVO`.
+
+Foi criada uma rota determinística para essa intenção, compartilhada pelas
+respostas síncrona e streaming. A classificação exige evidência vinculada ao
+próprio produto: declaração de poliol rígido ou de que seu sistema produz espuma
+rígida. “Semirrígido” não casa mais com “rígido”; famílias auxiliares CAT, ADT e
+AC não entram apenas por participar do processo. Produtos marcados no caminho
+como `INATIVO`/`INATIVA` ou `NÃO OFERTAR` são descartados na extração central do
+produto, o que protege listagens, buscas por especificação, aplicação e relações.
+O retrieval semântico também filtra essas referências antes de entregar contexto
+ao LLM.
+
+Validação no Qdrant real: a lista lexical de 30 caiu para **21 produtos ativos
+com vínculo direto à tecnologia de rígidos**. A pergunta exata retornou a prévia
+correta pelo caminho `catalogo-estruturado`, sem `FLEXX CAT 136`, `FLEXX CAT 19`,
+`FLEXX PI 2101 INATIVO` ou `FLEXX PI 2101A INATIVO`. A resposta explica os
+critérios de exclusão e oferece listar os 21 resultados completos.
+Validação automatizada: 102 testes focados e 246 testes da suíte ampliada de
+RAG/MCP aprovados.
+
+---
+
 ## 2026-09-14 — Sessão 54: “é elastômero” não é “serve para produzir elastômero”
 
 A correção da Sessão 53 retirou o isocianato da lista, mas preservou um erro de
