@@ -173,6 +173,34 @@ def _conteudo_declara_produto_como_isocianato(filepath: str, content: str) -> bo
     ))
 
 
+def _conteudo_declara_produto_como_elastomero(filepath: str, content: str) -> bool:
+    """Detecta identidade explícita, não apenas uso na produção do material.
+
+    O nome do produto precisa ser o sujeito da declaração no próprio Boletim.
+    Assim, ``FLEXX X é um elastômero`` qualifica, enquanto ``FLEXX X produz
+    elastômero`` e ``adequado para produção de poliuretano elastomérico`` não.
+    """
+    nome_arquivo = _SEPARADOR_CAMINHO.split(filepath)[-1]
+    if "boletim" not in _normalizar_sem_acentos(nome_arquivo):
+        return False
+    texto = _normalizar_sem_acentos(content)
+    produto = _produto_do_filepath(filepath)
+    partes_produto = re.findall(r"[a-z0-9]+", _normalizar_sem_acentos(produto))
+    if not partes_produto:
+        return False
+    padrao_produto = r"(?<![a-z0-9])" + r"[^a-z0-9]*".join(
+        map(re.escape, partes_produto)
+    )
+    padrao_produto += r"(?![a-z0-9])"
+    return bool(re.search(
+        padrao_produto
+        + r"\s*(?:,|-)?\s*(?:e|trata-se\s+de|consiste\s+em)\s+"
+        + r"(?:um\s+|uma\s+)?(?:elastomero\b|poliuretano\s+elastomerico\b|"
+        + r"(?:produto|material)\s+elastomerico\b)",
+        texto,
+    ))
+
+
 def _conteudo_comprova_tipo_elastomero(filepath: str, content: str) -> bool:
     """True somente para evidência positiva no Boletim do próprio produto.
 
@@ -425,7 +453,11 @@ def _resumo_lista(produtos: set, listar_todos: bool) -> Dict[str, Any]:
     }
 
 
-def listar_produtos_por_aplicacao(termo_busca: str = "", listar_todos: bool = False) -> Dict[str, Any]:
+def listar_produtos_por_aplicacao(
+    termo_busca: str = "",
+    listar_todos: bool = False,
+    exigir_natureza: bool = False,
+) -> Dict[str, Any]:
     """Lista produtos distintos do acervo, separando DUAS interpretações
     possíveis do mesmo termo — pedido do usuário: o agente precisa entender
     a diferença entre "nome de produto" e "aplicação/segmento", e perguntar
@@ -461,6 +493,12 @@ def listar_produtos_por_aplicacao(termo_busca: str = "", listar_todos: bool = Fa
     devolve os NOMES dos produtos, não os trechos de texto — quem quiser
     detalhe de um item específico faz uma pergunta de acompanhamento, que
     aí sim usa retrieve_products_context normalmente.
+
+    Para termos relacionados a elastômero, `exigir_natureza=True` muda o
+    contrato: só aceita declaração explícita de que o próprio produto é um
+    elastômero. A forma padrão continua abrangendo matérias-primas/sistemas
+    que produzem elastômero, pois responde a pedidos como "produto para fazer
+    uma peça de elastômero".
 
     `listar_todos` (pedido do usuário): por padrão cada bucket devolve só
     uma prévia (10 produtos) + o total real, pra o agente perguntar se o
@@ -506,9 +544,12 @@ def listar_produtos_por_aplicacao(termo_busca: str = "", listar_todos: bool = Fa
                     ):
                         produtos_declarados_isocianatos.add(produto)
                         continue
-                    bate = _conteudo_comprova_tipo_elastomero(
-                        payload.get("filepath") or "", content
+                    verificador = (
+                        _conteudo_declara_produto_como_elastomero
+                        if exigir_natureza
+                        else _conteudo_comprova_tipo_elastomero
                     )
+                    bate = verificador(payload.get("filepath") or "", content)
                 else:
                     bate = _termo_bate_no_conteudo(termo_busca, content)
                 if bate:

@@ -303,6 +303,25 @@ def _eh_pedido_listagem_elastomeros(query: str) -> bool:
     )
 
 
+def _pede_produtos_que_sao_elastomeros(query: str) -> bool:
+    """Distingue identidade do produto de finalidade/aplicação produtiva."""
+    texto = _normalizar_para_regra(query)
+    if re.search(
+        r"\b(?:para|destinad\w*\s+a|usad\w*\s+(?:em|para)|produz\w*|fabric\w*)"
+        r".{0,45}\belastomer\w*\b",
+        texto,
+    ):
+        return False
+    padroes_identidade = (
+        r"\bprodutos?\s+que\s+(?:e|sao|seja|sejam)\s+(?:um\s+)?elastomer\w*\b",
+        r"\b(?:quantos?|quais)\b.{0,45}\bprodutos?\b.{0,25}\b(?:e|sao)\b"
+        r".{0,15}\belastomer\w*\b",
+        r"\bprodutos?\s+elastomer\w*\b",
+        r"\bquais\s+sao\b.{0,30}\belastomer\w*\b",
+    )
+    return any(re.search(padrao, texto) for padrao in padroes_identidade)
+
+
 _PADROES_APLICACAO_EXPLICITA = (
     re.compile(
         r"\b(?:produzir|fabricar|fazer|moldar)\s+"
@@ -605,9 +624,14 @@ def _responder_listagem_elastomeros(query: str) -> str:
     """Resposta estruturada sem LLM para uma classificação de alto risco."""
     texto = _normalizar_para_regra(query)
     listar_todos = bool(re.search(r"\b(?:todos|todas|completa|completo)\b", texto))
+    exigir_natureza = _pede_produtos_que_sao_elastomeros(query)
     payload = json.loads(execute_mcp_tool(
         "consultar_produtos_por_aplicacao",
-        {"termo_busca": "elastômero", "listar_todos": listar_todos},
+        {
+            "termo_busca": "elastômero",
+            "listar_todos": listar_todos,
+            "exigir_natureza": exigir_natureza,
+        },
     ))
     if payload.get("erro"):
         return "Catálogo de produtos indisponível no momento. Tente novamente em instantes."
@@ -616,21 +640,39 @@ def _responder_listagem_elastomeros(query: str) -> str:
     total = int(bucket.get("total") or 0)
     produtos = bucket.get("produtos") or []
     if not produtos:
+        if exigir_natureza:
+            return (
+                "Não encontrei Boletim Técnico que declare explicitamente que o próprio "
+                "produto é um elastômero. O acervo pode conter matérias-primas e sistemas "
+                "adequados para produzir poliuretano elastomérico, mas isso responde a uma "
+                "pergunta diferente e esses itens não foram contados."
+            )
         return (
             "Não encontrei produtos cujo Boletim Técnico comprove a produção de um "
             "sistema elastomérico. Aditivos, catalisadores/curativos e isocianatos "
             "que apenas participam da combinação não são classificados como elastômeros."
         )
 
+    descricao = (
+        f"Encontrei {total} produtos cujo próprio Boletim Técnico declara que o produto "
+        "é um elastômero."
+        if exigir_natureza
+        else f"Encontrei {total} produtos que compõem sistemas com produção de poliuretano "
+        "elastomérico comprovada em Boletim Técnico."
+    )
     linhas = [
-        f"Encontrei {total} produtos que compõem sistemas com produção de poliuretano "
-        "elastomérico comprovada em Boletim Técnico.",
+        descricao,
         "",
         *[f"{indice}. {produto}" for indice, produto in enumerate(produtos, start=1)],
         "",
-        "Aditivos ADT, catalisadores/curativos CAT e produtos declarados como "
-        "isocianatos foram excluídos: participação na combinação não comprova que o "
-        "produto pertence à tecnologia de elastômeros.",
+        (
+            "Produtos que apenas participam da produção do elastômero foram excluídos: "
+            "finalidade de uso não comprova a natureza do próprio produto."
+            if exigir_natureza
+            else "Aditivos ADT, catalisadores/curativos CAT e produtos declarados como "
+            "isocianatos foram excluídos: participação na combinação não comprova que o "
+            "produto pertence à tecnologia de elastômeros."
+        ),
     ]
     if bucket.get("truncado"):
         linhas.extend(["", f"Quer que eu liste todos os {total} produtos?"])

@@ -226,6 +226,58 @@ def test_stream_listagem_elastomeros_tambem_e_deterministico(
     mock_retrieve.assert_not_called()
 
 
+@patch("app.rag.engine.retrieve_products_context", return_value=[])
+@patch("app.rag.engine.execute_mcp_tool")
+@patch("app.rag.engine.litellm.completion")
+def test_pergunta_produtos_que_sao_elastomeros_exige_natureza_do_produto(
+    mock_completion, mock_execute, mock_retrieve
+):
+    mock_execute.return_value = json.dumps({
+        "por_aplicacao_ou_tipo": {
+            "total": 0,
+            "produtos": [],
+            "truncado": False,
+        }
+    })
+
+    result = run_pu_matcher_agent(query="temos quantos produtos que são elastômeros?")
+
+    mock_execute.assert_called_once_with(
+        "consultar_produtos_por_aplicacao",
+        {
+            "termo_busca": "elastômero",
+            "listar_todos": False,
+            "exigir_natureza": True,
+        },
+    )
+    assert "próprio produto é um elastômero" in result["answer"].lower()
+    assert "adequados para produzir" in result["answer"].lower()
+    mock_completion.assert_not_called()
+    mock_retrieve.assert_not_called()
+
+
+@patch("app.rag.engine.retrieve_products_context", return_value=[])
+@patch("app.rag.engine.execute_mcp_tool")
+@patch("app.rag.engine.litellm.completion")
+def test_produtos_para_produzir_elastomero_mantem_consulta_de_finalidade(
+    mock_completion, mock_execute, mock_retrieve
+):
+    mock_execute.return_value = json.dumps({
+        "por_aplicacao_ou_tipo": {
+            "total": 1,
+            "produtos": ["FLEXX TH T160DE1"],
+            "truncado": False,
+        }
+    })
+
+    result = run_pu_matcher_agent(query="liste produtos para produzir elastômero")
+
+    assert mock_execute.call_args.args[1]["exigir_natureza"] is False
+    assert "compõem sistemas com produção" in result["answer"]
+    mock_completion.assert_not_called()
+    mock_retrieve.assert_not_called()
+
+
 @patch("app.rag.engine.buscar_evidencias_de_aplicacao_explicita", return_value=[])
 @patch("app.rag.engine.retrieve_products_context", return_value=[])
 @patch("app.rag.engine.litellm.completion")

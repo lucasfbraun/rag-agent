@@ -72,16 +72,27 @@ def consultar_estatisticas_catalogo() -> Dict[str, Any]:
 # ("produtos para colchão"), que um top-k de poucos chunks do RAG nunca
 # representaria fielmente (achado real: "colchão" aparece em ~150
 # arquivos/dezenas de produtos distintos do acervo).
-def consultar_produtos_por_aplicacao(termo_busca: str = "", listar_todos: bool = False) -> Dict[str, Any]:
+def consultar_produtos_por_aplicacao(
+    termo_busca: str = "",
+    listar_todos: bool = False,
+    exigir_natureza: bool = False,
+) -> Dict[str, Any]:
     """Lista produtos distintos do acervo cujo conteúdo menciona a
     aplicação/uso dado. Sem `termo_busca` (vazio), lista TODOS os produtos
     do catálogo, sem filtro nenhum (pedido do usuário: "listar todos os
     produtos" sem categoria).
 
     `listar_todos` (pedido do usuário): por padrão devolve prévia de 10 + o
-    total real; quando True, devolve todos, sem limite nenhum."""
+    total real; quando True, devolve todos, sem limite nenhum.
+
+    `exigir_natureza` só deve ser usado quando a pergunta pedir produtos que
+    SÃO elastômeros; ele rejeita itens que apenas servem para produzi-los."""
     try:
-        return listar_produtos_por_aplicacao(termo_busca, listar_todos=listar_todos)
+        return listar_produtos_por_aplicacao(
+            termo_busca,
+            listar_todos=listar_todos,
+            exigir_natureza=exigir_natureza,
+        )
     except RetrievalIndisponivelError as e:
         return {"erro": f"Catálogo indisponível no momento: {e}"}
 
@@ -140,7 +151,8 @@ MCP_TOOLS_DEFINITIONS = [
                 "type": "object",
                 "properties": {
                     "termo_busca": {"type": "string", "description": "Família/código do nome do produto (ex: 'CAT', 'TH', 'AG'), OU aplicação/uso, OU tipo de produto (ex: 'colchão', 'cortiça', 'cola', 'espuma'). Omita ou deixe vazio para listar TODOS os produtos, sem filtro."},
-                    "listar_todos": {"type": "boolean", "description": "true para listar TODOS os produtos encontrados, sem limite nenhum (só use depois que o usuário confirmar que quer a lista completa); false (padrão) devolve uma prévia de até 10"}
+                    "listar_todos": {"type": "boolean", "description": "true para listar TODOS os produtos encontrados, sem limite nenhum (só use depois que o usuário confirmar que quer a lista completa); false (padrão) devolve uma prévia de até 10"},
+                    "exigir_natureza": {"type": "boolean", "description": "Para termo elastômero: true somente se a pergunta disser que os produtos SÃO elastômeros; exclui matérias-primas e sistemas que apenas produzem elastômero. Use false para produtos destinados a produzir peças/elastômeros."}
                 }
             }
         }
@@ -239,7 +251,9 @@ def execute_mcp_tool(
         return json.dumps(consultar_estatisticas_catalogo())
     elif tool_name == "consultar_produtos_por_aplicacao":
         return json.dumps(consultar_produtos_por_aplicacao(
-            arguments.get("termo_busca", ""), listar_todos=arguments.get("listar_todos", False)
+            arguments.get("termo_busca", ""),
+            listar_todos=arguments.get("listar_todos", False),
+            exigir_natureza=arguments.get("exigir_natureza", False),
         ))
     elif tool_name == "consultar_produtos_por_especificacao":
         try:

@@ -375,6 +375,36 @@ def test_listagem_de_elastomeros_exclui_isocianato_que_so_compoe_sistema():
     assert resultado["por_aplicacao_ou_tipo"]["produtos"] == ["FLEXX TH T160DE1"]
 
 
+def test_natureza_elastomero_nao_inclui_produto_que_apenas_produz_elastomero():
+    """A pergunta "produtos que são elastômeros" exige identidade explícita.
+
+    Um pré-polímero adequado para produzir o material curado responde a outra
+    pergunta e não pode ser contado como se o produto comercial já fosse um
+    elastômero.
+    """
+    fake_client = MagicMock()
+    fake_client.scroll.return_value = (
+        [
+            _ponto_com_conteudo(
+                r"...\FLEXX TH T160DE1\Boletim FLEXX TH T160DE1.pdf",
+                "Pré-polímero que, combinado com CAT 1, produz elastômero de poliuretano.",
+            ),
+            _ponto_com_conteudo(
+                r"...\FLEXX EL 100\Boletim FLEXX EL 100.pdf",
+                "FLEXX EL 100 é um elastômero de poliuretano para peças técnicas.",
+            ),
+        ],
+        None,
+    )
+
+    with patch("app.rag.catalog_stats.get_qdrant_client", return_value=fake_client):
+        resultado = listar_produtos_por_aplicacao(
+            "elastômero", listar_todos=True, exigir_natureza=True
+        )
+
+    assert resultado["por_aplicacao_ou_tipo"]["produtos"] == ["FLEXX EL 100"]
+
+
 def test_termo_de_varias_palavras_continua_usando_substring():
     """Frase (não 1 palavra só) — risco de falso positivo por fragmento é
     baixo o bastante pra manter o comportamento simples de antes."""

@@ -5,6 +5,32 @@ Ver visão geral de fases em [CRONOGRAMA.md](CRONOGRAMA.md).
 
 ---
 
+## 2026-09-14 — Sessão 54: “é elastômero” não é “serve para produzir elastômero”
+
+A correção da Sessão 53 retirou o isocianato da lista, mas preservou um erro de
+conceito mais amplo: a pergunta “temos quantos produtos que são elastômeros?”
+continuava recebendo a contagem de matérias-primas e sistemas cujos Boletins
+dizem que produzem poliuretano elastomérico. Esses documentos comprovam a
+finalidade do produto comercial, não que o próprio produto seja um elastômero.
+
+O motor agora separa explicitamente as duas intenções. Perguntas com identidade,
+como “produtos que são elastômeros” e “liste os produtos elastômeros”, ativam o
+modo `exigir_natureza`: o nome do produto precisa ser o sujeito de uma declaração
+direta no próprio Boletim, como “FLEXX X é um elastômero”. Frases como “produz
+elastômero” e “adequado para produção de poliuretano elastomérico” não atendem a
+esse contrato. Perguntas de finalidade, como “produtos para produzir elastômero”,
+continuam usando a consulta ampla de matérias-primas/sistemas.
+
+Validação no Qdrant real: a consulta ampla permanece com **45 produtos**; a
+consulta estrita retorna **0 produtos explicitamente declarados como
+elastômeros** no acervo atualmente indexado. A resposta do agente informa essa
+ausência sem reaproveitar os 45 itens de produção. O contrato foi propagado pela
+ferramenta MCP e pelas rotas determinísticas síncrona e streaming. Teste de
+regressão escrito antes da correção falhou pelo motivo esperado e passou depois;
+66 testes focados e 240 testes da suíte ampliada de RAG/MCP foram aprovados.
+
+---
+
 ## 2026-09-14 — Sessão 53: isocianato não é classificado como elastômero
 
 Reproduzida a pergunta "temos quantos produtos que são elastômeros?". A resposta

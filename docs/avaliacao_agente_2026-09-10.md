@@ -129,6 +129,12 @@ excluir também produtos que o próprio Boletim identifica como isocianatos. O
 caso real `FLEXX ISO 131001` dizia que o isocianato participa de uma combinação
 que produz poliuretano elastomérico; essa relação não é mais convertida em
 classificação do produto. A consolidação atravessa todos os chunks do Boletim.
+O fluxo também passou a distinguir a pergunta de identidade (“produtos que são
+elastômeros”) da pergunta de finalidade (“produtos para produzir elastômero”).
+Na primeira, só uma declaração direta vinculada ao nome do próprio produto é
+aceita; no acervo atual isso produz zero resultados, enquanto a consulta ampla
+de sistemas/matérias-primas mantém 45. A ausência é apresentada como ausência de
+classificação explícita, sem transformar uso ou produção em natureza química.
 O catálogo estruturado de natureza recomendado acima continua sendo a solução
 mais geral para outras tecnologias e relações ainda não modeladas.
 

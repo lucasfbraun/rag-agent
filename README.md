@@ -338,11 +338,14 @@ O LLM redige respostas abertas; consultas verificáveis usam os caminhos
 estruturados acima. A direção arquitetural e as etapas ainda pendentes estão em
 [Avaliação da qualidade e arquitetura do agente](docs/avaliacao_agente_2026-09-10.md).
 
-Na listagem de elastômeros, participar de uma combinação não classifica por si
-só a tecnologia do componente. O motor exclui aditivos, catalisadores/curativos
-e produtos que o próprio Boletim declara como isocianatos, mesmo que outro
-trecho do documento diga que a combinação produz poliuretano elastomérico. A
-regra é consolidada por produto e prevalece entre páginas/chunks do Boletim.
+Na listagem de elastômeros, o motor separa **identidade** de **finalidade**.
+“Produtos que são elastômeros” exige que o Boletim declare diretamente que o
+próprio produto é um elastômero. “Produtos para produzir elastômero” aceita
+matérias-primas e sistemas cuja combinação produz poliuretano elastomérico.
+Participar da combinação não transforma o componente no material produzido;
+por isso aditivos, catalisadores/curativos e produtos declarados como
+isocianatos não entram na classificação de identidade. No acervo atualmente
+indexado, a consulta ampla encontra 45 produtos e a estrita encontra zero.
 
 ### Busca por especificação técnica
 
