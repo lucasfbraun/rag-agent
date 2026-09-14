@@ -15,12 +15,106 @@ from unittest.mock import MagicMock, patch
 
 from app.config import COLLECTION_NAME
 from app.rag.engine import (
+    _detectar_codigos_auxiliares,
+    _detectar_codigos_produto,
+    _extrair_aplicacao_explicita,
     _extrair_palavras_chave,
     _montar_context_str,
     retrieve_products_context,
     run_pu_matcher_agent,
     stream_pu_matcher_agent,
 )
+
+
+PERGUNTA_ELASTOMERO_CAT_1 = (
+    "Preciso produzir uma peça de elastômero com mais de 85 de Dureza Shore A, "
+    "o curativo que eu tenho disponível é o CAT 1, quais os melhores produtos "
+    "para utilizar?"
+)
+
+
+def test_interpreta_cat_1_como_auxiliar_e_elastomero_como_aplicacao():
+    codigos = _detectar_codigos_produto(PERGUNTA_ELASTOMERO_CAT_1)
+
+    assert codigos == ["cat 1"]
+    assert _detectar_codigos_auxiliares(PERGUNTA_ELASTOMERO_CAT_1, codigos) == ["cat 1"]
+    assert _extrair_aplicacao_explicita(
+        PERGUNTA_ELASTOMERO_CAT_1, permitir_codigos_auxiliares=True
+    ) == "elastômero"
+
+
+def test_rota_elastomero_dureza_e_curativo_intersecta_tudo_sem_llm():
+    resultado = {
+        "aplicacao": {"termos_buscados": ["elastômero"]},
+        "codigos_relacionados": ["cat 1"],
+        "criterios": [{
+            "propriedade": "dureza",
+            "criterio": "Dureza acima de 85 Shore A",
+            "faixa_no_acervo": {"minimo": 30.0, "maximo": 95.0, "unidade": "Shore A"},
+        }],
+        "total": 2,
+        "produtos": [{
+            "produto": "FLEXX TH 100",
+            "aplicacao": {
+                "documento": "Boletim FLEXX TH 100.pdf",
+                "termos_encontrados": ["elastômero"],
+            },
+            "requisitos": [{
+                "propriedade": "dureza",
+                "propriedade_titulo": "Dureza",
+                "valores": "88 a 92",
+                "unidade": "Shore A",
+                "documento": "Boletim FLEXX TH 100.pdf",
+            }],
+            "relacoes": [{
+                "codigo": "cat 1",
+                "documento": "Boletim FLEXX TH 100.pdf",
+                "trecho": "Combinado com CAT 1, produz elastômero de poliuretano.",
+            }],
+        }, {
+            "produto": "FLEXX TH 200",
+            "aplicacao": {
+                "documento": "Boletim FLEXX TH 200.pdf",
+                "termos_encontrados": ["elastômero"],
+            },
+            "requisitos": [{
+                "propriedade": "dureza",
+                "propriedade_titulo": "Dureza",
+                "valores": "90 a 95",
+                "unidade": "Shore A",
+                "documento": "Boletim FLEXX TH 200.pdf",
+            }],
+            "relacoes": [{
+                "codigo": "cat 1",
+                "documento": "Boletim FLEXX TH 200.pdf",
+                "trecho": "O curativo recomendado é CAT 1.",
+            }],
+        }],
+        "truncado": False,
+        "aviso": "Todos os requisitos foram comprovados no mesmo boletim.",
+    }
+
+    with patch(
+        "app.rag.engine.buscar_produtos_por_aplicacao_e_especificacoes",
+        return_value=resultado,
+    ) as busca, patch("app.rag.engine._preparar_contexto") as preparar, \
+         patch("app.rag.engine.litellm.completion") as completion:
+        resposta = run_pu_matcher_agent(PERGUNTA_ELASTOMERO_CAT_1)
+
+    assert busca.call_args.args[0] == ["elastômero"]
+    assert busca.call_args.args[1][0]["propriedade"] == "dureza"
+    assert busca.call_args.args[1][0]["operador"] == "maior"
+    assert busca.call_args.args[1][0]["valor"] == 85.0
+    assert busca.call_args.kwargs == {
+        "listar_todos": True,
+        "codigos_relacionados": ["cat 1"],
+    }
+    preparar.assert_not_called()
+    completion.assert_not_called()
+    assert resposta["model_used"] == "catalogo-estruturado"
+    assert "FLEXX TH 100" in resposta["answer"]
+    assert "FLEXX TH 200" in resposta["answer"]
+    assert "CAT 1" in resposta["answer"]
 
 
 def _fake_collections(names):

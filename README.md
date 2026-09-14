@@ -319,7 +319,7 @@ cenoura?" recebe uma explicação curta do escopo e não uma resposta de
 conhecimento geral. O filtro usa intenções inequívocas e preserva aplicações
 técnicas válidas, como "molde de bolo com poliuretano".
 
-O acervo é consultável por **cinco caminhos diferentes**, e o agente escolhe pelo formato da pergunta. Isso importa porque cada um falha nos casos dos outros — busca semântica pura, por exemplo, nunca acerta uma pergunta sobre número.
+O acervo é consultável por **seis caminhos diferentes**, e o agente escolhe pelo formato da pergunta. Isso importa porque cada um falha nos casos dos outros — busca semântica pura, por exemplo, nunca acerta uma pergunta sobre número.
 
 | Tipo de pergunta | Exemplo | Como é resolvido |
 |---|---|---|
@@ -327,6 +327,7 @@ O acervo é consultável por **cinco caminhos diferentes**, e o agente escolhe p
 | **Relação entre produtos** | "AG 2032, CAT 136 e RG 2464 são utilizados juntos?" ou "em quais produtos o AG 2032 é usado?" | Busca individualmente todos os produtos citados; quando o destino não é informado, varre o catálogo inteiro e lista todo Boletim de outro produto que menciona o código (`rag/engine.py`, `rag/catalog_stats.py`) |
 | **Aplicação, tipo ou família** | "produtos para colchão", "quais são as colas", "produtos da família CAT" | Varredura do acervo por nome e por conteúdo, em blocos separados (`rag/catalog_stats.py`) |
 | **Valor(es) de especificação técnica** | "hidroxila de 180", "densidade abaixo de 32 kg/m³ e pega livre abaixo de 220 s" | Leitura estruturada da tabela, varredura do acervo e interseção dos requisitos (`rag/spec_search.py`) |
+| **Aplicação + especificação + insumo disponível** | "elastômero acima de 85 Shore A usando o curativo CAT 1" | Interseção determinística no mesmo Boletim Técnico: natureza/aplicação, todos os valores e menção exata ao insumo (`rag/engine.py`, `rag/spec_search.py`) |
 | **Seção do boletim** | "quais as vantagens do AG 2032", "como armazenar", "vem em tambor?", "qual a validade" | Detecção da seção pedida, filtro de recuperação dentro do produto e instrução explícita no contexto (`rag/doc_sections.py`) |
 
 ### Busca por especificação técnica
@@ -338,6 +339,7 @@ Perguntas com **nome de propriedade + número** não são respondíveis por busc
 - **Limites conservadores** — para afirmar atendimento a `abaixo de`, o máximo da faixa do produto precisa ficar dentro do limite; para `acima de`, o mínimo precisa ficar dentro; para `entre`, a faixa inteira precisa estar contida. Sobreposição parcial não é apresentada como atendimento.
 - **Vários requisitos** — todos são interpretados e verificados na mesma varredura. O resultado é a interseção por produto; propriedade ausente significa requisito não comprovado.
 - **Todos os produtos compatíveis** — recomendações por vários requisitos não usam a prévia de dez itens. Se mais de um produto comprovar simultaneamente todas as condições, todos são apresentados com suas evidências.
+- **Insumos disponíveis também viram requisito** — expressões como "o curativo disponível é CAT 1" distinguem o auxiliar do produto que deve ser recomendado. O código do curativo é removido da leitura numérica e cada candidato precisa mencioná-lo explicitamente no mesmo Boletim Técnico que comprova a aplicação e a especificação.
 - **Varredura completa, não top-k** — a pergunta é "todos os produtos com hidroxila 180"; um punhado de trechos daria uma contagem errada com cara de certa.
 - **Evidência sempre junto** — cada resultado traz a faixa lida, a unidade, o trecho literal e o documento de origem, com o tipo marcado: Boletim Técnico é a especificação de referência, Certificado/Laudo vale para o lote analisado.
 - **Quando nada casa**, a resposta traz a faixa daquela propriedade em todo o acervo, para o agente dizer "não há produto com hidroxila 180; o acervo vai de 20 a 415 mgKOH/g" em vez de um "não encontrei" seco.

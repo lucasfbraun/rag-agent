@@ -40,6 +40,54 @@ def test_interpreta_requisitos_compostos_sem_trocar_os_valores():
     assert criterios[1]["unidade"] == "Shore A"
 
 
+def test_descricao_composta_preserva_escala_shore_solicitada():
+    ponto = _ponto(
+        rf"{_BASE}\FLEXX TH\FLEXX TH 90\Boletim TH 90.pdf",
+        "Boletim TH 90.pdf",
+        "Sistema elastomérico. Dureza Shore A 90 Densidade g/cm3 1,05 a 1,10",
+    )
+    client = MagicMock()
+    client.scroll.return_value = ([ponto], None)
+    criterios = interpretar_consulta_especificacoes(
+        "dureza acima de 85 Shore A e densidade entre 1,05 e 1,10 g/cm3"
+    )
+
+    with patch("app.rag.spec_search.get_qdrant_client", return_value=client):
+        resultado = buscar_produtos_por_especificacoes(criterios)
+
+    assert resultado["criterios"][0]["criterio"] == "Dureza maior que 85 Shore A"
+
+
+def test_limite_estrito_nao_aceita_valor_igual_ao_solicitado():
+    criterio = interpretar_consulta_especificacao("dureza acima de 85 Shore A")
+    especificacao = {"minimo": 85.0, "maximo": 85.0}
+
+    assert criterio["limite_inclusivo"] is False
+    assert not _atende_criterio(
+        especificacao,
+        criterio["operador"],
+        criterio["valor"],
+        criterio["valor_maximo"],
+        criterio["tolerancia_percentual"],
+        criterio["limite_inclusivo"],
+    )
+
+
+def test_no_minimo_continua_aceitando_valor_igual():
+    criterio = interpretar_consulta_especificacao("dureza no mínimo 85 Shore A")
+    especificacao = {"minimo": 85.0, "maximo": 85.0}
+
+    assert criterio["limite_inclusivo"] is True
+    assert _atende_criterio(
+        especificacao,
+        criterio["operador"],
+        criterio["valor"],
+        criterio["valor_maximo"],
+        criterio["tolerancia_percentual"],
+        criterio["limite_inclusivo"],
+    )
+
+
 def test_interpreta_operadores_independentes_em_requisitos_compostos():
     criterios = interpretar_consulta_especificacoes(
         "viscosidade acima de 5000 cPs e NCO entre 12 e 13%"
@@ -62,6 +110,7 @@ def test_interpreta_numero_antes_da_densidade_por_imersao_com_unidade_colada():
         "valor_maximo": None,
         "unidade": "kg/m³",
         "tolerancia_percentual": 0.0,
+        "limite_inclusivo": True,
     }]
 
 
@@ -585,6 +634,81 @@ def test_busca_cruza_aplicacao_e_especificacao_no_mesmo_boletim():
     assert resultado["produtos"][0]["produto"] == "FLEXX SL ECO 2539"
     assert resultado["produtos"][0]["aplicacao"]["documento"] == "Boletim SL ECO 2539.pdf"
     assert resultado["produtos"][0]["requisitos"][0]["valores"] == "270 a 290"
+
+
+def test_busca_elastomero_dureza_e_cat_1_exige_toda_evidencia_no_mesmo_boletim():
+    def boletim(produto, nome, conteudo):
+        return _ponto(rf"{_BASE}\FLEXX TH\{produto}\{nome}", nome, conteudo)
+
+    pontos = [
+        boletim(
+            "FLEXX TH 100", "Boletim TH 100.pdf",
+            "Pré-polímero que, combinado com CAT 1, produz elastômero de poliuretano.",
+        ),
+        boletim(
+            "FLEXX TH 100", "Boletim TH 100.pdf",
+            "Dureza Shore A 88 a 92",
+        ),
+        boletim(
+            "FLEXX TH 200", "Boletim TH 200.pdf",
+            "Sistema elastomérico curado com CAT 1. Dureza Shore A 90 a 95",
+        ),
+        boletim(
+            "FLEXX TH BAIXO", "Boletim TH BAIXO.pdf",
+            "Sistema elastomérico curado com CAT 1. Dureza Shore A 80 a 84",
+        ),
+        boletim(
+            "FLEXX TH CAT2", "Boletim TH CAT2.pdf",
+            "Sistema elastomérico curado com CAT 2. Dureza Shore A 90 a 95",
+        ),
+        boletim(
+            "FLEXX ADT 10", "Boletim ADT 10.pdf",
+            "Aditivo para elastômeros, compatível com CAT 1. Dureza Shore A 90 a 95",
+        ),
+        boletim(
+            "FLEXX TH SEPARADO", "Boletim Aplicação.pdf",
+            "Sistema elastomérico curado com CAT 1.",
+        ),
+        boletim(
+            "FLEXX TH SEPARADO", "Boletim Dureza.pdf",
+            "Dureza Shore A 90 a 95",
+        ),
+    ]
+    client = MagicMock()
+    client.scroll.return_value = (pontos, None)
+    criterios = interpretar_consulta_especificacoes(
+        "mais de 85 de Dureza Shore A, usando CAT 1",
+        codigos_produto=["cat 1"],
+    )
+
+    with patch("app.rag.spec_search.get_qdrant_client", return_value=client):
+        resultado = buscar_produtos_por_aplicacao_e_especificacoes(
+            ["elastômero"],
+            criterios,
+            listar_todos=True,
+            codigos_relacionados=["cat 1"],
+        )
+
+    assert client.scroll.call_count == 1
+    assert [item["produto"] for item in resultado["produtos"]] == [
+        "FLEXX TH 100", "FLEXX TH 200",
+    ]
+    assert resultado["total"] == 2
+    assert all(item["relacoes"][0]["codigo"] == "cat 1" for item in resultado["produtos"])
+
+
+def test_dureza_antes_da_coluna_de_abrasao_e_lida_sem_contaminacao():
+    """Layout real dos boletins TH: a unidade mm³ da abrasão vem logo após
+    a dureza e não pode contaminar a célula Shore A."""
+    (dureza,) = extrair_especificacoes(
+        "PROPRIEDADES FÍSICAS TÍPICAS Unidade Resultado Norma "
+        "Dureza Shore A 95 - Abrasão mm3 <30 ISO 4649",
+        propriedades=["dureza"],
+    )
+
+    assert (dureza["minimo"], dureza["maximo"], dureza["unidade"]) == (
+        95.0, 95.0, "Shore A",
+    )
 
 
 def test_requisitos_abaixo_exigem_faixa_inteira_e_intersecao():

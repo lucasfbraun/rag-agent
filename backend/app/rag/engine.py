@@ -34,13 +34,13 @@ from app.config import QDRANT_HOST, QDRANT_PORT, COLLECTION_NAME, EMBEDDING_MODE
 logger = logging.getLogger(__name__)
 
 # Sigla curta (1-6 letras, ex: "AG", "CAT", "ISO") seguida de um número
-# (2-6 dígitos) — o padrão real de nomenclatura dos arquivos do acervo (ver
+# (1-6 dígitos) — o padrão real de nomenclatura dos arquivos do acervo (ver
 # payload `filename` da ingestão: "Boletim FLEXX AG 2032.pdf", "FISPQ FLEXX
 # CAT 136.doc"). Usado pra detectar código de produto na pergunta do usuário.
-_PADRAO_CODIGO_PRODUTO = re.compile(r"\b([A-Za-zÀ-ÖØ-öø-ÿ]{1,6})\s?(\d{2,6}[A-Za-z]{0,2})\b")
+_PADRAO_CODIGO_PRODUTO = re.compile(r"\b([A-Za-zÀ-ÖØ-öø-ÿ]{1,6})\s?(\d{1,6}[A-Za-z]{0,2})\b")
 _PADRAO_CODIGO_PRODUTO_ALFANUMERICO = re.compile(
     r"\b([A-Za-zÀ-ÖØ-öø-ÿ]{1,6})\s+"
-    r"([A-Za-zÀ-ÖØ-öø-ÿ]{1,3}\d{2,6}[A-Za-z0-9-]*)\b"
+    r"([A-Za-zÀ-ÖØ-öø-ÿ]{1,3}\d{1,6}[A-Za-z0-9-]*)\b"
 )
 
 # Palavras curtas de função (artigo, preposição, pronome) que NUNCA são sigla
@@ -53,7 +53,7 @@ _PALAVRAS_NUNCA_SAO_FAMILIA_DE_CODIGO = {
     "que", "e", "ou", "se", "ao", "aos", "eu", "tu", "ele", "ela", "nos",
     "todos", "todas", "esses", "essas", "este", "esta", "estes", "estas",
     "isso", "isto", "tem", "têm", "minimo", "mínimo", "maximo", "máximo",
-    "menos", "mais",
+    "menos", "mais", "a", "o", "shore",
 }
 
 
@@ -305,6 +305,12 @@ def _eh_pedido_listagem_elastomeros(query: str) -> bool:
 
 _PADROES_APLICACAO_EXPLICITA = (
     re.compile(
+        r"\b(?:produzir|fabricar|fazer|moldar)\s+"
+        r"(?:(?:o|a|os|as|um|uma)\s+)?"
+        r"(?:(?:peca|produto|item|componente)\s+(?:de|em)\s+)?"
+        r"(?P<aplicacao>[^?.,;\n]{2,100})"
+    ),
+    re.compile(
         r"\b(?:produtos?|material|materiais|sistemas?|colas?|espumas?|adesivos?|resinas?)\b"
         r".{0,60}\b(?:para|pra)\s+"
         r"(?:(?:fazer|fabricar|produzir)\s+)?"
@@ -320,6 +326,10 @@ _PADROES_APLICACAO_EXPLICITA = (
     ),
 )
 
+_APLICACOES_GENERICAS = {
+    "usar", "utilizar", "aplicar", "empregar", "produzir", "fabricar", "fazer",
+}
+
 _EQUIVALENCIAS_DE_APLICACAO = {
     # Equivalência linguística estrita; termos setoriais amplos como
     # "automotivo" não entram aqui porque não comprovam uso em ônibus.
@@ -332,10 +342,13 @@ _EQUIVALENCIAS_DE_APLICACAO = {
 }
 
 
-def _extrair_aplicacao_explicita(query: str) -> Optional[str]:
+def _extrair_aplicacao_explicita(
+    query: str,
+    permitir_codigos_auxiliares: bool = False,
+) -> Optional[str]:
     """Extrai aplicações de pedidos claros sem pedir ao LLM para ampliá-las."""
     codigos = _detectar_codigos_produto(query)
-    if codigos:
+    if codigos and not permitir_codigos_auxiliares:
         return None
     texto = _normalizar_para_regra(query)
     if "onibus" in texto and re.search(r"\b(?:assentos?|bancos?)\b", texto):
@@ -357,9 +370,35 @@ def _extrair_aplicacao_explicita(query: str) -> Optional[str]:
             aplicacao,
             maxsplit=1,
         )[0].strip()
-        if 1 <= len(aplicacao.split()) <= 8:
+        if (
+            1 <= len(aplicacao.split()) <= 8
+            and _normalizar_para_regra(aplicacao) not in _APLICACOES_GENERICAS
+        ):
             return aplicacao
     return None
+
+
+_PAPEIS_DE_PRODUTO_AUXILIAR = re.compile(
+    r"\b(?:curativo|catalisador|catalisante|aditivo|componente)\b"
+)
+
+
+def _detectar_codigos_auxiliares(query: str, codigos: List[str]) -> List[str]:
+    """Distingue insumo disponível do produto que deve ser recomendado."""
+    texto = _normalizar_para_regra(query)
+    auxiliares = []
+    for codigo in codigos:
+        partes = re.findall(r"[a-z0-9]+", _normalizar_para_regra(codigo))
+        if not partes:
+            continue
+        padrao_codigo = r"(?<![a-z0-9])" + r"[\s\-_]*".join(map(re.escape, partes))
+        padrao_codigo += r"(?![a-z0-9])"
+        for match in re.finditer(padrao_codigo, texto):
+            contexto_anterior = texto[max(0, match.start() - 100):match.start()]
+            if _PAPEIS_DE_PRODUTO_AUXILIAR.search(contexto_anterior):
+                auxiliares.append(codigo)
+                break
+    return list(dict.fromkeys(auxiliares))
 
 
 def _termos_para_aplicacao(aplicacao: str) -> List[str]:
@@ -549,14 +588,23 @@ def _responder_requisitos_compostos(query: str) -> Optional[Dict[str, Any]]:
     acrescente produtos que só atendem parte da demanda.
     """
     codigos = _detectar_codigos_produto(query)
-    if codigos:
+    codigos_auxiliares = _detectar_codigos_auxiliares(query, codigos)
+    codigos_alvo = [codigo for codigo in codigos if codigo not in codigos_auxiliares]
+    if codigos_alvo:
         return None
     criterios = interpretar_consulta_especificacoes(query, codigos_produto=codigos)
-    aplicacao = _extrair_aplicacao_explicita(query)
+    aplicacao = _extrair_aplicacao_explicita(
+        query, permitir_codigos_auxiliares=bool(codigos_auxiliares)
+    )
     if aplicacao and criterios:
         termos_aplicacao = _termos_para_aplicacao(aplicacao)
+        opcoes_busca: Dict[str, Any] = {"listar_todos": True}
+        if codigos_auxiliares:
+            opcoes_busca["codigos_relacionados"] = codigos_auxiliares
         resultado = buscar_produtos_por_aplicacao_e_especificacoes(
-            termos_aplicacao, criterios, listar_todos=True
+            termos_aplicacao,
+            criterios,
+            **opcoes_busca,
         )
         if resultado.get("erro"):
             return None
@@ -567,8 +615,14 @@ def _responder_requisitos_compostos(query: str) -> Optional[Dict[str, Any]]:
             "",
             f'**Aplicação obrigatória:** {aplicacao}.',
             "**Especificações obrigatórias:** " + "; ".join(descricoes) + ".",
-            "",
         ]
+        if codigos_auxiliares:
+            linhas.append(
+                "**Compatibilidade obrigatória:** "
+                + ", ".join(codigo.upper() for codigo in codigos_auxiliares)
+                + "."
+            )
+        linhas.append("")
         fontes: set[str] = set()
         if resultado["produtos"]:
             total = resultado["total"]
@@ -591,6 +645,12 @@ def _responder_requisitos_compostos(query: str) -> Optional[Dict[str, Any]]:
                         f"{requisito['valores']}{unidade}"
                     )
                     fontes.add(requisito["documento"])
+                for relacao in item.get("relacoes", []):
+                    linhas.append(
+                        f"   - Compatibilidade encontrada: {relacao['codigo'].upper()}"
+                    )
+                    linhas.append(f"   - Evidência: {relacao['trecho']}")
+                    fontes.add(relacao["documento"])
             if resultado["truncado"]:
                 linhas.extend([
                     "",
@@ -598,8 +658,8 @@ def _responder_requisitos_compostos(query: str) -> Optional[Dict[str, Any]]:
                 ])
         else:
             linhas.append(
-                "Não encontrei produto cujo mesmo Boletim Técnico comprove a aplicação "
-                "e todas as especificações solicitadas."
+                "Não encontrei produto cujo mesmo Boletim Técnico comprove a aplicação, "
+                "todas as especificações e as compatibilidades solicitadas."
             )
             faixas = [
                 item for item in resultado["criterios"] if item.get("faixa_no_acervo")
@@ -1354,13 +1414,6 @@ def run_pu_matcher_agent(
             "model_used": "escopo-deterministico",
         }
 
-    if _eh_pedido_listagem_elastomeros(query):
-        return {
-            "answer": _responder_listagem_elastomeros(query),
-            "sources": [],
-            "model_used": "catalogo-estruturado",
-        }
-
     resposta_reversa = _responder_busca_reversa_produto(query, ver_custos)
     if resposta_reversa is not None:
         return resposta_reversa
@@ -1368,6 +1421,13 @@ def run_pu_matcher_agent(
     resposta_composta = _responder_requisitos_compostos(query)
     if resposta_composta is not None:
         return resposta_composta
+
+    if _eh_pedido_listagem_elastomeros(query):
+        return {
+            "answer": _responder_listagem_elastomeros(query),
+            "sources": [],
+            "model_used": "catalogo-estruturado",
+        }
 
     resposta_aplicacao = _responder_aplicacao_com_evidencia(query)
     if resposta_aplicacao is not None:
@@ -1453,16 +1513,6 @@ def stream_pu_matcher_agent(
         yield _json.dumps({"type": "done"}) + "\n"
         return
 
-    if _eh_pedido_listagem_elastomeros(query):
-        yield _json.dumps({
-            "type": "meta", "sources": [], "model_used": "catalogo-estruturado"
-        }) + "\n"
-        yield _json.dumps({
-            "type": "delta", "content": _responder_listagem_elastomeros(query)
-        }) + "\n"
-        yield _json.dumps({"type": "done"}) + "\n"
-        return
-
     try:
         resposta_reversa = _responder_busca_reversa_produto(query, ver_custos)
         if resposta_reversa is not None:
@@ -1486,6 +1536,16 @@ def stream_pu_matcher_agent(
             }) + "\n"
             yield _json.dumps({
                 "type": "delta", "content": resposta_composta["answer"],
+            }) + "\n"
+            yield _json.dumps({"type": "done"}) + "\n"
+            return
+
+        if _eh_pedido_listagem_elastomeros(query):
+            yield _json.dumps({
+                "type": "meta", "sources": [], "model_used": "catalogo-estruturado"
+            }) + "\n"
+            yield _json.dumps({
+                "type": "delta", "content": _responder_listagem_elastomeros(query)
             }) + "\n"
             yield _json.dumps({"type": "done"}) + "\n"
             return

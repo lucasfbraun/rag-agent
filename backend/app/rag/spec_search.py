@@ -41,7 +41,14 @@ import unicodedata
 from typing import Any, Dict, List, Optional, Tuple
 
 from app.config import COLLECTION_NAME
-from app.rag.catalog_stats import _produto_do_filepath, _termo_bate_no_conteudo
+from app.rag.catalog_stats import (
+    _codigo_bate_no_texto,
+    _conteudo_comprova_tipo_elastomero,
+    _normalizar_sem_acentos,
+    _produto_do_filepath,
+    _termo_bate_no_conteudo,
+    _trecho_da_mencao,
+)
 from app.rag.exceptions import RetrievalIndisponivelError
 from app.rag.ingestion import get_qdrant_client
 
@@ -323,7 +330,7 @@ _UNIDADE_EXIBICAO = {
 _MARCADORES_FIM_DE_CELULA = (
     "observ", "este laudo", "informacoes adicionais", "informacoes complementares",
     "quimico:", "responsavel", "aplicacao", "caracteristicas e vantagens",
-    "seguranca e armazenamento", "manuseio", "os dados obtidos",
+    "seguranca e armazenamento", "manuseio", "os dados obtidos", "abrasao",
 )
 
 # Quantos caracteres depois do rótulo ainda pertencem à mesma célula da tabela.
@@ -634,10 +641,12 @@ _EXPRESSOES_MAIOR = (
     "acima de", "maior que", "maior do que", "superior a", "a partir de",
     "no minimo", "pelo menos", "mais de", ">=", ">",
 )
+_EXPRESSOES_MAIOR_INCLUSIVO = ("a partir de", "no minimo", "pelo menos", ">=")
 _EXPRESSOES_MENOR = (
     "abaixo de", "menor que", "menor do que", "inferior a", "no maximo",
     "menos de", "<=", "<",
 )
+_EXPRESSOES_MENOR_INCLUSIVO = ("no maximo", "<=")
 
 # Tolerância padrão de ±5% quando o vendedor pede um valor pontual ("hidroxila
 # de 180"). Ele quase nunca quer o valor exato ao decimal — quer o produto que
@@ -728,6 +737,7 @@ def interpretar_consulta_especificacao(
                     else _unidade_da_consulta(ocorrencia.group(0), antes, depois)
                 ),
                 "tolerancia_percentual": 0.0,
+                "limite_inclusivo": True,
             }
 
     numero = _PADRAO_NUMERO_CONSULTA.search(depois)
@@ -763,6 +773,19 @@ def interpretar_consulta_especificacao(
         "tolerancia_percentual": (
             TOLERANCIA_PADRAO_PERCENTUAL if operador == "igual" else 0.0
         ),
+        "limite_inclusivo": (
+            any(
+                expressao in contexto_operador
+                for expressao in _EXPRESSOES_MAIOR_INCLUSIVO
+            )
+            if operador == "maior"
+            else any(
+                expressao in contexto_operador
+                for expressao in _EXPRESSOES_MENOR_INCLUSIVO
+            )
+            if operador == "menor"
+            else True
+        ),
     }
 
 
@@ -781,16 +804,38 @@ def interpretar_consulta_especificacoes(
     for codigo in codigos_produto or []:
         texto = texto.replace(_normalizar_alinhado(codigo), " ")
 
-    ocorrencias = list(_PADRAO_TERMOS_CONSULTA.finditer(texto))
+    grupos_de_ocorrencias: List[Tuple[re.Match, int]] = []
+    for ocorrencia in _PADRAO_TERMOS_CONSULTA.finditer(texto):
+        propriedade = _PROPRIEDADE_DO_TERMO.get(
+            re.sub(r"\s+", " ", ocorrencia.group(1))
+        )
+        # Em "dureza acima de 85 Shore A", ``dureza`` e ``Shore A`` são
+        # duas formas de escrever a mesma propriedade. Manter a segunda como
+        # um novo delimitador cortava a escala do primeiro fragmento e podia
+        # permitir que Shore D entrasse na busca.
+        if grupos_de_ocorrencias:
+            anterior = _PROPRIEDADE_DO_TERMO.get(
+                re.sub(r"\s+", " ", grupos_de_ocorrencias[-1][0].group(1))
+            )
+            if propriedade == anterior:
+                grupos_de_ocorrencias[-1] = (
+                    grupos_de_ocorrencias[-1][0], ocorrencia.end()
+                )
+                continue
+        grupos_de_ocorrencias.append((ocorrencia, ocorrencia.end()))
     criterios: List[Dict[str, Any]] = []
     propriedades_vistas = set()
-    for indice, ocorrencia in enumerate(ocorrencias):
-        fim = ocorrencias[indice + 1].start() if indice + 1 < len(ocorrencias) else len(texto)
+    for indice, (ocorrencia, _) in enumerate(grupos_de_ocorrencias):
+        fim = (
+            grupos_de_ocorrencias[indice + 1][0].start()
+            if indice + 1 < len(grupos_de_ocorrencias)
+            else len(texto)
+        )
         # Inclui o trecho desde a propriedade anterior para aceitar a ordem
         # natural "no mínimo 200 kg/m³ de densidade por imersão". O parser
         # prefere o número depois do rótulo; só usa o último número anterior
         # quando não há nenhum depois.
-        inicio = ocorrencias[indice - 1].end() if indice > 0 else 0
+        inicio = grupos_de_ocorrencias[indice - 1][1] if indice > 0 else 0
         fragmento = texto[inicio:fim]
         criterio = interpretar_consulta_especificacao(fragmento)
         if not criterio or criterio["propriedade"] in propriedades_vistas:
@@ -833,15 +878,16 @@ def _atende_criterio(
     valor: float,
     valor_maximo: Optional[float],
     tolerancia_percentual: float,
+    limite_inclusivo: bool = True,
 ) -> bool:
     minimo, maximo = especificacao["minimo"], especificacao["maximo"]
     # Para afirmar que o PRODUTO atende a um limite, toda a faixa declarada
     # precisa estar do lado solicitado. Usar apenas um extremo favorável fazia
     # 18,6–32,9 aparecer como "abaixo de 32" e 200–230 como "abaixo de 220".
     if operador == "maior":
-        return minimo >= valor
+        return minimo >= valor if limite_inclusivo else minimo > valor
     if operador == "menor":
-        return maximo <= valor
+        return maximo <= valor if limite_inclusivo else maximo < valor
     if operador == "entre" and valor_maximo is not None:
         return minimo >= valor and maximo <= valor_maximo
     folga = abs(valor) * (tolerancia_percentual / 100.0)
@@ -896,20 +942,24 @@ def _descrever_criterio(
     valor: float,
     valor_maximo: Optional[float],
     tolerancia_percentual: float,
+    unidade_consulta: Optional[str] = None,
+    limite_inclusivo: bool = True,
 ) -> str:
     titulo = PROPRIEDADES[propriedade]["titulo"]
     if PROPRIEDADES[propriedade].get("tipo") == "tempo":
         fmt = _formatar_segundos
     else:
-        sufixo = f" {PROPRIEDADES[propriedade]['unidade_tipica']}".rstrip()
+        sufixo = f" {unidade_consulta or PROPRIEDADES[propriedade]['unidade_tipica']}".rstrip()
 
         def fmt(numero: float) -> str:
             return f"{numero:g}{sufixo}"
 
     if operador == "maior":
-        return f"{titulo} maior ou igual a {fmt(valor)}"
+        comparacao = "maior ou igual a" if limite_inclusivo else "maior que"
+        return f"{titulo} {comparacao} {fmt(valor)}"
     if operador == "menor":
-        return f"{titulo} menor ou igual a {fmt(valor)}"
+        comparacao = "menor ou igual a" if limite_inclusivo else "menor que"
+        return f"{titulo} {comparacao} {fmt(valor)}"
     if operador == "entre" and valor_maximo is not None:
         return f"{titulo} entre {fmt(valor)} e {fmt(valor_maximo)}"
     if tolerancia_percentual:
@@ -1114,6 +1164,7 @@ def buscar_produtos_por_especificacoes(
                         if not _atende_criterio(
                             especificacao, criterio["operador"], criterio["valor"],
                             criterio.get("valor_maximo"), criterio["tolerancia_percentual"],
+                            criterio.get("limite_inclusivo", True),
                         ):
                             continue
                         tipo = _tipo_documento(filename)
@@ -1160,6 +1211,8 @@ def buscar_produtos_por_especificacoes(
             "criterio": _descrever_criterio(
                 criterio["propriedade"], criterio["operador"], criterio["valor"],
                 criterio.get("valor_maximo"), criterio["tolerancia_percentual"],
+                criterio.get("unidade"),
+                criterio.get("limite_inclusivo", True),
             ),
             "faixa_no_acervo": (
                 None if faixa["minimo"] is None else {
@@ -1185,6 +1238,7 @@ def buscar_produtos_por_aplicacao_e_especificacoes(
     termos_aplicacao: List[str],
     criterios: List[Dict[str, Any]],
     listar_todos: bool = False,
+    codigos_relacionados: Optional[List[str]] = None,
 ) -> Dict[str, Any]:
     """Cruza aplicação e números comprovados no mesmo Boletim Técnico.
 
@@ -1193,6 +1247,11 @@ def buscar_produtos_por_aplicacao_e_especificacoes(
     documento, sem aquela aplicação, contém um valor compatível.
     """
     termos = [termo.strip() for termo in termos_aplicacao if termo and termo.strip()]
+    codigos = list(dict.fromkeys(
+        codigo.strip().lower()
+        for codigo in (codigos_relacionados or [])
+        if codigo and codigo.strip()
+    ))
     if not termos:
         return {"erro": "Informe a aplicação desejada."}
     if not criterios:
@@ -1209,6 +1268,7 @@ def buscar_produtos_por_aplicacao_e_especificacoes(
         }
 
     aplicacoes: Dict[Tuple[str, str], set] = {}
+    relacoes: Dict[Tuple[str, str], Dict[str, str]] = {}
     melhores: List[Dict[Tuple[str, str], Dict[str, Any]]] = [
         {} for _ in criterios
     ]
@@ -1240,11 +1300,21 @@ def buscar_produtos_por_aplicacao_e_especificacoes(
 
                 content = payload.get("content") or ""
                 chave = (produto, filename)
-                termos_encontrados = {
-                    termo for termo in termos if _termo_bate_no_conteudo(termo, content)
-                }
+                termos_encontrados = set()
+                for termo in termos:
+                    if "elastomero" in _normalizar_sem_acentos(termo):
+                        if _conteudo_comprova_tipo_elastomero(filepath, content):
+                            termos_encontrados.add(termo)
+                    elif _termo_bate_no_conteudo(termo, content):
+                        termos_encontrados.add(termo)
                 if termos_encontrados:
                     aplicacoes.setdefault(chave, set()).update(termos_encontrados)
+
+                for codigo in codigos:
+                    if _codigo_bate_no_texto(codigo, content):
+                        relacoes.setdefault(chave, {}).setdefault(
+                            codigo, _trecho_da_mencao(codigo, content)
+                        )
 
                 for indice, criterio in enumerate(criterios):
                     for especificacao in extrair_especificacoes(
@@ -1270,6 +1340,7 @@ def buscar_produtos_por_aplicacao_e_especificacoes(
                             criterio["valor"],
                             criterio.get("valor_maximo"),
                             criterio["tolerancia_percentual"],
+                            criterio.get("limite_inclusivo", True),
                         ):
                             continue
                         candidato = {
@@ -1295,6 +1366,12 @@ def buscar_produtos_por_aplicacao_e_especificacoes(
     documentos_compativeis = set(aplicacoes)
     for por_documento in melhores:
         documentos_compativeis.intersection_update(por_documento)
+    if codigos:
+        documentos_compativeis.intersection_update(
+            chave
+            for chave, mencoes in relacoes.items()
+            if all(codigo in mencoes for codigo in codigos)
+        )
 
     melhor_documento_por_produto: Dict[str, Dict[str, Any]] = {}
     for produto, filename in documentos_compativeis:
@@ -1308,6 +1385,14 @@ def buscar_produtos_por_aplicacao_e_especificacoes(
                 "termos_encontrados": sorted(aplicacoes[chave]),
             },
             "requisitos": requisitos,
+            "relacoes": [
+                {
+                    "codigo": codigo,
+                    "documento": filename,
+                    "trecho": relacoes[chave][codigo],
+                }
+                for codigo in codigos
+            ],
             "_ordem": ordem,
         }
         atual = melhor_documento_por_produto.get(produto)
@@ -1328,6 +1413,8 @@ def buscar_produtos_por_aplicacao_e_especificacoes(
             "criterio": _descrever_criterio(
                 criterio["propriedade"], criterio["operador"], criterio["valor"],
                 criterio.get("valor_maximo"), criterio["tolerancia_percentual"],
+                criterio.get("unidade"),
+                criterio.get("limite_inclusivo", True),
             ),
             "faixa_no_acervo": (
                 None if faixa["minimo"] is None else {
@@ -1342,13 +1429,15 @@ def buscar_produtos_por_aplicacao_e_especificacoes(
     limite = None if listar_todos else _LIMITE_PREVIA
     return {
         "aplicacao": {"termos_buscados": termos},
+        "codigos_relacionados": codigos,
         "criterios": descricoes,
         "total": len(encontrados),
         "produtos": encontrados if limite is None else encontrados[:limite],
         "truncado": limite is not None and len(encontrados) > limite,
         "aviso": (
-            "O produto só foi incluído quando aplicação e especificação foram "
-            "comprovadas no mesmo Boletim Técnico. Confirme o documento citado "
+            "O produto só foi incluído quando aplicação, especificação e "
+            "compatibilidade solicitadas foram comprovadas no mesmo Boletim Técnico. "
+            "Confirme o documento citado "
             "antes de fechar a proposta."
         ),
     }

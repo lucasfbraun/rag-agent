@@ -5,6 +5,37 @@ Ver visão geral de fases em [CRONOGRAMA.md](CRONOGRAMA.md).
 
 ---
 
+## 2026-09-14 — Sessão 49: elastômero, dureza e curativo na mesma interseção
+
+Reproduzida a pergunta "peça de elastômero com mais de 85 de Dureza Shore A,
+com o curativo CAT 1 disponível". Duas falhas de interpretação faziam a
+consulta cair no fluxo gerativo: o detector de códigos exigia dois dígitos e
+não reconhecia `CAT 1`; além disso, o extrator lia o final "produtos para
+utilizar" como aplicação `utilizar`, ignorando `elastômero`.
+
+O motor agora reconhece códigos de um dígito sem confundir `Shore A 85` com
+produto, identifica o papel de curativo/catalisador/aditivo/componente e extrai
+a aplicação de frases como "produzir uma peça de elastômero". O curativo é
+tratado como requisito do sistema, não como produto a recomendar.
+
+A busca estruturada passou a cruzar, por produto e documento, três grupos de
+evidência: natureza/aplicação, todas as especificações numéricas e todos os
+códigos auxiliares informados. Para elastômeros, uma simples frase "aditivo
+para elastômeros" não comprova a natureza do candidato. Evidências em boletins
+distintos também não são combinadas. Todos os produtos da interseção são
+devolvidos diretamente, sem LLM ou top-k.
+
+A validação no Qdrant real encontrou 10 produtos com Shore A de 87 a 95 e
+menção explícita ao CAT 1 no próprio Boletim Técnico. Durante a validação,
+foi corrigido também o layout real `Dureza Shore A 95 - Abrasão...`, que antes
+misturava os números da coluna seguinte e descartava a dureza. A suíte focada
+passou com 80 testes e a suíte ampliada do motor com 221. A execução completa
+chegou a 462 testes aprovados; as falhas restantes ficaram nas integrações com
+schema local do PostgreSQL desatualizado e na permissão do diretório temporário
+do Windows, fora dos módulos alterados nesta sessão.
+
+---
+
 ## 2026-09-11 — Sessão 48: busca reversa completa de menções
 
 Implementada a consulta "o produto X é utilizado em algum produto?" quando o
