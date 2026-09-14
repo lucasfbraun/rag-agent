@@ -8,6 +8,30 @@ O projeto já possui fundamentos úteis: catálogo no Qdrant, recuperação por 
 
 Não há evidência nesta análise de que trocar o banco vetorial ou o modelo de embedding seja necessário. O nome `COLLECTION_NAME=pu_products_catalog` apenas seleciona a coleção; não controla a qualidade do raciocínio.
 
+### Atualização de 14/09/2026
+
+Os incidentes posteriores reforçaram a conclusão. Na pergunta "O ISO 13100 é
+utilizado em algum FLEXX BT?", a recuperação comum encontrou o produto de
+origem, mas não transformou `FLEXX BT` em um filtro de família de destino. O LLM
+recebeu evidência insuficiente e respondeu que não havia menção, embora três
+Boletins Técnicos a contivessem.
+
+O caso foi corrigido com uma consulta relacional estruturada e genérica:
+produto de origem, família(s) de destino, paginação de todas as ocorrências e
+confirmação local do código completo. A validação real encontrou FLEXX BT 2559,
+FLEXX BT 2560 e FLEXX BT 2563. Isso corrige essa classe de pergunta, mas os
+detectores de intenção ainda estão distribuídos no motor.
+
+A arquitetura alvo permanece: **planejar → recuperar → verificar → responder**.
+O próximo refactor arquitetural recomendado é centralizar num plano tipado as
+entidades e seus papéis (produto procurado, insumo disponível, família de
+destino, aplicação, especificações e operadores). Cada executor consulta o
+Qdrant ou o índice estruturado de forma apropriada, e um verificador monta a
+matriz de evidências por produto. O LLM pode resolver ambiguidade e redigir, mas
+não deve decidir se um valor atende, encerrar uma varredura ou inventar uma
+relação. Essa mudança reduz a necessidade de acrescentar uma regra isolada a
+cada nova formulação da mesma intenção.
+
 ## Escopo e limites
 
 Análise da estrutura do repositório, documentação, configuração e fluxos principais de frontend, API, recuperação, ingestão, ferramentas, treinamento, histórico e permissões. Inspeção mais profunda do caminho que produz respostas e dos testes relacionados. Não é uma auditoria exaustiva de segurança nem uma medição da precisão do acervo em produção. Não foram executadas ingestões, migrações ou alterações de dados. O único arquivo de projeto criado nesta avaliação é este relatório.

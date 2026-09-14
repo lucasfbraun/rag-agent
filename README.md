@@ -6,6 +6,7 @@ localizando produtos já homologados no acervo da empresa a partir da demanda de
 Documentação de origem do projeto em [docs/](docs/):
 - [Proposta do Projeto](docs/proposta_do_projeto_similaridade.md)
 - [Guia Técnico do MVP](docs/guia_mvp_e_codigo_similaridade.md)
+- [Avaliação da qualidade e arquitetura do agente](docs/avaliacao_agente_2026-09-10.md)
 
 Acompanhamento do desenvolvimento:
 - [CRONOGRAMA.md](CRONOGRAMA.md) — fases e marcos do projeto (fonte da verdade, versionada)
@@ -324,11 +325,18 @@ O acervo é consultável por **seis caminhos diferentes**, e o agente escolhe pe
 | Tipo de pergunta | Exemplo | Como é resolvido |
 |---|---|---|
 | **Produto/documento nomeado** | "traga o boletim do AG 2032" | Busca híbrida: match exato do código no nome do arquivo + busca semântica (`rag/engine.py`) |
-| **Relação entre produtos** | "AG 2032, CAT 136 e RG 2464 são utilizados juntos?" ou "em quais produtos o AG 2032 é usado?" | Busca individualmente todos os produtos citados; quando o destino não é informado, varre o catálogo inteiro e lista todo Boletim de outro produto que menciona o código (`rag/engine.py`, `rag/catalog_stats.py`) |
+| **Relação entre produtos** | "AG 2032, CAT 136 e RG 2464 são utilizados juntos?", "em quais produtos o AG 2032 é usado?" ou "ISO 13100 é utilizado em algum FLEXX BT?" | Busca individualmente todos os produtos citados; quando o destino é uma família, filtra essa família; quando não é informado, lista todo Boletim de outro produto que menciona o código. Sempre pagina todas as ocorrências, sem top-k nem seleção do LLM (`rag/engine.py`, `rag/catalog_stats.py`) |
 | **Aplicação, tipo ou família** | "produtos para colchão", "quais são as colas", "produtos da família CAT" | Varredura do acervo por nome e por conteúdo, em blocos separados (`rag/catalog_stats.py`) |
 | **Valor(es) de especificação técnica** | "hidroxila de 180", "densidade abaixo de 32 kg/m³ e pega livre abaixo de 220 s" | Leitura estruturada da tabela, varredura do acervo e interseção dos requisitos (`rag/spec_search.py`) |
 | **Aplicação + especificação + insumo disponível** | "elastômero acima de 85 Shore A usando o curativo CAT 1" | Interseção determinística no mesmo Boletim Técnico: natureza/aplicação, todos os valores e menção exata ao insumo (`rag/engine.py`, `rag/spec_search.py`) |
 | **Seção do boletim** | "quais as vantagens do AG 2032", "como armazenar", "vem em tambor?", "qual a validade" | Detecção da seção pedida, filtro de recuperação dentro do produto e instrução explícita no contexto (`rag/doc_sections.py`) |
+
+O Qdrant continua sendo adequado para localizar texto e candidatos. Ele não é,
+sozinho, o mecanismo de decisão do catálogo: números, aplicações e relações
+precisam de um plano de consulta, varredura completa e confirmação da evidência.
+O LLM redige respostas abertas; consultas verificáveis usam os caminhos
+estruturados acima. A direção arquitetural e as etapas ainda pendentes estão em
+[Avaliação da qualidade e arquitetura do agente](docs/avaliacao_agente_2026-09-10.md).
 
 ### Busca por especificação técnica
 

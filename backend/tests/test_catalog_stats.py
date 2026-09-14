@@ -495,3 +495,39 @@ def test_busca_reversa_nao_corta_resultado_em_dez_produtos():
     assert len(resultado) == 12
     assert resultado[0]["produto"] == "FLEXX SIST 001"
     assert resultado[-1]["produto"] == "FLEXX SIST 012"
+
+
+def test_busca_reversa_restringe_todos_os_resultados_a_familia_destino():
+    fake_client = MagicMock()
+    fake_client.scroll.return_value = ([
+        _ponto_com_conteudo(
+            r"...\FLEXX BT 100\Boletim FLEXX BT 100.pdf",
+            "O sistema utiliza FLEXX ISO 13100.",
+        ),
+        _ponto_com_conteudo(
+            r"...\FLEXX BT 200\Boletim FLEXX BT 200.pdf",
+            "Componente B: ISO-13100.",
+        ),
+        _ponto_com_conteudo(
+            r"...\FLEXX BTA 300\Boletim FLEXX BTA 300.pdf",
+            "Também menciona ISO 13100, mas BTA não é a família BT.",
+        ),
+        _ponto_com_conteudo(
+            r"...\FLEXX ESP 400\Boletim FLEXX ESP 400.pdf",
+            "Também utiliza ISO 13100, mas pertence a outra família.",
+        ),
+    ], None)
+
+    with patch("app.rag.catalog_stats.get_qdrant_client", return_value=fake_client):
+        resultado = buscar_produtos_que_mencionam(
+            "ISO 13100", familias_destino=["BT"]
+        )
+
+    assert [item["produto"] for item in resultado] == [
+        "FLEXX BT 100", "FLEXX BT 200",
+    ]
+    filtro = fake_client.scroll.call_args.kwargs["scroll_filter"]
+    assert {condicao.match.text for condicao in filtro.should} == {
+        "ISO 13100", "iso 13100", "iso-13100", "iso13100",
+    }
+    assert all(condicao.key == "content" for condicao in filtro.should)

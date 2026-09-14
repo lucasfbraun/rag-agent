@@ -427,6 +427,24 @@ _PADROES_BUSCA_REVERSA_PRODUTO = (
     ),
 )
 
+_PADRAO_FAMILIA_FLEXX_SEM_CODIGO = re.compile(
+    r"\bflexx\s+([a-z]{1,6})\b(?!\s+(?:[a-z]{1,3})?\d)"
+)
+_VERBO_DE_RELACAO_ENTRE_PRODUTOS = re.compile(
+    r"\b(?:utiliz\w*|us(?:a|am|e|em|ou|ar|aria\w*|ado\w*|ando)|"
+    r"aplicad\w*|empregad\w*|adicionad\w*|misturad\w*|combinad\w*|"
+    r"mencionad\w*|citad\w*|aparec\w*|contem|leva\w*|faz\s+parte)\b"
+)
+
+
+def _extrair_familias_destino(query: str) -> List[str]:
+    """Extrai uma família citada sem produto específico, como ``FLEXX BT``."""
+    texto = _normalizar_para_regra(query)
+    return list(dict.fromkeys(
+        match.group(1).lower()
+        for match in _PADRAO_FAMILIA_FLEXX_SEM_CODIGO.finditer(texto)
+    ))
+
 
 def _responder_busca_reversa_produto(
     query: str,
@@ -437,12 +455,24 @@ def _responder_busca_reversa_produto(
     if len(codigos) != 1:
         return None
     texto = _normalizar_para_regra(query)
-    if not any(padrao.search(texto) for padrao in _PADROES_BUSCA_REVERSA_PRODUTO):
+    familias_destino = _extrair_familias_destino(query)
+    consulta_de_familia = bool(
+        familias_destino and _VERBO_DE_RELACAO_ENTRE_PRODUTOS.search(texto)
+    )
+    if not consulta_de_familia and not any(
+        padrao.search(texto) for padrao in _PADROES_BUSCA_REVERSA_PRODUTO
+    ):
         return None
 
     codigo = codigos[0]
-    resultados = buscar_produtos_que_mencionam(
-        codigo, incluir_sensivel=incluir_sensivel
+    opcoes_busca: Dict[str, Any] = {"incluir_sensivel": incluir_sensivel}
+    if familias_destino:
+        opcoes_busca["familias_destino"] = familias_destino
+    resultados = buscar_produtos_que_mencionam(codigo, **opcoes_busca)
+    descricao_destino = (
+        " da família "
+        + " ou ".join(f"FLEXX {familia.upper()}" for familia in familias_destino)
+        if familias_destino else ""
     )
     fontes = sorted({
         documento
@@ -450,14 +480,19 @@ def _responder_busca_reversa_produto(
         for documento in item["documentos"]
     })
     if not resultados:
+        alvo_sem_resultado = (
+            f"produto{descricao_destino}" if familias_destino else "outro produto"
+        )
         answer = (
-            f'Não encontrei outro produto cujo Boletim Técnico mencione "{codigo.upper()}". '
+            f'Não encontrei {alvo_sem_resultado} cujo Boletim Técnico '
+            f'mencione "{codigo.upper()}". '
             "A busca reversa percorreu todos os resultados do catálogo, sem limite de top-k."
         )
     else:
         total = len(resultados)
         linhas = [
-            f'Encontrei {total} produto{"s" if total != 1 else ""} cujo próprio '
+            f'Encontrei {total} produto{"s" if total != 1 else ""}{descricao_destino} '
+            "cujo próprio "
             f'Boletim Técnico menciona "{codigo.upper()}":',
             "",
         ]

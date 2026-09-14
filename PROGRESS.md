@@ -5,6 +5,39 @@ Ver visão geral de fases em [CRONOGRAMA.md](CRONOGRAMA.md).
 
 ---
 
+## 2026-09-14 — Sessão 50: produto de origem e família de destino
+
+Reproduzida a pergunta "O ISO 13100 é utilizado em algum FLEXX BT?". O código
+`ISO 13100` era reconhecido, mas `FLEXX BT` não é um produto completo: é uma
+família de destino. Como a intenção antiga só reconhecia perguntas genéricas
+como "em algum produto?", a consulta caía no fluxo semântico/gerativo e o modelo
+encerrava a investigação depois de ler o boletim do próprio ISO.
+
+A busca reversa agora interpreta qualquer família `FLEXX <família>` sem número,
+aceita diferentes verbos de relação e procura o código de origem nos Boletins
+Técnicos de todos os produtos daquela família. O filtro de texto do Qdrant cobre
+grafias com espaço, hífen e sem separador; cada ocorrência ainda é confirmada
+localmente por código completo e família exata, para `BT` não aceitar `BTA`.
+Todas as páginas são percorridas e todos os produtos comprovados são devolvidos,
+sem top-k e sem LLM, tanto na rota síncrona quanto no streaming.
+
+Validação no Qdrant real: a pergunta retorna **FLEXX BT 2559, FLEXX BT 2560 e
+FLEXX BT 2563**. Nos três Boletins, o trecho de aplicação informa que o poliol
+aditivado, combinado com FLEXX ISO 13100, produz espuma microcelular
+elastomérica. A resposta completa foi gerada pelo caminho
+`catalogo-estruturado`, com os três documentos e trechos. A regressão focada
+passou com 41 testes e a suíte ampliada do motor com 232.
+
+A ocorrência confirma a avaliação arquitetural existente: Qdrant e vetores são
+adequados para recuperação, mas não garantem sozinhos relações, grandezas ou
+interseções completas. A camada de decisão deve evoluir de detectores dispersos
+para um planejador estruturado de consulta (entidades, papéis, filtros e
+critérios), seguido de recuperação exaustiva e verificação de evidência; o LLM
+fica responsável pela interpretação ambígua e redação. A direção está registrada
+em `docs/avaliacao_agente_2026-09-10.md`.
+
+---
+
 ## 2026-09-14 — Sessão 49: elastômero, dureza e curativo na mesma interseção
 
 Reproduzida a pergunta "peça de elastômero com mais de 85 de Dureza Shore A,

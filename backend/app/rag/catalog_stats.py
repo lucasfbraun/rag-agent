@@ -13,6 +13,8 @@ import re
 import unicodedata
 from typing import Any, Dict, List, Optional
 
+from qdrant_client.http import models as qmodels
+
 from app.rag.ingestion import get_qdrant_client
 from app.rag.exceptions import RetrievalIndisponivelError
 from app.config import COLLECTION_NAME
@@ -248,18 +250,34 @@ def _trecho_da_mencao(codigo: str, content: str, largura: int = 320) -> str:
 def buscar_produtos_que_mencionam(
     codigo: str,
     incluir_sensivel: bool = False,
+    familias_destino: Optional[List[str]] = None,
 ) -> List[Dict[str, Any]]:
     """Busca reversa completa: outros Boletins que mencionam ``codigo``.
 
-    O catálogo inteiro é paginado até o fim e o resultado não usa top-k nem
-    prévia. A confirmação local cobre código separado por espaço, hífen ou
-    quebra de linha, sem depender da tokenização do índice textual do Qdrant.
+    Todas as ocorrências textuais indexadas são paginadas até o fim e o
+    resultado não usa top-k nem prévia. A confirmação local cobre código
+    separado por espaço, hífen ou quebra de linha; o filtro inicial inclui
+    também as grafias compactas para não perder resultados por tokenização.
     O documento do próprio produto é excluído, pois seu cabeçalho normalmente
     menciona o código sem representar uma relação com outro item.
     """
     codigo = (codigo or "").strip()
     if not codigo:
         return []
+    partes_codigo = re.findall(r"[a-z0-9]+", _normalizar_sem_acentos(codigo))
+    if not partes_codigo:
+        return []
+    variantes_codigo = list(dict.fromkeys([
+        codigo,
+        " ".join(partes_codigo),
+        "-".join(partes_codigo),
+        "".join(partes_codigo),
+    ]))
+    familias = list(dict.fromkeys(
+        familia.strip().lower()
+        for familia in (familias_destino or [])
+        if familia and familia.strip()
+    ))
     encontrados: Dict[str, Dict[str, Any]] = {}
     try:
         client = get_qdrant_client()
@@ -267,6 +285,12 @@ def buscar_produtos_que_mencionam(
         while True:
             pontos, offset = client.scroll(
                 collection_name=COLLECTION_NAME,
+                scroll_filter=qmodels.Filter(should=[
+                    qmodels.FieldCondition(
+                        key="content", match=qmodels.MatchText(text=variante)
+                    )
+                    for variante in variantes_codigo
+                ]),
                 with_payload=["filepath", "filename", "content", "sensivel"],
                 with_vectors=False,
                 limit=1000,
@@ -286,6 +310,13 @@ def buscar_produtos_que_mencionam(
                 content = payload.get("content") or ""
                 if (
                     not produto
+                    or (
+                        familias
+                        and not any(
+                            _termo_bate_no_nome_produto(familia, produto)
+                            for familia in familias
+                        )
+                    )
                     or _codigo_bate_no_texto(codigo, produto)
                     or _codigo_bate_no_texto(codigo, filename)
                 ):
