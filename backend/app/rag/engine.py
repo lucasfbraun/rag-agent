@@ -302,31 +302,53 @@ def _resposta_recomenda_familia(answer: str, familia: str) -> bool:
     return bool(re.search(rf"{marcador}[^\n]{{0,80}}\b(?:flexx\s+)?{re.escape(familia)}\b", texto))
 
 
-def _eh_pedido_listagem_elastomeros(query: str) -> bool:
-    texto = _normalizar_para_regra(query)
-    return (
-        "elastomero" in texto
-        and bool(re.search(r"\b(?:list\w*|produtos?|quais|traga|mostre)\b", texto))
-    )
+# Pedido de natureza — "quais produtos SÃO X" — para QUALQUER X.
+#
+# Substitui `_eh_pedido_listagem_elastomeros` + `_pede_produtos_que_sao_elastomeros`,
+# que casavam a palavra "elastomero" literalmente. Era o modelo que obrigava um
+# commit novo por terminologia: adesivo, selante, catalisador e borracha não
+# tinham caminho nenhum. Agora o que se reconhece é a FORMA da pergunta, e o
+# termo sai dela.
+_PADROES_PEDIDO_DE_NATUREZA = (
+    r"\bprodutos?\s+que\s+(?:e|sao|seja|sejam)\s+(?:um\s+|uma\s+|os\s+|as\s+)?(?P<termo>[^?.,;\n]+)",
+    r"\b(?:quais|quantos?)\s+(?:sao\s+)?(?:os\s+|as\s+)?produtos?\s+"
+    r"(?:que\s+)?(?:e|sao|seja|sejam)\s+(?:um\s+|uma\s+)?(?P<termo>[^?.,;\n]+)",
+    r"\bprodutos?\s+do\s+tipo\s+(?P<termo>[^?.,;\n]+)",
+    r"\bquais\s+(?:sao\s+)?(?:os|as)\s+(?P<termo>[^?.,;\n]+?)\s+que\s+(?:temos|existem|ha)\b",
+    r"\b(?:liste|listar|traga|mostre)\s+(?:os\s+|as\s+)?produtos?\s+"
+    r"(?:que\s+(?:e|sao)\s+)?(?P<termo>[^?.,;\n]+)",
+)
+
+# Palavras que sobram na captura e não fazem parte do termo.
+_RUIDO_NO_TERMO_DE_NATUREZA = re.compile(
+    r"\b(?:ativos?|disponiveis?|catalogados?|no\s+catalogo|do\s+catalogo|"
+    r"que\s+temos|temos|existem?|ha|por\s+favor|hoje|atualmente)\b"
+)
 
 
-def _pede_produtos_que_sao_elastomeros(query: str) -> bool:
-    """Distingue identidade do produto de finalidade/aplicação produtiva."""
-    texto = _normalizar_para_regra(query)
-    if re.search(
-        r"\b(?:para|destinad\w*\s+a|usad\w*\s+(?:em|para)|produz\w*|fabric\w*)"
-        r".{0,45}\belastomer\w*\b",
-        texto,
-    ):
-        return False
-    padroes_identidade = (
-        r"\bprodutos?\s+que\s+(?:e|sao|seja|sejam)\s+(?:um\s+)?elastomer\w*\b",
-        r"\b(?:quantos?|quais)\b.{0,45}\bprodutos?\b.{0,25}\b(?:e|sao)\b"
-        r".{0,15}\belastomer\w*\b",
-        r"\bprodutos?\s+elastomer\w*\b",
-        r"\bquais\s+sao\b.{0,30}\belastomer\w*\b",
-    )
-    return any(re.search(padrao, texto) for padrao in padroes_identidade)
+def _extrair_pedido_natureza_do_produto(query: str) -> Optional[str]:
+    """Extrai o TERMO de um pedido de natureza, ou None se não for um.
+
+    Deliberadamente NÃO reconhece "produtos PARA X": finalidade tem caminho
+    próprio (`_responder_aplicacao_com_evidencia`), e confundir as duas é o
+    erro que a distinção natureza/uso existe para impedir.
+    """
+    texto = re.sub(r"[-_]", " ", _normalizar_para_regra(query))
+    if re.search(r"\b(?:para|pra|destinad\w*\s+a|usad\w*\s+(?:em|para))\b", texto):
+        return None
+    for padrao in _PADROES_PEDIDO_DE_NATUREZA:
+        match = re.search(padrao, texto)
+        if not match:
+            continue
+        termo = _RUIDO_NO_TERMO_DE_NATUREZA.split(match.group("termo"))[0].strip()
+        termo = re.sub(r"\s+", " ", termo).strip(" .,;:")
+        # Um termo longo demais é uma frase inteira capturada por engano, não
+        # uma natureza de produto.
+        if termo and len(termo.split()) <= 3:
+            return termo
+    return None
+
+
 
 
 def _extrair_pedido_classificacao_catalogo(query: str) -> Optional[str]:
@@ -655,63 +677,139 @@ def _responder_aplicacao_com_evidencia(query: str) -> Optional[Dict[str, Any]]:
     }
 
 
-def _responder_listagem_elastomeros(query: str) -> str:
-    """Resposta estruturada sem LLM para uma classificação de alto risco."""
+# O que cada nível da cascata PROVA, em português de vendedor. O rótulo é tão
+# importante quanto a lista: apresentar composição como se fosse identidade é
+# exatamente o erro que originou a regra estrita.
+_DESCRICAO_DO_NIVEL = {
+    "classificacao_estrutural": (
+        "o catálogo classifica estes produtos nessa tecnologia/linha",
+        "Esta é a evidência mais forte: vem da estrutura do catálogo, não de como o "
+        "Boletim foi redigido.",
+    ),
+    "identidade_declarada": (
+        "o Boletim Técnico do próprio produto declara que ele é isso",
+        "Evidência direta, extraída do Boletim de cada produto.",
+    ),
+    "composicao_comprovada": (
+        "o Boletim comprova que estes produtos produzem ou compõem um sistema desse tipo",
+        "ATENÇÃO: isto não é o mesmo que o produto SER aquilo — é o que ele produz ou "
+        "do que ele participa. Confirme com a equipe técnica antes de usar como "
+        "classificação.",
+    ),
+    "mencao_no_documento": (
+        "o termo aparece no documento destes produtos",
+        "É a evidência mais fraca do conjunto: uma menção no texto não classifica o "
+        "produto. Serve como ponto de partida para investigar, não como resposta.",
+    ),
+}
+
+_ORDEM_DOS_NIVEIS_NA_RESPOSTA = (
+    "classificacao_estrutural",
+    "identidade_declarada",
+    "composicao_comprovada",
+    "mencao_no_documento",
+)
+
+
+def _responder_natureza_do_produto(query: str, termo: str) -> str:
+    """Resposta determinística para "quais produtos são X", com a cascata.
+
+    Nunca termina em "não encontrei" quando existe evidência mais fraca: mostra
+    o nível que tem resultado e diz o que aquele nível realmente prova. Era o
+    contrário disso que fazia a pergunta sobre elastômeros devolver zero num
+    acervo com centenas de boletins.
+    """
     texto = _normalizar_para_regra(query)
     listar_todos = bool(re.search(r"\b(?:todos|todas|completa|completo)\b", texto))
-    exigir_natureza = _pede_produtos_que_sao_elastomeros(query)
+
+    # A tradução leigo→técnico entra como sinônimo: "borracha" encontra o que o
+    # acervo escreve como "elastômero". Fail-open — sem tradução, a busca segue
+    # só com a palavra do usuário.
+    try:
+        sinonimos = expandir_termos_do_dominio(termo)
+    except Exception as e:
+        logger.warning("Tradução do termo de natureza falhou (%s).", e)
+        sinonimos = []
+
     payload = json.loads(execute_mcp_tool(
-        "consultar_produtos_por_aplicacao",
-        {
-            "termo_busca": "elastômero",
-            "listar_todos": listar_todos,
-            "exigir_natureza": exigir_natureza,
-        },
+        "consultar_produtos_por_tipo",
+        {"termo": termo, "listar_todos": listar_todos, "sinonimos": sinonimos},
     ))
     if payload.get("erro"):
         return "Catálogo de produtos indisponível no momento. Tente novamente em instantes."
 
-    bucket = payload.get("por_aplicacao_ou_tipo") or {}
+    niveis = payload.get("niveis") or {}
+    atendido = payload.get("nivel_atendido")
+
+    if not atendido:
+        linhas = [
+            f'Não encontrei nenhum produto com evidência de ser "{termo}" no acervo indexado.',
+            "",
+            "Procurei de quatro formas: na classificação do catálogo, em declaração "
+            "explícita do Boletim, em comprovação de composição e em menção no texto "
+            "dos documentos. Nenhuma retornou resultado.",
+        ]
+        if sinonimos:
+            linhas.append(
+                f"Também procurei por {', '.join(sinonimos)}, que é como o setor "
+                "costuma chamar isso."
+            )
+        linhas.extend([
+            "",
+            "Isso significa ausência de evidência no acervo, não que o produto não "
+            "exista na empresa. Vale confirmar qual termo é usado internamente, ou "
+            "encaminhar para a equipe técnica.",
+        ])
+        return "\n".join(linhas)
+
+    rotulo, ressalva = _DESCRICAO_DO_NIVEL[atendido]
+    bucket = niveis.get(atendido) or {}
     total = int(bucket.get("total") or 0)
     produtos = bucket.get("produtos") or []
-    if not produtos:
-        if exigir_natureza:
-            return (
-                "Não encontrei Boletim Técnico que declare explicitamente que o próprio "
-                "produto é um elastômero. O acervo pode conter matérias-primas e sistemas "
-                "adequados para produzir poliuretano elastomérico, mas isso responde a uma "
-                "pergunta diferente e esses itens não foram contados."
-            )
-        return (
-            "Não encontrei produtos cujo Boletim Técnico comprove a produção de um "
-            "sistema elastomérico. Aditivos, catalisadores/curativos e isocianatos "
-            "que apenas participam da combinação não são classificados como elastômeros."
-        )
 
-    descricao = (
-        f"Encontrei {total} produtos cujo próprio Boletim Técnico declara que o produto "
-        "é um elastômero."
-        if exigir_natureza
-        else f"Encontrei {total} produtos que compõem sistemas com produção de poliuretano "
-        "elastomérico comprovada em Boletim Técnico."
-    )
-    linhas = [
-        descricao,
-        "",
-        *[f"{indice}. {produto}" for indice, produto in enumerate(produtos, start=1)],
-        "",
-        (
-            "Produtos que apenas participam da produção do elastômero foram excluídos: "
-            "finalidade de uso não comprova a natureza do próprio produto."
-            if exigir_natureza
-            else "Aditivos ADT, catalisadores/curativos CAT e produtos declarados como "
-            "isocianatos foram excluídos: participação na combinação não comprova que o "
-            "produto pertence à tecnologia de elastômeros."
-        ),
+    linhas = [f'Encontrei {total} produto(s) para "{termo}": {rotulo}.', ""]
+
+    # Diz o que os níveis MAIS FORTES não encontraram. Sem isto, o vendedor não
+    # tem como saber que está recebendo a segunda ou terceira melhor evidência.
+    vazios_acima = [
+        _DESCRICAO_DO_NIVEL[nivel][0]
+        for nivel in _ORDEM_DOS_NIVEIS_NA_RESPOSTA[
+            : _ORDEM_DOS_NIVEIS_NA_RESPOSTA.index(atendido)
+        ]
+        if not (niveis.get(nivel) or {}).get("total")
     ]
+    if vazios_acima:
+        linhas.extend([
+            "Antes disso eu procurei evidência mais forte e não encontrei: "
+            + "; ".join(vazios_acima)
+            + ".",
+            "",
+        ])
+
+    linhas.extend(f"{i}. {p}" for i, p in enumerate(produtos, start=1))
+    linhas.extend(["", ressalva])
+
+    if sinonimos:
+        linhas.append(
+            f'Termo do setor usado na busca além de "{termo}": {", ".join(sinonimos)}.'
+        )
     if bucket.get("truncado"):
-        linhas.extend(["", f"Quer que eu liste todos os {total} produtos?"])
+        linhas.extend(["", f"Quer que eu liste todos os {total}?"])
+
+    # Oferece o próximo nível quando ele tem mais a mostrar — o vendedor decide
+    # se quer ver evidência mais fraca, em vez de o sistema decidir por ele.
+    indice = _ORDEM_DOS_NIVEIS_NA_RESPOSTA.index(atendido)
+    for nivel in _ORDEM_DOS_NIVEIS_NA_RESPOSTA[indice + 1:]:
+        extra = int((niveis.get(nivel) or {}).get("total") or 0)
+        if extra > total:
+            linhas.extend([
+                "",
+                f"Existem ainda {extra} produto(s) numa evidência mais fraca — "
+                f"{_DESCRICAO_DO_NIVEL[nivel][0]}. Quer ver essa lista também?",
+            ])
+            break
     return "\n".join(linhas)
+
 
 
 def _responder_listagem_classificacao_catalogo(
@@ -960,7 +1058,18 @@ def _aplicar_guardrails_resposta(
                 "técnica/P&D."
             )
 
-    if _eh_pedido_listagem_elastomeros(query):
+    # Rede de segurança para pedido de NATUREZA respondido pelo LLM (um
+    # follow-up que herda o assunto do turno anterior, por exemplo). Aditivo e
+    # catalisador participam da reação mas não SÃO o material que ela produz —
+    # e isso vale para qualquer natureza, não só elastômero, que era como esta
+    # regra estava escrita.
+    #
+    # A proteção principal não é mais esta: o pedido de natureza é respondido
+    # deterministicamente por `_responder_natureza_do_produto`, e a exclusão
+    # acontece na evidência (`catalog_stats._produto_e_familia_auxiliar`), que
+    # é lugar melhor do que filtrar a prosa do modelo com regex.
+    termo_de_natureza = _extrair_pedido_natureza_do_produto(query)
+    if termo_de_natureza:
         linhas_seguras = []
         for linha in answer.splitlines():
             linha_normalizada = _normalizar_para_regra(linha)
@@ -972,8 +1081,9 @@ def _aplicar_guardrails_resposta(
         answer = "\n".join(linhas_seguras).strip()
         if not answer:
             answer = (
-                "Não encontrei na resposta produtos com evidência suficiente de sistema "
-                "elastomérico. Aditivos e catalisadores auxiliares foram excluídos."
+                f'Não encontrei na resposta produtos com evidência suficiente de ser '
+                f'"{termo_de_natureza}". Aditivos e catalisadores auxiliares foram '
+                "excluídos: participar da reação não é o mesmo que ser o material."
             )
 
     # Não existe fonte real de disponibilidade no sistema. Neutralizamos as
@@ -1750,14 +1860,18 @@ def run_pu_matcher_agent(
     if resposta_composta is not None:
         return resposta_composta
 
-    if _eh_pedido_listagem_elastomeros(query):
-        return {
-            "answer": _responder_listagem_elastomeros(query),
-            "sources": [],
-            "model_used": "catalogo-estruturado",
-        }
-
+    # Classificação explícita ("tecnologia X", "linha Y") tem precedência: o
+    # usuário nomeou a hierarquia, e ali a resposta é exata.
     classificacao_catalogo = _extrair_pedido_classificacao_catalogo(query)
+    if not classificacao_catalogo:
+        termo_natureza = _extrair_pedido_natureza_do_produto(query)
+        if termo_natureza:
+            return {
+                "answer": _responder_natureza_do_produto(query, termo_natureza),
+                "sources": [],
+                "model_used": "catalogo-estruturado",
+            }
+
     if classificacao_catalogo:
         return {
             "answer": _responder_listagem_classificacao_catalogo(
@@ -1878,17 +1992,20 @@ def stream_pu_matcher_agent(
             yield _json.dumps({"type": "done"}) + "\n"
             return
 
-        if _eh_pedido_listagem_elastomeros(query):
-            yield _json.dumps({
-                "type": "meta", "sources": [], "model_used": "catalogo-estruturado"
-            }) + "\n"
-            yield _json.dumps({
-                "type": "delta", "content": _responder_listagem_elastomeros(query)
-            }) + "\n"
-            yield _json.dumps({"type": "done"}) + "\n"
-            return
-
         classificacao_catalogo = _extrair_pedido_classificacao_catalogo(query)
+        if not classificacao_catalogo:
+            termo_natureza = _extrair_pedido_natureza_do_produto(query)
+            if termo_natureza:
+                yield _json.dumps({
+                    "type": "meta", "sources": [], "model_used": "catalogo-estruturado"
+                }) + "\n"
+                yield _json.dumps({
+                    "type": "delta",
+                    "content": _responder_natureza_do_produto(query, termo_natureza),
+                }) + "\n"
+                yield _json.dumps({"type": "done"}) + "\n"
+                return
+
         if classificacao_catalogo:
             yield _json.dumps({
                 "type": "meta", "sources": [], "model_used": "catalogo-estruturado"

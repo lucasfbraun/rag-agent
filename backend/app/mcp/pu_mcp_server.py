@@ -13,11 +13,12 @@ em si (Permission.VIEW_COSTS / VIEW_HOMOLOGATION_FULL) é tomada na camada HTTP
 precisar conhecer User/Role/Permission.
 """
 import json
-from typing import Dict, Any
+from typing import Any, Dict, List, Optional
 
 from app.rag.catalog_stats import (
     listar_produtos_por_aplicacao,
     listar_produtos_por_classificacao_catalogo as _listar_produtos_por_classificacao_catalogo,
+    listar_produtos_por_tipo,
     obter_estatisticas_catalogo,
 )
 from app.rag.exceptions import RetrievalIndisponivelError
@@ -101,6 +102,28 @@ def consultar_produtos_por_aplicacao(
         return {"erro": f"Catálogo indisponível no momento: {e}"}
 
 
+def consultar_produtos_por_tipo(
+    termo: str,
+    listar_todos: bool = False,
+    sinonimos: Optional[List[str]] = None,
+) -> Dict[str, Any]:
+    """Responde "quais produtos SÃO X" com quatro níveis de evidência.
+
+    Existe porque a pergunta de natureza não tem uma resposta binária neste
+    acervo: a prova pode estar na hierarquia do catálogo, numa declaração do
+    boletim, numa comprovação de composição, ou em nada além de uma menção. A
+    ferramenta devolve os quatro níveis e diz qual respondeu, para o agente
+    apresentar a evidência que existe em vez de encerrar em "não encontrei"
+    quando o nível mais forte está vazio.
+    """
+    try:
+        return listar_produtos_por_tipo(
+            termo, listar_todos=listar_todos, sinonimos=sinonimos
+        )
+    except RetrievalIndisponivelError as e:
+        return {"erro": f"Catálogo indisponível no momento: {e}"}
+
+
 def consultar_produtos_por_classificacao_catalogo(
     termo_classificacao: str,
     listar_todos: bool = False,
@@ -172,6 +195,22 @@ MCP_TOOLS_DEFINITIONS = [
                     "listar_todos": {"type": "boolean", "description": "true para listar TODOS os produtos encontrados, sem limite nenhum (só use depois que o usuário confirmar que quer a lista completa); false (padrão) devolve uma prévia de até 10"},
                     "exigir_natureza": {"type": "boolean", "description": "true quando a pergunta pedir a natureza do próprio material, como 'produtos que são elastômeros'. Para tecnologia/linha/sublinha do catálogo, use consultar_produtos_por_classificacao_catalogo. Use false para busca ampla por aplicação/finalidade."}
                 }
+            }
+        }
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "consultar_produtos_por_tipo",
+            "description": "Responde 'quais produtos SÃO X' (natureza/tipo do próprio produto: elastômero, adesivo, selante, catalisador, espuma, verniz...). Diferente de consultar_produtos_por_aplicacao, que responde 'produtos PARA X'. Devolve QUATRO níveis de evidência calculados na mesma varredura, do mais forte ao mais fraco — `classificacao_estrutural` (a hierarquia do catálogo classifica o produto assim), `identidade_declarada` (o Boletim do próprio produto diz que ele É aquilo), `composicao_comprovada` (o Boletim prova que ele produz ou compõe um sistema daquele tipo — NÃO é o mesmo que ser) e `mencao_no_documento` (o termo só aparece no texto; NUNCA apresente isto como classificação) — mais `nivel_atendido`, que diz qual deles respondeu. REGRA DE USO: apresente o nível atendido, diga explicitamente qual é a força daquela evidência, e quando o nível mais forte estiver vazio NÃO responda 'não encontrei' e pare: mostre o nível que tem resultado, rotulado pelo que ele realmente prova. Use `sinonimos` quando o vendedor usar uma palavra que o acervo não usa (ex: termo='borracha', sinonimos=['elastômero']).",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "termo": {"type": "string", "description": "A natureza/tipo perguntado, como o vendedor disse (ex: 'elastômero', 'adesivo', 'selante', 'borracha')"},
+                    "listar_todos": {"type": "boolean", "description": "true para listar todos os produtos de cada nível, sem limite (só depois que o usuário confirmar); false (padrão) devolve prévia de até 10"},
+                    "sinonimos": {"type": "array", "items": {"type": "string"}, "description": "Termos equivalentes usados no acervo, quando a palavra do vendedor não for a do setor. Opcional."}
+                },
+                "required": ["termo"]
             }
         }
     },
@@ -287,6 +326,12 @@ def execute_mcp_tool(
             arguments.get("termo_busca", ""),
             listar_todos=arguments.get("listar_todos", False),
             exigir_natureza=arguments.get("exigir_natureza", False),
+        ))
+    elif tool_name == "consultar_produtos_por_tipo":
+        return json.dumps(consultar_produtos_por_tipo(
+            arguments.get("termo", ""),
+            listar_todos=arguments.get("listar_todos", False),
+            sinonimos=arguments.get("sinonimos") or None,
         ))
     elif tool_name == "consultar_produtos_por_classificacao_catalogo":
         return json.dumps(consultar_produtos_por_classificacao_catalogo(

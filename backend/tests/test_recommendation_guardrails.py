@@ -173,55 +173,57 @@ def test_historico_persistido_preserva_correcoes_anteriores_para_guardrail():
 @patch("app.rag.engine.retrieve_products_context", return_value=[])
 @patch("app.rag.engine.execute_mcp_tool")
 @patch("app.rag.engine.litellm.completion")
-def test_listagem_de_elastomeros_remove_adts_e_cats_inseridos_pelo_llm(
-    mock_completion, mock_execute, _mock_retrieve
+def test_pedido_de_natureza_e_deterministico_e_nao_chama_o_llm(
+    mock_completion, mock_execute, mock_retrieve
 ):
+    """Listagem por natureza nunca passa pelo modelo: um top-k de trechos nunca
+    representa uma categoria fielmente, e a cascata de evidência é exata."""
     mock_execute.return_value = json.dumps({
-        "por_aplicacao_ou_tipo": {
-            "total": 2,
-            "produtos": ["FLEXX TH T160DE1", "FLEXX TH T193AH4"],
-            "truncado": False,
-        }
+        "nivel_atendido": "identidade_declarada",
+        "niveis": {
+            "classificacao_estrutural": {"total": 0, "produtos": [], "truncado": False},
+            "identidade_declarada": {
+                "total": 1, "produtos": ["FLEXX TH T160DE1"], "truncado": False,
+            },
+            "composicao_comprovada": {"total": 0, "produtos": [], "truncado": False},
+            "mencao_no_documento": {"total": 0, "produtos": [], "truncado": False},
+        },
     })
-    mock_completion.return_value = _completion(
-        "Produtos encontrados:\n"
-        "1. FLEXX ADT 432\n"
-        "2. FLEXX CAT 100\n"
-        "3. FLEXX TH T160DE1"
-    )
 
-    result = run_pu_matcher_agent(query="liste os produtos elastômeros")
+    result = run_pu_matcher_agent(query="quais produtos são elastômeros?")
 
-    assert "FLEXX ADT" not in result["answer"]
-    assert "FLEXX CAT" not in result["answer"]
     assert "FLEXX TH T160DE1" in result["answer"]
-    assert "2 produtos" in result["answer"]
+    assert mock_execute.call_args.args[0] == "consultar_produtos_por_tipo"
+    assert mock_execute.call_args.args[1]["termo"] == "elastomeros"
     mock_completion.assert_not_called()
-    _mock_retrieve.assert_not_called()
+    mock_retrieve.assert_not_called()
 
 
 @patch("app.rag.engine.retrieve_products_context", return_value=[])
 @patch("app.rag.engine.execute_mcp_tool")
 @patch("app.rag.engine.litellm.completion")
-def test_stream_listagem_elastomeros_tambem_e_deterministico(
+def test_stream_do_pedido_de_natureza_tambem_e_deterministico(
     mock_completion, mock_execute, mock_retrieve
 ):
     mock_execute.return_value = json.dumps({
-        "por_aplicacao_ou_tipo": {
-            "total": 1,
-            "produtos": ["FLEXX TH T160DE1"],
-            "truncado": False,
-        }
+        "nivel_atendido": "identidade_declarada",
+        "niveis": {
+            "classificacao_estrutural": {"total": 0, "produtos": [], "truncado": False},
+            "identidade_declarada": {
+                "total": 1, "produtos": ["FLEXX TH T160DE1"], "truncado": False,
+            },
+            "composicao_comprovada": {"total": 0, "produtos": [], "truncado": False},
+            "mencao_no_documento": {"total": 0, "produtos": [], "truncado": False},
+        },
     })
 
     events = [
         json.loads(line)
-        for line in stream_pu_matcher_agent(query="liste os produtos elastômeros")
+        for line in stream_pu_matcher_agent(query="quais produtos são elastômeros?")
     ]
-    answer = "".join(event.get("content", "") for event in events if event["type"] == "delta")
+    answer = "".join(e.get("content", "") for e in events if e["type"] == "delta")
 
     assert "FLEXX TH T160DE1" in answer
-    assert "FLEXX ADT" not in answer
     mock_completion.assert_not_called()
     mock_retrieve.assert_not_called()
 
@@ -229,53 +231,115 @@ def test_stream_listagem_elastomeros_tambem_e_deterministico(
 @patch("app.rag.engine.retrieve_products_context", return_value=[])
 @patch("app.rag.engine.execute_mcp_tool")
 @patch("app.rag.engine.litellm.completion")
-def test_pergunta_produtos_que_sao_elastomeros_exige_natureza_do_produto(
+def test_nivel_fraco_e_mostrado_em_vez_de_encerrar_em_nao_encontrei(
     mock_completion, mock_execute, mock_retrieve
 ):
+    """O CASO RELATADO: nenhum boletim declara identidade, mas há evidência de
+    composição. Antes a resposta era "não encontrei" e fim."""
     mock_execute.return_value = json.dumps({
-        "por_aplicacao_ou_tipo": {
-            "total": 0,
-            "produtos": [],
-            "truncado": False,
-        }
-    })
-
-    result = run_pu_matcher_agent(query="temos quantos produtos que são elastômeros?")
-
-    mock_execute.assert_called_once_with(
-        "consultar_produtos_por_aplicacao",
-        {
-            "termo_busca": "elastômero",
-            "listar_todos": False,
-            "exigir_natureza": True,
+        "nivel_atendido": "composicao_comprovada",
+        "niveis": {
+            "classificacao_estrutural": {"total": 0, "produtos": [], "truncado": False},
+            "identidade_declarada": {"total": 0, "produtos": [], "truncado": False},
+            "composicao_comprovada": {
+                "total": 2,
+                "produtos": ["FLEXX TH T160DE1", "FLEXX TH T193AH4"],
+                "truncado": False,
+            },
+            "mencao_no_documento": {"total": 9, "produtos": [], "truncado": False},
         },
-    )
-    assert "próprio produto é um elastômero" in result["answer"].lower()
-    assert "adequados para produzir" in result["answer"].lower()
+    })
+
+    result = run_pu_matcher_agent(query="quais produtos são elastômeros?")
+    answer = result["answer"]
+
+    assert "FLEXX TH T160DE1" in answer
+    assert "FLEXX TH T193AH4" in answer
+    # Diz que procurou evidência mais forte e não achou — senão o vendedor não
+    # tem como saber que está recebendo a segunda melhor evidência.
+    assert "evidência mais forte" in answer
+    assert "não é o mesmo que o produto SER aquilo" in answer
     mock_completion.assert_not_called()
-    mock_retrieve.assert_not_called()
 
 
 @patch("app.rag.engine.retrieve_products_context", return_value=[])
 @patch("app.rag.engine.execute_mcp_tool")
 @patch("app.rag.engine.litellm.completion")
-def test_produtos_para_produzir_elastomero_mantem_consulta_de_finalidade(
+def test_ausencia_total_nao_e_apresentada_como_inexistencia_do_produto(
     mock_completion, mock_execute, mock_retrieve
 ):
     mock_execute.return_value = json.dumps({
-        "por_aplicacao_ou_tipo": {
-            "total": 1,
-            "produtos": ["FLEXX TH T160DE1"],
-            "truncado": False,
-        }
+        "nivel_atendido": None,
+        "niveis": {
+            n: {"total": 0, "produtos": [], "truncado": False}
+            for n in (
+                "classificacao_estrutural", "identidade_declarada",
+                "composicao_comprovada", "mencao_no_documento",
+            )
+        },
     })
 
-    result = run_pu_matcher_agent(query="liste produtos para produzir elastômero")
+    result = run_pu_matcher_agent(query="quais produtos são selantes?")
 
-    assert mock_execute.call_args.args[1]["exigir_natureza"] is False
-    assert "compõem sistemas com produção" in result["answer"]
+    assert "não que o produto não exista na empresa" in result["answer"]
     mock_completion.assert_not_called()
-    mock_retrieve.assert_not_called()
+
+
+@pytest.mark.parametrize(
+    "pergunta,termo",
+    [
+        ("quais produtos são elastômeros?", "elastomeros"),
+        ("produtos que são adesivos", "adesivos"),
+        ("produtos do tipo selante", "selante"),
+        ("liste os produtos que são catalisadores", "catalisadores"),
+    ],
+)
+@patch("app.rag.engine.retrieve_products_context", return_value=[])
+@patch("app.rag.engine.execute_mcp_tool")
+@patch("app.rag.engine.litellm.completion")
+def test_o_caminho_de_natureza_vale_para_qualquer_terminologia(
+    mock_completion, mock_execute, mock_retrieve, pergunta, termo
+):
+    """O motor tinha seis funções codificadas só para "elastômero". Qualquer
+    outra terminologia exigiria mais uma."""
+    mock_execute.return_value = json.dumps({
+        "nivel_atendido": None,
+        "niveis": {
+            n: {"total": 0, "produtos": [], "truncado": False}
+            for n in (
+                "classificacao_estrutural", "identidade_declarada",
+                "composicao_comprovada", "mencao_no_documento",
+            )
+        },
+    })
+
+    run_pu_matcher_agent(query=pergunta)
+
+    assert mock_execute.call_args.args[0] == "consultar_produtos_por_tipo"
+    assert mock_execute.call_args.args[1]["termo"] == termo
+    mock_completion.assert_not_called()
+
+
+@patch("app.rag.engine._responder_aplicacao_com_evidencia", return_value=None)
+@patch("app.rag.engine.retrieve_products_context", return_value=[])
+@patch("app.rag.engine.execute_mcp_tool")
+@patch("app.rag.engine.litellm.completion")
+def test_pergunta_de_finalidade_nao_vai_para_o_caminho_de_natureza(
+    mock_completion, mock_execute, mock_retrieve, _mock_aplicacao
+):
+    """"produtos PARA produzir elastômero" é finalidade, não natureza. Confundir
+    as duas é o erro que a distinção existe para impedir — e agora a finalidade
+    segue para o caminho genérico de aplicação, não para um ramo do termo."""
+    mock_completion.return_value = _completion("Resposta do modelo.")
+
+    run_pu_matcher_agent(query="liste produtos para produzir elastômero")
+
+    chamadas_de_natureza = [
+        c for c in mock_execute.call_args_list
+        if c.args and c.args[0] == "consultar_produtos_por_tipo"
+    ]
+    assert chamadas_de_natureza == []
+
 
 
 @patch("app.rag.engine.retrieve_products_context", return_value=[])
