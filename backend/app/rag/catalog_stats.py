@@ -165,54 +165,94 @@ def _normalizar_sem_acentos(texto: str) -> str:
     return "".join(c for c in decomposed if not unicodedata.combining(c))
 
 
-def _conteudo_declara_produto_como_isocianato(filepath: str, content: str) -> bool:
-    """Detecta quando o próprio produto é explicitamente um isocianato."""
-    nome_arquivo = _SEPARADOR_CAMINHO.split(filepath)[-1]
-    if "boletim" not in _normalizar_sem_acentos(nome_arquivo):
-        return False
-    texto = _normalizar_sem_acentos(content)
-    produto = _produto_do_filepath(filepath)
-    partes_produto = re.findall(r"[a-z0-9]+", _normalizar_sem_acentos(produto))
+def _padrao_nome_do_produto(produto: Optional[str]) -> Optional[str]:
+    """Regex que casa o nome do produto no texto, tolerando espaço, hífen e
+    símbolos entre as partes ("FLEXX AG 2032", "FLEXX® AG-2032")."""
+    partes_produto = re.findall(r"[a-z0-9]+", _normalizar_sem_acentos(produto or ""))
     if not partes_produto:
-        return False
-    padrao_produto = r"(?<![a-z0-9])" + r"[^a-z0-9]*".join(
-        map(re.escape, partes_produto)
+        return None
+    return (
+        r"(?<![a-z0-9])"
+        + r"[^a-z0-9]*".join(map(re.escape, partes_produto))
+        + r"(?![a-z0-9])"
     )
-    padrao_produto += r"(?![a-z0-9])"
-    return bool(re.search(
-        padrao_produto
-        + r"\s*(?:,|-)?\s*(?:e|trata-se\s+de|consiste\s+em)\s+"
-        + r"(?:um\s+)?isocianato\b",
-        texto,
-    ))
 
 
-def _conteudo_declara_produto_como_elastomero(filepath: str, content: str) -> bool:
-    """Detecta identidade explícita, não apenas uso na produção do material.
+def _variantes_do_termo(termo: str) -> List[str]:
+    """Formas do termo que podem aparecer no boletim: singular, plural e a
+    forma adjetiva quando ela é derivável ("elastômero" → "elastomérico").
 
-    O nome do produto precisa ser o sujeito da declaração no próprio Boletim.
-    Assim, ``FLEXX X é um elastômero`` qualifica, enquanto ``FLEXX X produz
-    elastômero`` e ``adequado para produção de poliuretano elastomérico`` não.
+    Uma variante que não existe na língua ("adesivo" → "adesivico") não causa
+    dano: ela simplesmente nunca casa com nada. O custo de gerá-la é menor que
+    o de manter uma tabela de exceções por termo — que é exatamente o débito
+    que este módulo está saindo de.
+    """
+    base = _normalizar_sem_acentos(termo).strip()
+    if not base:
+        return []
+    variantes = [base]
+    if base.endswith("ao"):
+        variantes.append(f"{base[:-2]}oes")
+    elif base.endswith("s"):
+        variantes.append(base[:-1])
+    else:
+        variantes.append(f"{base}s")
+    # Forma adjetiva: "elastomero" → "elastomerico"/"elastomerica".
+    if base.endswith("o") and len(base) > 4:
+        radical = base[:-1]
+        variantes.extend([f"{radical}ico", f"{radical}icos", f"{radical}ica", f"{radical}icas"])
+    return list(dict.fromkeys(variantes))
+
+
+def _conteudo_declara_produto_como(
+    termo: str, filepath: str, content: str
+) -> bool:
+    """O próprio Boletim diz que o produto É da natureza `termo`.
+
+    GENÉRICA DESDE 18/09/2026. Antes existiam duas cópias literais desta
+    função — uma para "isocianato", outra para "elastômero" — idênticas exceto
+    pelo substantivo. Cada natureza nova que alguém quisesse perguntar exigia
+    uma terceira cópia, e foi assim que o motor acumulou seis funções só sobre
+    elastômero. O termo agora é parâmetro.
+
+    O nome do produto precisa ser o SUJEITO da declaração: "FLEXX X é um
+    elastômero" qualifica; "FLEXX X produz elastômero" e "adequado para
+    produção de poliuretano elastomérico" não — aquilo é finalidade, e tem
+    nível próprio na cascata (`_conteudo_comprova_composicao_do_termo`).
     """
     nome_arquivo = _SEPARADOR_CAMINHO.split(filepath)[-1]
     if "boletim" not in _normalizar_sem_acentos(nome_arquivo):
         return False
-    texto = _normalizar_sem_acentos(content)
-    produto = _produto_do_filepath(filepath)
-    partes_produto = re.findall(r"[a-z0-9]+", _normalizar_sem_acentos(produto))
-    if not partes_produto:
+    padrao_produto = _padrao_nome_do_produto(_produto_do_filepath(filepath))
+    if not padrao_produto:
         return False
-    padrao_produto = r"(?<![a-z0-9])" + r"[^a-z0-9]*".join(
-        map(re.escape, partes_produto)
+    variantes = _variantes_do_termo(termo)
+    if not variantes:
+        return False
+    alternativas = "|".join(re.escape(v) for v in variantes)
+    # "poliuretano/produto/material <adjetivo>" é a forma como um boletim
+    # costuma declarar natureza, e vale tanto para elastomérico quanto para
+    # qualquer outro adjetivo derivado do termo.
+    padrao_natureza = (
+        rf"(?:(?:poliuretano|produto|material|sistema)\s+)?(?:{alternativas})\b"
     )
-    padrao_produto += r"(?![a-z0-9])"
     return bool(re.search(
         padrao_produto
         + r"\s*(?:,|-)?\s*(?:e|trata-se\s+de|consiste\s+em)\s+"
-        + r"(?:um\s+|uma\s+)?(?:elastomero\b|poliuretano\s+elastomerico\b|"
-        + r"(?:produto|material)\s+elastomerico\b)",
-        texto,
+        + r"(?:um\s+|uma\s+)?"
+        + padrao_natureza,
+        _normalizar_sem_acentos(content),
     ))
+
+
+def _conteudo_declara_produto_como_isocianato(filepath: str, content: str) -> bool:
+    """Detecta quando o próprio produto é explicitamente um isocianato."""
+    return _conteudo_declara_produto_como("isocianato", filepath, content)
+
+
+def _conteudo_declara_produto_como_elastomero(filepath: str, content: str) -> bool:
+    """Detecta identidade explícita, não apenas uso na produção do material."""
+    return _conteudo_declara_produto_como("elastomero", filepath, content)
 
 
 def _rotulo_estrutural_catalogo(valor: str) -> str:
@@ -796,6 +836,213 @@ def listar_produtos_por_classificacao_catalogo(
         "classificacoes": sorted(nomes_classificacoes[alvo] for alvo in alvos),
         **resumo,
         "classificacoes_disponiveis": sorted(nomes_classificacoes.values()),
+    }
+
+
+# ---------------------------------------------------------------------------
+# Cascata de evidência para "quais produtos são X" — genérica por termo
+# ---------------------------------------------------------------------------
+#
+# POR QUE ISTO EXISTE (18/09/2026)
+#
+# A pergunta "quais produtos são elastômeros?" respondia "não encontrei" num
+# acervo com centenas de boletins. A causa não era recuperação: a varredura lê
+# a coleção inteira. Era a REGRA DE ACEITAÇÃO, que exigia o boletim conter
+# literalmente "<produto> é um elastômero" — uma frase que boletim técnico não
+# escreve. O resultado era zero, sempre, por mais documentos que existissem.
+#
+# Essa regra foi apertada de propósito, depois que um isocianato apareceu
+# listado como elastômero por participar de uma combinação. A correção trocou
+# um erro pelo oposto: de listar demais para não listar nada. É o pêndulo que
+# acontece quando não há medição — e que, no motor antigo, se repetia por
+# terminologia, uma função nova de cada vez.
+#
+# A saída não é escolher entre estrito e frouxo. É ORDENAR A EVIDÊNCIA e dizer
+# ao usuário qual nível respondeu. Do mais forte ao mais fraco:
+#
+#   1. classificacao_estrutural — a árvore de pastas do catálogo diz que o
+#      produto pertence àquela tecnologia/linha. É a única prova independente
+#      de como o boletim foi redigido, e por isso vem primeiro.
+#   2. identidade_declarada — o boletim do próprio produto diz que ele É aquilo.
+#   3. composicao_comprovada — o boletim comprova que o produto produz, forma
+#      ou compõe um sistema daquele tipo. Não é o mesmo que ser, e é rotulado
+#      como tal.
+#   4. mencao_no_documento — o termo aparece no documento. É o mais fraco e
+#      nunca deve ser apresentado como classificação; serve para não terminar
+#      a conversa em "não há nada" quando há algo a investigar.
+#
+# NADA AQUI É ESPECÍFICO DE ELASTÔMERO. O termo é parâmetro em todos os quatro
+# níveis, e a mesma cascata responde "quais produtos são adesivos", "são
+# selantes", "são catalisadores" ou qualquer terminologia que o usuário traga.
+
+NIVEIS_DE_EVIDENCIA = (
+    "classificacao_estrutural",
+    "identidade_declarada",
+    "composicao_comprovada",
+    "mencao_no_documento",
+)
+
+# Aditivos e catalisadores participam da reação, mas não SÃO o material que ela
+# produz — vale para elastômero, para espuma e para qualquer outra natureza.
+# Era uma regra escrita à mão dentro do caminho de elastômero; virou dado, e
+# por isso passou a valer para todo termo.
+_FAMILIAS_AUXILIARES_DO_CATALOGO = ("adt", "cat")
+
+# Naturezas que, quando declaradas, impedem o produto de ser classificado como
+# OUTRA coisa. Um produto que o boletim declara isocianato não é um elastômero,
+# por mais que participe da combinação que produz um. A lista é comparada com o
+# termo perguntado: quem pergunta "quais produtos são isocianatos" não é
+# excluído pela própria natureza que pediu.
+_NATUREZAS_EXCLUDENTES = ("isocianato",)
+
+
+def _produto_e_familia_auxiliar(produto: str) -> bool:
+    rotulo = _rotulo_estrutural_catalogo(produto)
+    return any(
+        re.search(rf"(?<![a-z0-9]){re.escape(sigla)}(?![a-z0-9])", rotulo)
+        for sigla in _FAMILIAS_AUXILIARES_DO_CATALOGO
+    )
+
+
+def _conteudo_comprova_composicao_do_termo(
+    termo: str, filepath: str, content: str
+) -> bool:
+    """O boletim comprova que o produto PRODUZ ou COMPÕE algo daquele tipo.
+
+    Versão genérica de `_conteudo_comprova_tipo_elastomero`. Distinta da
+    identidade de propósito: "sistema para obtenção de elastômeros" prova
+    finalidade, não natureza, e a resposta precisa dizer qual das duas está
+    mostrando em vez de tratar como equivalentes.
+    """
+    nome_arquivo = _SEPARADOR_CAMINHO.split(filepath)[-1]
+    if "boletim" not in _normalizar_sem_acentos(nome_arquivo):
+        return False
+    variantes = _variantes_do_termo(termo)
+    if not variantes:
+        return False
+    alternativas = "|".join(re.escape(v) for v in variantes)
+    texto = _normalizar_sem_acentos(content)
+    padroes = (
+        rf"\bproduz(?:ir|em)?\s+(?:um\s+|uma\s+)?(?:{alternativas})\b",
+        rf"\bobter\s+(?:um\s+|uma\s+)?(?:{alternativas})\b",
+        rf"\b(?:formacao|producao|fabricacao|obtencao)\s+(?:de\s+)?"
+        rf"(?:um\s+|uma\s+)?(?:{alternativas})\b",
+        rf"\b(?:sistema|poliuretano|produto|material|peca|pecas)\s+(?:{alternativas})\b",
+    )
+    return any(re.search(padrao, texto) for padrao in padroes)
+
+
+def listar_produtos_por_tipo(
+    termo: str,
+    listar_todos: bool = False,
+    sinonimos: Optional[List[str]] = None,
+) -> Dict[str, Any]:
+    """Responde "quais produtos são X" com os quatro níveis de evidência.
+
+    Faz UMA varredura da coleção e devolve os quatro níveis calculados, mais
+    `nivel_atendido`: o mais forte que encontrou algo. Quem chama decide como
+    apresentar, mas tem todos os níveis à mão — é o que permite responder
+    "nenhum boletim declara isso, porém 45 produtos compõem sistemas desse
+    tipo, veja" em vez de encerrar em "não encontrei".
+
+    `sinonimos` são termos equivalentes vindos de fora (a tradução
+    leigo→técnico de `app.rag.query_expansion`, por exemplo, que transforma
+    "borracha" em "elastômero"). Entram em todos os níveis junto com o termo
+    original, para que a terminologia do usuário não precise coincidir com a
+    do acervo.
+    """
+    termos = [t for t in [termo, *(sinonimos or [])] if t and t.strip()]
+    if not termos:
+        return {
+            "termo_buscado": termo,
+            "nivel_atendido": None,
+            "niveis": {nivel: _resumo_lista(set(), listar_todos) for nivel in NIVEIS_DE_EVIDENCIA},
+            "classificacoes_encontradas": [],
+        }
+
+    por_nivel: Dict[str, set] = {nivel: set() for nivel in NIVEIS_DE_EVIDENCIA}
+    excluidos: set = set()
+
+    try:
+        client = get_qdrant_client()
+        classificacoes_por_produto: Dict[str, set] = {}
+        nomes_classificacoes: Dict[str, str] = {}
+        offset = None
+        while True:
+            pontos, offset = client.scroll(
+                collection_name=COLLECTION_NAME,
+                with_payload=["filepath", "content"],
+                with_vectors=False,
+                limit=1000,
+                offset=offset,
+            )
+            for ponto in pontos:
+                payload = ponto.payload or {}
+                filepath = (payload.get("filepath") or "").strip()
+                produto = _produto_do_filepath(filepath)
+                if not produto:
+                    continue
+                content = payload.get("content") or ""
+
+                # Nível 1 — hierarquia do catálogo, independente do texto.
+                if _documento_atual_com_produto_catalogavel(filepath, produto):
+                    for rotulo, nome in _classificacoes_do_filepath(filepath, produto):
+                        classificacoes_por_produto.setdefault(produto, set()).add(rotulo)
+                        nomes_classificacoes.setdefault(rotulo, nome)
+
+                # Natureza conflitante declarada: tira o produto dos níveis de
+                # classificação (1 a 3), nunca do nível de menção.
+                for natureza in _NATUREZAS_EXCLUDENTES:
+                    if any(
+                        _normalizar_sem_acentos(natureza) in _variantes_do_termo(t)
+                        for t in termos
+                    ):
+                        continue
+                    if _conteudo_declara_produto_como(natureza, filepath, content):
+                        excluidos.add(produto)
+
+                for t in termos:
+                    if _conteudo_declara_produto_como(t, filepath, content):
+                        por_nivel["identidade_declarada"].add(produto)
+                    if _conteudo_comprova_composicao_do_termo(t, filepath, content):
+                        por_nivel["composicao_comprovada"].add(produto)
+                    if _termo_bate_no_conteudo(t, content.lower()):
+                        por_nivel["mencao_no_documento"].add(produto)
+            if offset is None:
+                break
+    except Exception as e:
+        raise RetrievalIndisponivelError(str(e)) from e
+
+    disponiveis = set(nomes_classificacoes)
+    alvos: set = set()
+    for t in termos:
+        alvos |= _resolver_classificacoes_catalogo(t, disponiveis)
+    por_nivel["classificacao_estrutural"] = {
+        produto
+        for produto, classificacoes in classificacoes_por_produto.items()
+        if classificacoes.intersection(alvos)
+    }
+
+    # Aditivos/catalisadores e naturezas conflitantes saem dos níveis que
+    # afirmam CLASSIFICAÇÃO. O nível de menção é explicitamente "apareceu no
+    # documento" e não afirma nada sobre o produto, então não filtra.
+    auxiliares = {p for p in por_nivel["identidade_declarada"] | por_nivel["composicao_comprovada"]
+                  if _produto_e_familia_auxiliar(p)}
+    for nivel in ("identidade_declarada", "composicao_comprovada"):
+        por_nivel[nivel] -= excluidos | auxiliares
+
+    nivel_atendido = next(
+        (nivel for nivel in NIVEIS_DE_EVIDENCIA if por_nivel[nivel]), None
+    )
+    return {
+        "termo_buscado": termo,
+        "termos_pesquisados": termos,
+        "nivel_atendido": nivel_atendido,
+        "niveis": {
+            nivel: _resumo_lista(por_nivel[nivel], listar_todos)
+            for nivel in NIVEIS_DE_EVIDENCIA
+        },
+        "classificacoes_encontradas": sorted(nomes_classificacoes[a] for a in alvos),
     }
 
 
