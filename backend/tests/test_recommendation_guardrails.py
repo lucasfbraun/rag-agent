@@ -265,9 +265,14 @@ def test_nivel_fraco_e_mostrado_em_vez_de_encerrar_em_nao_encontrei(
 @patch("app.rag.engine.retrieve_products_context", return_value=[])
 @patch("app.rag.engine.execute_mcp_tool")
 @patch("app.rag.engine.litellm.completion")
-def test_ausencia_total_nao_e_apresentada_como_inexistencia_do_produto(
+def test_cascata_vazia_segue_para_o_caminho_conversacional(
     mock_completion, mock_execute, mock_retrieve
 ):
+    """VÁLVULA DE SEGURANÇA. Nada nos quatro níveis quase sempre significa que
+    o termo capturado não era uma natureza — o detector é regex sobre a FORMA
+    da pergunta e sempre deixa passar algum caso. Encerrar ali com resposta
+    determinística seria o mesmo beco sem saída que este trabalho existe para
+    matar, só que com outra palavra."""
     mock_execute.return_value = json.dumps({
         "nivel_atendido": None,
         "niveis": {
@@ -278,11 +283,14 @@ def test_ausencia_total_nao_e_apresentada_como_inexistencia_do_produto(
             )
         },
     })
+    mock_completion.return_value = _completion("Resposta do modelo com contexto.")
 
-    result = run_pu_matcher_agent(query="quais produtos são selantes?")
+    result = run_pu_matcher_agent(query="quais produtos são atóxicos?")
 
-    assert "não que o produto não exista na empresa" in result["answer"]
-    mock_completion.assert_not_called()
+    # A pergunta chegou ao caminho normal, com RAG e ferramentas.
+    mock_completion.assert_called()
+    mock_retrieve.assert_called()
+    assert result["model_used"] != "catalogo-estruturado"
 
 
 @pytest.mark.parametrize(
@@ -303,13 +311,14 @@ def test_o_caminho_de_natureza_vale_para_qualquer_terminologia(
     """O motor tinha seis funções codificadas só para "elastômero". Qualquer
     outra terminologia exigiria mais uma."""
     mock_execute.return_value = json.dumps({
-        "nivel_atendido": None,
+        "nivel_atendido": "identidade_declarada",
         "niveis": {
-            n: {"total": 0, "produtos": [], "truncado": False}
-            for n in (
-                "classificacao_estrutural", "identidade_declarada",
-                "composicao_comprovada", "mencao_no_documento",
-            )
+            "classificacao_estrutural": {"total": 0, "produtos": [], "truncado": False},
+            "identidade_declarada": {
+                "total": 1, "produtos": ["FLEXX XX 1"], "truncado": False,
+            },
+            "composicao_comprovada": {"total": 0, "produtos": [], "truncado": False},
+            "mencao_no_documento": {"total": 0, "produtos": [], "truncado": False},
         },
     })
 

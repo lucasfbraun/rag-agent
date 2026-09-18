@@ -315,8 +315,33 @@ _PADROES_PEDIDO_DE_NATUREZA = (
     r"(?:que\s+)?(?:e|sao|seja|sejam)\s+(?:um\s+|uma\s+)?(?P<termo>[^?.,;\n]+)",
     r"\bprodutos?\s+do\s+tipo\s+(?P<termo>[^?.,;\n]+)",
     r"\bquais\s+(?:sao\s+)?(?:os|as)\s+(?P<termo>[^?.,;\n]+?)\s+que\s+(?:temos|existem|ha)\b",
+    # `que (é|são)` OBRIGATÓRIO aqui. Enquanto foi opcional (revisão de
+    # 18/09/2026), "liste os produtos da família AG" virava um pedido de
+    # natureza com o termo "da familia ag" e terminava num beco sem saída
+    # determinístico — uma pergunta que TINHA caminho próprio e funcionava,
+    # quebrada por este detector.
     r"\b(?:liste|listar|traga|mostre)\s+(?:os\s+|as\s+)?produtos?\s+"
-    r"(?:que\s+(?:e|sao)\s+)?(?P<termo>[^?.,;\n]+)",
+    r"que\s+(?:e|sao)\s+(?P<termo>[^?.,;\n]+)",
+)
+
+# Um termo que começa com preposição/artigo descreve uma RELAÇÃO ("da família
+# AG", "do cliente Alpha", "de alta densidade"), não a natureza do produto.
+_PREAMBULO_RELACIONAL = re.compile(
+    r"^(?:de|do|da|dos|das|no|na|nos|nas|em|com|sem|para|pra|pelo|pela)\b"
+)
+
+# Particípios e adjetivos de ESTADO/situação comercial. Descrevem como o
+# produto está, não o que ele é: "certificados pela ABNT", "fornecidos em
+# tambor", "novos", "obsoletos". Todos casavam a forma "quais produtos são X" e
+# eram respondidos com autoridade determinística sobre uma natureza inexistente.
+_ADJETIVO_DE_ESTADO = re.compile(
+    r"^(?:"
+    r"\w+(?:ad|id)[oa]s?"                      # certificados, fornecidos, homologada
+    r"|nov[oa]s?|velh[oa]s?|antig[oa]s?"
+    r"|ativ[oa]s?|inativ[oa]s?|obsolet[oa]s?|descontinuad[oa]s?"
+    r"|disponiveis?|compativeis?|similares?|equivalentes?"
+    r"|barat[oa]s?|car[oa]s?|melhores?|piores?"
+    r")$"
 )
 
 # Palavras que sobram na captura e não fazem parte do termo.
@@ -342,10 +367,21 @@ def _extrair_pedido_natureza_do_produto(query: str) -> Optional[str]:
             continue
         termo = _RUIDO_NO_TERMO_DE_NATUREZA.split(match.group("termo"))[0].strip()
         termo = re.sub(r"\s+", " ", termo).strip(" .,;:")
+        if not termo:
+            continue
         # Um termo longo demais é uma frase inteira capturada por engano, não
         # uma natureza de produto.
-        if termo and len(termo.split()) <= 3:
-            return termo
+        if len(termo.split()) > 3:
+            continue
+        if _PREAMBULO_RELACIONAL.match(termo):
+            continue
+        # A checagem é sobre a PRIMEIRA palavra, não sobre o termo inteiro:
+        # "compatíveis com PVC" e "certificados pela ABNT" descrevem estado
+        # tanto quanto "compatíveis" e "certificados" sozinhos, e escapavam
+        # quando a comparação exigia o termo completo.
+        if _ADJETIVO_DE_ESTADO.match(termo.split()[0]):
+            continue
+        return termo
     return None
 
 
@@ -711,7 +747,7 @@ _ORDEM_DOS_NIVEIS_NA_RESPOSTA = (
 )
 
 
-def _responder_natureza_do_produto(query: str, termo: str) -> str:
+def _responder_natureza_do_produto(query: str, termo: str) -> Optional[str]:
     """Resposta determinística para "quais produtos são X", com a cascata.
 
     Nunca termina em "não encontrei" quando existe evidência mais fraca: mostra
@@ -742,25 +778,22 @@ def _responder_natureza_do_produto(query: str, termo: str) -> str:
     atendido = payload.get("nivel_atendido")
 
     if not atendido:
-        linhas = [
-            f'Não encontrei nenhum produto com evidência de ser "{termo}" no acervo indexado.',
-            "",
-            "Procurei de quatro formas: na classificação do catálogo, em declaração "
-            "explícita do Boletim, em comprovação de composição e em menção no texto "
-            "dos documentos. Nenhuma retornou resultado.",
-        ]
-        if sinonimos:
-            linhas.append(
-                f"Também procurei por {', '.join(sinonimos)}, que é como o setor "
-                "costuma chamar isso."
-            )
-        linhas.extend([
-            "",
-            "Isso significa ausência de evidência no acervo, não que o produto não "
-            "exista na empresa. Vale confirmar qual termo é usado internamente, ou "
-            "encaminhar para a equipe técnica.",
-        ])
-        return "\n".join(linhas)
+        # VÁLVULA DE SEGURANÇA: nada em nenhum dos quatro níveis significa, na
+        # maioria das vezes, que o termo capturado não era uma natureza de
+        # produto — o detector é regex sobre a FORMA da pergunta e sempre vai
+        # deixar passar algum caso ("quais produtos são atóxicos?"). Encerrar
+        # aqui com uma resposta determinística seria justamente o beco sem
+        # saída que motivou este trabalho, agora com outra palavra.
+        #
+        # Devolver None faz a pergunta seguir para o caminho normal, com RAG e
+        # ferramentas. Se lá também não houver nada, o prompt de desfecho
+        # (app.templates) obriga o agente a dizer "não encontrei" de forma
+        # honesta — a mesma mensagem, só que com contexto para tentar antes.
+        logger.info(
+            "Cascata de natureza vazia para %r — seguindo para o caminho conversacional.",
+            termo,
+        )
+        return None
 
     rotulo, ressalva = _DESCRICAO_DO_NIVEL[atendido]
     bucket = niveis.get(atendido) or {}
@@ -802,10 +835,15 @@ def _responder_natureza_do_produto(query: str, termo: str) -> str:
     for nivel in _ORDEM_DOS_NIVEIS_NA_RESPOSTA[indice + 1:]:
         extra = int((niveis.get(nivel) or {}).get("total") or 0)
         if extra > total:
+            # "no total", não "ainda": os níveis NÃO são disjuntos — um produto
+            # com identidade declarada quase sempre também é uma menção. Dizer
+            # "existem ainda N" fazia o vendedor ler N produtos A MAIS, quando
+            # na verdade os que ele já viu estão dentro desses N.
             linhas.extend([
                 "",
-                f"Existem ainda {extra} produto(s) numa evidência mais fraca — "
-                f"{_DESCRICAO_DO_NIVEL[nivel][0]}. Quer ver essa lista também?",
+                f"No total, {extra} produto(s) aparecem numa evidência mais fraca "
+                f"(incluindo os acima) — {_DESCRICAO_DO_NIVEL[nivel][0]}. "
+                "Quer ver essa lista também?",
             ])
             break
     return "\n".join(linhas)
@@ -1866,11 +1904,13 @@ def run_pu_matcher_agent(
     if not classificacao_catalogo:
         termo_natureza = _extrair_pedido_natureza_do_produto(query)
         if termo_natureza:
-            return {
-                "answer": _responder_natureza_do_produto(query, termo_natureza),
-                "sources": [],
-                "model_used": "catalogo-estruturado",
-            }
+            resposta_natureza = _responder_natureza_do_produto(query, termo_natureza)
+            if resposta_natureza is not None:
+                return {
+                    "answer": resposta_natureza,
+                    "sources": [],
+                    "model_used": "catalogo-estruturado",
+                }
 
     if classificacao_catalogo:
         return {
@@ -1995,13 +2035,19 @@ def stream_pu_matcher_agent(
         classificacao_catalogo = _extrair_pedido_classificacao_catalogo(query)
         if not classificacao_catalogo:
             termo_natureza = _extrair_pedido_natureza_do_produto(query)
-            if termo_natureza:
+            resposta_natureza = (
+                _responder_natureza_do_produto(query, termo_natureza)
+                if termo_natureza
+                else None
+            )
+            # None = cascata vazia: segue para o caminho conversacional em vez
+            # de encerrar num beco sem saída (ver `_responder_natureza_do_produto`).
+            if resposta_natureza is not None:
                 yield _json.dumps({
                     "type": "meta", "sources": [], "model_used": "catalogo-estruturado"
                 }) + "\n"
                 yield _json.dumps({
-                    "type": "delta",
-                    "content": _responder_natureza_do_produto(query, termo_natureza),
+                    "type": "delta", "content": resposta_natureza,
                 }) + "\n"
                 yield _json.dumps({"type": "done"}) + "\n"
                 return

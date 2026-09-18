@@ -240,3 +240,77 @@ def test_catalogo_indisponivel_levanta_erro_tipado():
     with patch("app.rag.catalog_stats.get_qdrant_client", side_effect=Exception("fora do ar")):
         with pytest.raises(RetrievalIndisponivelError):
             listar_produtos_por_tipo("elastomero")
+
+
+# --- regressões achadas na revisão independente de 18/09/2026 ---------------
+
+@pytest.mark.parametrize(
+    "plural,singular",
+    [
+        ("catalisadores", "catalisador"),
+        ("vernizes", "verniz"),
+        ("poliois", "poliol"),
+        ("elastomeros", "elastomero"),
+        ("adesivos", "adesivo"),
+    ],
+)
+def test_plural_alcanca_o_singular_que_o_boletim_escreve(plural, singular):
+    """A primeira versão só sabia tirar e pôr um "s": "catalisadores" virava
+    "catalisadore" e NUNCA alcançava "catalisador". Resultado — "quais produtos
+    são catalisadores?" devolvia ZERO num acervo onde o Boletim diz, literal,
+    "FLEXX CAT 42 é um catalisador". O bug que esta cascata existe para matar,
+    ressuscitado em outra palavra."""
+    assert singular in _variantes_do_termo(plural)
+    assert plural in _variantes_do_termo(singular)
+
+
+def test_perguntar_pela_familia_auxiliar_nao_exclui_a_propria_familia():
+    """A exclusão de ADT/CAT era incondicional, então "quais produtos são
+    catalisadores?" removia justamente os FLEXX CAT — a resposta certa — e a
+    pergunta caía para o nível de menção, rotulada como a evidência mais fraca
+    do sistema. Mesmo escape que `_NATUREZAS_EXCLUDENTES` já tinha."""
+    pontos = [
+        _ponto(
+            rf"{RAIZ}\FLEXX CAT\FLEXX CAT 42\Boletim FLEXX CAT 42.pdf",
+            "FLEXX CAT 42 é um catalisador organometálico.",
+        )
+    ]
+    resultado = _listar(pontos, "catalisadores")
+    assert resultado["nivel_atendido"] == "identidade_declarada"
+    assert resultado["niveis"]["identidade_declarada"]["total"] == 1
+
+
+def test_familia_auxiliar_continua_excluida_de_outra_natureza():
+    """O escape não pode virar porta dos fundos: perguntar por elastômero
+    continua sem trazer catalisador."""
+    pontos = [
+        _ponto(
+            rf"{RAIZ}\FLEXX CAT\FLEXX CAT 42\Boletim FLEXX CAT 42.pdf",
+            "Indicado para produção de elastômero de alta resiliência.",
+        )
+    ]
+    assert _listar(pontos, "elastomero")["niveis"]["composicao_comprovada"]["total"] == 0
+
+
+@pytest.mark.parametrize(
+    "texto",
+    [
+        "Este produto adesivo deve ser armazenado em local seco.",
+        "Produto novo da linha, disponível a partir de março.",
+    ],
+)
+def test_frase_nominal_generica_nao_e_prova_de_composicao(texto):
+    """O padrão aceitava "produto|material|peça <termo>", que em boletim é
+    boilerplate. "Este PRODUTO ADESIVO deve ser armazenado" virava composição
+    comprovada — e, pior, identidade sendo rotulada com o texto do nível de
+    composição, que diz ao vendedor o contrário do que a fonte afirma."""
+    caminho = rf"{RAIZ}\FLEXX EL\FLEXX EL 1000\Boletim FLEXX EL 1000.pdf"
+    assert _conteudo_comprova_composicao_do_termo("adesivo", caminho, texto) is False
+    assert _conteudo_comprova_composicao_do_termo("novo", caminho, texto) is False
+
+
+def test_sistema_e_poliuretano_continuam_provando_composicao():
+    """A restrição acima não pode matar a forma que o boletim realmente usa."""
+    caminho = rf"{RAIZ}\FLEXX EL\FLEXX EL 1000\Boletim FLEXX EL 1000.pdf"
+    for texto in ("Sistema elastomérico bicomponente.", "Poliuretano elastomérico de alta dureza."):
+        assert _conteudo_comprova_composicao_do_termo("elastomero", caminho, texto) is True

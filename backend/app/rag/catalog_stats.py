@@ -178,29 +178,80 @@ def _padrao_nome_do_produto(produto: Optional[str]) -> Optional[str]:
     )
 
 
+def _singular_e_plural(palavra: str) -> List[str]:
+    """Singular e plural de uma palavra portuguesa, sem acento.
+
+    REGRESSÃO REAL (revisão de 18/09/2026): a primeira versão só sabia tirar e
+    pôr um "s" no fim. Isso cobre "elastomeros"↔"elastomero" e acabou aí:
+
+        catalisadores -> catalisadore   (nunca alcança "catalisador")
+        vernizes      -> vernize
+        poliois       -> polioi
+        catalisador   -> catalisadors
+
+    Consequência: "quais produtos são catalisadores?" devolvia ZERO num acervo
+    onde o Boletim diz, literalmente, "FLEXX CAT 42 é um catalisador" — o mesmo
+    bug que esta cascata existe para matar, ressuscitado em outra palavra.
+    Valia igual para vernizes, polióis, endurecedores e aceleradores.
+
+    Gera CANDIDATOS, não a forma correta: uma flexão que não existe na língua
+    simplesmente não casa com nada, e é mais barata que uma tabela de exceções.
+    """
+    base = (palavra or "").strip()
+    if not base:
+        return []
+    formas = [base]
+    if base.endswith("oes"):                       # elastomeroes? / ligacoes
+        formas.append(f"{base[:-3]}ao")
+    elif base.endswith("aes"):                     # pães
+        formas.append(f"{base[:-3]}ao")
+    elif base.endswith("is") and len(base) > 3:    # polióis -> poliol, papeis -> papel
+        formas.append(f"{base[:-2]}l")
+        formas.append(f"{base[:-1]}l")             # -eis -> -el
+    elif base.endswith("es") and len(base) > 3:    # catalisadores -> catalisador
+        formas.append(base[:-2])                   # vernizes -> verniz
+        formas.append(base[:-1])                   # cobre plural simples em -es
+    elif base.endswith("s"):
+        formas.append(base[:-1])
+    if base.endswith("ao"):                        # elastomerão? / mamão
+        formas.append(f"{base[:-2]}oes")
+    elif base.endswith(("r", "z", "s")):           # catalisador -> catalisadores
+        formas.append(f"{base}es")
+    elif base.endswith("l"):                       # poliol -> polióis
+        formas.append(f"{base[:-1]}is")
+    elif base.endswith("m"):
+        formas.append(f"{base[:-1]}ns")
+    elif not base.endswith("s"):
+        formas.append(f"{base}s")
+    # A palavra ORIGINAL nunca é descartada, por mais curta que seja. O teto de
+    # 3 letras vale só para as flexões DERIVADAS, que abaixo disso viram ruído.
+    # Aplicá-lo à base quebrava a comparação termo-a-termo de
+    # `_termo_bate_no_conteudo`: em "assento de ônibus", a palavra "de" deixava
+    # de casar consigo mesma e a expressão inteira parava de ser encontrada.
+    derivadas = [f for f in formas[1:] if len(f) >= 3]
+    return list(dict.fromkeys([base, *derivadas]))
+
+
 def _variantes_do_termo(termo: str) -> List[str]:
     """Formas do termo que podem aparecer no boletim: singular, plural e a
     forma adjetiva quando ela é derivável ("elastômero" → "elastomérico").
 
     Uma variante que não existe na língua ("adesivo" → "adesivico") não causa
-    dano: ela simplesmente nunca casa com nada. O custo de gerá-la é menor que
-    o de manter uma tabela de exceções por termo — que é exatamente o débito
-    que este módulo está saindo de.
+    dano: ela simplesmente nunca casa com nada.
     """
     base = _normalizar_sem_acentos(termo).strip()
     if not base:
         return []
-    variantes = [base]
-    if base.endswith("ao"):
-        variantes.append(f"{base[:-2]}oes")
-    elif base.endswith("s"):
-        variantes.append(base[:-1])
-    else:
-        variantes.append(f"{base}s")
-    # Forma adjetiva: "elastomero" → "elastomerico"/"elastomerica".
-    if base.endswith("o") and len(base) > 4:
-        radical = base[:-1]
-        variantes.extend([f"{radical}ico", f"{radical}icos", f"{radical}ica", f"{radical}icas"])
+    variantes = _singular_e_plural(base)
+    # Forma adjetiva, a partir do SINGULAR: "elastomero" → "elastomerico".
+    # `len > 4` protege o caso real "oleo" → "oleico", que colidiria com o
+    # "ácido oleico" que aparece em FISPQ.
+    for forma in list(variantes):
+        if forma.endswith("o") and len(forma) > 4:
+            radical = forma[:-1]
+            variantes.extend([
+                f"{radical}ico", f"{radical}icos", f"{radical}ica", f"{radical}icas",
+            ])
     return list(dict.fromkeys(variantes))
 
 
@@ -339,19 +390,16 @@ def _termo_bate_no_conteudo(termo_busca: str, content_lower: str) -> bool:
 
     def _flexoes(palavra: str) -> set[str]:
         """Flexões conservadoras, suficientes para singular/plural sem usar
-        prefixos abertos que confundem `correia` com `corretamente`."""
+        prefixos abertos que confundem `correia` com `corretamente`.
+
+        Usa `_singular_e_plural` — a mesma regra da cascata de natureza. Antes
+        havia aqui uma segunda cópia que só sabia tirar e pôr um "s", com o
+        mesmo defeito: "catalisadores" não encontrava "catalisador", e uma
+        busca por menção do plural em -es voltava vazia.
+        """
         if palavra in {"pu", "pus", "poliuretano", "poliuretanos"}:
             return {"pu", "pus", "poliuretano", "poliuretanos"}
-        variantes = {palavra}
-        if palavra.endswith("ao"):
-            variantes.add(f"{palavra[:-2]}oes")
-        elif palavra.endswith("oes"):
-            variantes.add(f"{palavra[:-3]}ao")
-        elif palavra.endswith("s"):
-            variantes.add(palavra[:-1])
-        else:
-            variantes.add(f"{palavra}s")
-        return variantes
+        return set(_singular_e_plural(palavra)) or {palavra}
 
     termo_tokens = [p for p in _SEPARADOR_PALAVRA_CONTEUDO.split(_normalizar(termo_busca)) if p]
     conteudo_tokens = [p for p in _SEPARADOR_PALAVRA_CONTEUDO.split(_normalizar(content_lower)) if p]
@@ -886,7 +934,17 @@ NIVEIS_DE_EVIDENCIA = (
 # produz — vale para elastômero, para espuma e para qualquer outra natureza.
 # Era uma regra escrita à mão dentro do caminho de elastômero; virou dado, e
 # por isso passou a valer para todo termo.
-_FAMILIAS_AUXILIARES_DO_CATALOGO = ("adt", "cat")
+#
+# O MAPA GUARDA A NATUREZA DE CADA FAMÍLIA, e não só a sigla, por causa de uma
+# regressão real (revisão de 18/09/2026): a exclusão era incondicional, então
+# "quais produtos são catalisadores?" removia justamente os FLEXX CAT — a
+# resposta certa — e a pergunta caía para o nível de menção, rotulada como a
+# evidência mais fraca do sistema. Quem pergunta PELA família auxiliar não pode
+# ser excluído por ela, mesma disciplina que `_NATUREZAS_EXCLUDENTES` já tinha.
+_FAMILIAS_AUXILIARES_DO_CATALOGO = {
+    "adt": ("aditivo",),
+    "cat": ("catalisador", "curativo"),
+}
 
 # Naturezas que, quando declaradas, impedem o produto de ser classificado como
 # OUTRA coisa. Um produto que o boletim declara isocianato não é um elastômero,
@@ -896,12 +954,28 @@ _FAMILIAS_AUXILIARES_DO_CATALOGO = ("adt", "cat")
 _NATUREZAS_EXCLUDENTES = ("isocianato",)
 
 
-def _produto_e_familia_auxiliar(produto: str) -> bool:
+def _produto_e_familia_auxiliar(produto: str, termos_perguntados: List[str]) -> bool:
+    """True se o produto é de uma família auxiliar QUE NÃO É a natureza pedida.
+
+    `termos_perguntados` é o escape: perguntar "quais produtos são
+    catalisadores" não pode excluir a família CAT, que é a resposta.
+    """
+    naturezas_pedidas = {
+        forma
+        for termo in termos_perguntados
+        for forma in _variantes_do_termo(termo)
+    }
     rotulo = _rotulo_estrutural_catalogo(produto)
-    return any(
-        re.search(rf"(?<![a-z0-9]){re.escape(sigla)}(?![a-z0-9])", rotulo)
-        for sigla in _FAMILIAS_AUXILIARES_DO_CATALOGO
-    )
+    for sigla, naturezas in _FAMILIAS_AUXILIARES_DO_CATALOGO.items():
+        if any(
+            forma in naturezas_pedidas
+            for natureza in naturezas
+            for forma in _variantes_do_termo(natureza)
+        ):
+            continue
+        if re.search(rf"(?<![a-z0-9]){re.escape(sigla)}(?![a-z0-9])", rotulo):
+            return True
+    return False
 
 
 def _conteudo_comprova_composicao_do_termo(
@@ -927,7 +1001,14 @@ def _conteudo_comprova_composicao_do_termo(
         rf"\bobter\s+(?:um\s+|uma\s+)?(?:{alternativas})\b",
         rf"\b(?:formacao|producao|fabricacao|obtencao)\s+(?:de\s+)?"
         rf"(?:um\s+|uma\s+)?(?:{alternativas})\b",
-        rf"\b(?:sistema|poliuretano|produto|material|peca|pecas)\s+(?:{alternativas})\b",
+        # Só "sistema" e "poliuretano" — era o que a versão de elastômero
+        # fazia. Incluir "produto|material|peca" (revisão de 18/09/2026)
+        # transformava boilerplate em prova: "Este PRODUTO ADESIVO deve ser
+        # armazenado em local seco" virava composição comprovada, e
+        # "PRODUTO NOVO da linha" fazia "novo" parecer uma natureza. Pior, é
+        # identidade sendo rotulada com o texto do nível de composição, que
+        # diz ao vendedor o contrário do que a fonte afirma.
+        rf"\b(?:sistema|poliuretano)\s+(?:{alternativas})\b",
     )
     return any(re.search(padrao, texto) for padrao in padroes)
 
@@ -963,6 +1044,17 @@ def listar_produtos_por_tipo(
     por_nivel: Dict[str, set] = {nivel: set() for nivel in NIVEIS_DE_EVIDENCIA}
     excluidos: set = set()
 
+    # Invariantes do laço, calculados UMA vez. Estavam sendo recalculados por
+    # ponto — e o acervo real tem ~11.000 pontos, então isso sozinho custava
+    # segundos por pergunta (revisão de 18/09/2026), numa chamada síncrona que
+    # o vendedor espera na tela.
+    formas_pedidas = {forma for t in termos for forma in _variantes_do_termo(t)}
+    naturezas_excludentes_aplicaveis = [
+        natureza
+        for natureza in _NATUREZAS_EXCLUDENTES
+        if _normalizar_sem_acentos(natureza) not in formas_pedidas
+    ]
+
     try:
         client = get_qdrant_client()
         classificacoes_por_produto: Dict[str, set] = {}
@@ -992,12 +1084,7 @@ def listar_produtos_por_tipo(
 
                 # Natureza conflitante declarada: tira o produto dos níveis de
                 # classificação (1 a 3), nunca do nível de menção.
-                for natureza in _NATUREZAS_EXCLUDENTES:
-                    if any(
-                        _normalizar_sem_acentos(natureza) in _variantes_do_termo(t)
-                        for t in termos
-                    ):
-                        continue
+                for natureza in naturezas_excludentes_aplicaveis:
                     if _conteudo_declara_produto_como(natureza, filepath, content):
                         excluidos.add(produto)
 
@@ -1026,8 +1113,11 @@ def listar_produtos_por_tipo(
     # Aditivos/catalisadores e naturezas conflitantes saem dos níveis que
     # afirmam CLASSIFICAÇÃO. O nível de menção é explicitamente "apareceu no
     # documento" e não afirma nada sobre o produto, então não filtra.
-    auxiliares = {p for p in por_nivel["identidade_declarada"] | por_nivel["composicao_comprovada"]
-                  if _produto_e_familia_auxiliar(p)}
+    auxiliares = {
+        p
+        for p in por_nivel["identidade_declarada"] | por_nivel["composicao_comprovada"]
+        if _produto_e_familia_auxiliar(p, termos)
+    }
     for nivel in ("identidade_declarada", "composicao_comprovada"):
         por_nivel[nivel] -= excluidos | auxiliares
 
