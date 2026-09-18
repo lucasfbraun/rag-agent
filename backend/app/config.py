@@ -62,6 +62,27 @@ MODELOS_DE_CHAT_EM_ORDEM = (
 # lista: busca em GET /api/models (ver app.main.list_models).
 ALLOWED_CHAT_MODELS = frozenset(MODELOS_DE_CHAT_EM_ORDEM)
 
+# ---------------------------------------------------------------------------
+# Expansão de consulta leigo → técnico (ver app/rag/query_expansion.py)
+# ---------------------------------------------------------------------------
+# Desligável por ambiente de propósito: é a forma de comparar o motor com e sem
+# tradução sobre as MESMAS perguntas, sem reverter código. Ligado por padrão
+# porque o caminho leigo (sem código de produto, sem nome de seção) é hoje o
+# que mais erra, e é o caminho que todo usuário não-especialista percorre.
+EXPANSAO_CONSULTA_ATIVA = os.getenv("EXPANSAO_CONSULTA_ATIVA", "true").lower() == "true"
+
+# Derivado da allowlist, nunca escrito à mão em paralelo: MODELOS_DE_CHAT_EM_ORDEM[0]
+# é o modelo validado em uso contínuo neste projeto (ver comentário da tupla).
+# A tradução é uma tarefa curta e barata — não há motivo para gastar o modelo
+# caro aqui, nem para acoplá-la ao modelo que o usuário escolheu na tela.
+EXPANSAO_CONSULTA_MODELO = os.getenv("EXPANSAO_CONSULTA_MODELO", MODELOS_DE_CHAT_EM_ORDEM[0])
+
+# Teto de termos traduzidos. Cada termo vira um `scroll` próprio no Qdrant na
+# busca por palavra-chave, então este número é diretamente o custo da expansão
+# em ida-e-volta de rede. 6 é ponto de partida para experimento, não valor
+# validado — ajuste junto com a medição, não no escuro.
+EXPANSAO_MAX_TERMOS = int(os.getenv("EXPANSAO_MAX_TERMOS", "6"))
+
 # Banco relacional (Fase 5 — RBAC & Governança). Usuários/perfis, separado do Qdrant (vetorial).
 POSTGRES_HOST = os.getenv("POSTGRES_HOST", "localhost")
 POSTGRES_PORT = int(os.getenv("POSTGRES_PORT", 5432))

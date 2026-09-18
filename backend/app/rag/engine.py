@@ -16,6 +16,10 @@ from app.rag.doc_sections import (
     termos_de_indice,
 )
 from app.rag.embeddings import get_embedding, reutilizar_embeddings_na_consulta
+from app.rag.query_expansion import (
+    expandir_termos_do_dominio,
+    termos_expandidos_em_cache,
+)
 from app.rag.treinamento import montar_bloco as montar_bloco_de_treinamento
 from app.rag.exceptions import RetrievalIndisponivelError
 from app.rag.catalog_stats import (
@@ -1031,6 +1035,14 @@ def _get_qdrant_client():
 # seção quebrada em vários chunks sem empurrar para fora o resto do boletim.
 _MAXIMO_TRECHOS_DE_SECAO = 6
 
+# Vagas extras no contexto quando a consulta foi traduzida (leigo → técnico) e
+# NÃO houve nenhum hit prioritário — ou seja, quando o vetor é toda a evidência
+# disponível. Existe porque nesse caso duas consultas diferentes disputam o
+# mesmo top_k: a pergunta original e a traduzida. 4 é ponto de partida para
+# experimento, não número validado: mede-se junto com a taxa de acerto, senão é
+# só mais contexto (mais custo e mais ruído) sem ganho comprovado.
+_VAGAS_EXTRAS_COM_CONSULTA_TRADUZIDA = 4
+
 
 def _recuperar_por_secao(
     client,
@@ -1256,13 +1268,40 @@ def retrieve_products_context(
 
     keyword_hits: List[Dict[str, Any]] = []
     palavras_chave = _extrair_palavras_chave(query)
-    if palavras_chave:
+
+    # Tradução leigo → vocabulário do acervo (app.rag.query_expansion).
+    # SÓ no caminho leigo, de propósito: quando a pergunta cita um código de
+    # produto ou um nome de seção, a recuperação exata já é mais confiável que
+    # qualquer sinônimo, e injetar termos traduzidos ali só teria como efeito
+    # diluir um resultado que já está certo. O caminho sem código e sem seção
+    # é justamente o que hoje depende só do vetor — o mais fraco do motor.
+    # O try/except é redundante com o fail-open interno de
+    # `expandir_termos_do_dominio` — e é de propósito. Aquele fail-open é uma
+    # promessa do módulo; este é a garantia do chamador. Um recurso que existe
+    # só para AUMENTAR recall não pode derrubar uma recuperação que funcionaria
+    # sem ele, nem quando o defeito estiver no próprio módulo de tradução.
+    termos_expandidos: List[str] = []
+    if not codigos and not secoes:
+        try:
+            termos_expandidos = expandir_termos_do_dominio(query)
+        except Exception as e:
+            logger.warning(
+                "Tradução da consulta falhou de forma inesperada (%s) — "
+                "seguindo com a pergunta original.", e
+            )
+
+    # Os termos traduzidos entram como candidatos de busca ao lado das
+    # palavras da pergunta, NUNCA no lugar delas: a pergunta original continua
+    # sendo o critério, a tradução só amplia onde procurar.
+    termos_de_busca = list(dict.fromkeys(palavras_chave + termos_expandidos))
+
+    if termos_de_busca:
         try:
             candidatos_por_chave = {}
             # Um scroll OR global limitado a 50 não é ranking: termos
             # genéricos ocupavam o lote e "correia" nunca chegava aos
             # candidatos. Cada termo/flexão recebe seu próprio lote curto.
-            for palavra in palavras_chave:
+            for palavra in termos_de_busca:
                 for variante in _variantes_palavra_chave(palavra):
                     filtro_palavra = qmodels.Filter(
                         must=[qmodels.FieldCondition(
@@ -1287,7 +1326,7 @@ def retrieve_products_context(
                 texto = (payload.get("content") or "").lower()
                 return sum(
                     1
-                    for palavra in palavras_chave
+                    for palavra in termos_de_busca
                     if (
                         bool(re.search(r"\b(?:poliuretanos?|pu)\b", texto))
                         if palavra == "poliuretano"
@@ -1295,10 +1334,14 @@ def retrieve_products_context(
                     )
                 )
 
-            # Exige pelo menos 2 palavras-chave batendo (ou a única, se só
-            # houver 1) — 1 palavra genérica batendo sozinha num acervo de
-            # milhares de trechos é sinal fraco demais pra furar a fila.
-            minimo = 2 if len(palavras_chave) > 1 else 1
+            # Exige pelo menos 2 termos batendo (ou o único, se só houver 1) —
+            # 1 palavra genérica batendo sozinha num acervo de milhares de
+            # trechos é sinal fraco demais pra furar a fila. Os termos
+            # traduzidos contam aqui junto com os da pergunta: é exatamente
+            # neles que a pergunta leiga tem chance de bater, já que as
+            # palavras originais ("cola", "colchão") não estão no texto dos
+            # boletins ("adesivo", "espuma flexível").
+            minimo = 2 if len(termos_de_busca) > 1 else 1
             candidatos_pontuados = [(c, _pontuacao(c)) for c in candidatos]
             candidatos_pontuados = [(c, p) for c, p in candidatos_pontuados if p >= minimo]
             candidatos_pontuados.sort(key=lambda item: item[1], reverse=True)
@@ -1321,6 +1364,40 @@ def retrieve_products_context(
         raise RetrievalIndisponivelError(str(e)) from e
 
     semantic_hits = [hit.payload for hit in results]
+
+    # Segunda busca vetorial com a pergunta JÁ TRADUZIDA. O embedding da
+    # pergunta leiga é o sinal mais fraco do motor: "quero uma cola pra grudar
+    # espuma em tecido" e o boletim que diz "adesivo para laminação de espuma"
+    # ficam longe no espaço vetorial porque quase nenhuma palavra coincide.
+    # A pergunta traduzida costuma ser uma consulta melhor que a original — mas
+    # só COSTUMA, então ela soma candidatos em vez de substituir os primeiros.
+    # Fail-open: se esta busca falhar, a recuperação continua com o resultado
+    # da original, sem derrubar a consulta (ao contrário da busca acima, que é
+    # o caminho principal e por isso levanta RetrievalIndisponivelError).
+    if termos_expandidos:
+        try:
+            vetor_expandido = get_embedding(
+                f"{query} {' '.join(termos_expandidos)}", EMBEDDING_MODEL
+            )
+            resultados_expandidos = client.search(
+                collection_name=COLLECTION_NAME,
+                query_vector=vetor_expandido,
+                limit=top_k,
+                query_filter=query_filter,
+            )
+            vistos_semanticos = {
+                (h.get("filename"), h.get("chunk_index")) for h in semantic_hits
+            }
+            for hit in resultados_expandidos:
+                chave = (hit.payload.get("filename"), hit.payload.get("chunk_index"))
+                if chave not in vistos_semanticos:
+                    semantic_hits.append(hit.payload)
+                    vistos_semanticos.add(chave)
+        except Exception as e:
+            logger.warning(
+                "Busca vetorial com a consulta traduzida falhou (%s) — "
+                "seguindo só com a consulta original.", e
+            )
 
     def disponivel(payload: Dict[str, Any]) -> bool:
         referencia = " ".join(filter(None, [
@@ -1346,7 +1423,12 @@ def retrieve_products_context(
             vistos.add(chave)
 
     if not prioritarios:
-        return _ordenar_por_secao(semantic_hits, secoes)
+        # Sem nenhum hit prioritário, o vetor é a única evidência que existe —
+        # e é justamente a situação da pergunta leiga. Quando houve tradução,
+        # o teto sobe um pouco para caber a consulta original E a traduzida;
+        # sem tradução, nada muda em relação ao comportamento anterior.
+        teto = top_k + (_VAGAS_EXTRAS_COM_CONSULTA_TRADUZIDA if termos_expandidos else 0)
+        return _ordenar_por_secao(semantic_hits[:teto], secoes)
 
     complemento = [h for h in semantic_hits if (h.get("filename"), h.get("chunk_index")) not in vistos]
     vagas_restantes = max(0, top_k - len(prioritarios))
@@ -1502,6 +1584,25 @@ def _montar_context_str(query: str, docs: List[Dict[str, Any]]) -> str:
         f"[Catálogo / TDS: {d.get('filename')}]\n{d.get('content')}"
         for d in docs
     ])
+
+    # Termos traduzidos são HIPÓTESE, não equivalência validada (ver docstring
+    # de app.rag.query_expansion). Sem este aviso, um boletim alcançado por
+    # "estofamento" seria apresentado como prova da aplicação "sofá" que o
+    # vendedor pediu — e a expansão, que existe pra aumentar recall, viraria
+    # uma fonte nova de recomendação sem lastro. Lê do cache: nenhuma chamada
+    # extra ao LLM acontece aqui.
+    traduzidos = termos_expandidos_em_cache(query)
+    if traduzidos:
+        context_str += (
+            "\n\n🔤 TRADUÇÃO DA PERGUNTA: além das palavras do vendedor, a busca também "
+            f"procurou por {', '.join(repr(t) for t in traduzidos)}, que são o vocabulário "
+            "provável do acervo para o que ele descreveu. ISSO NÃO É EVIDÊNCIA DE "
+            "EQUIVALÊNCIA: um documento encontrado por um desses termos só responde ao "
+            "pedido se o próprio Boletim Técnico sustentar a aplicação que o vendedor "
+            "descreveu. Se o documento fala de um uso PARECIDO mas não do pedido, diga "
+            "isso explicitamente em vez de tratar como atendido, e mostre ao vendedor qual "
+            "termo técnico foi usado — ele provavelmente não conhece o termo do setor."
+        )
 
     ausentes = _codigos_sem_correspondencia(query, docs)
     if ausentes:
