@@ -77,9 +77,9 @@ def test_descarta_termos_genericos_demais():
 def test_descarta_palavra_que_ja_estava_na_pergunta():
     """Repetir a palavra do usuário não amplia busca nenhuma — ela já foi
     pesquisada por `_extrair_palavras_chave`."""
-    limpos = _limpar_termos(["colchao", "espuma flexivel"], "preciso de algo para colchão")
+    limpos = _limpar_termos(["colchao", "espuma flexível"], "preciso de algo para colchão")
     assert "colchao" not in limpos
-    assert "espuma" in limpos and "flexivel" in limpos
+    assert limpos == ["espuma flexível"]
 
 
 def test_descarta_termo_longo_demais():
@@ -88,10 +88,40 @@ def test_descarta_termo_longo_demais():
     assert _limpar_termos([frase], "cola") == []
 
 
-def test_normaliza_acento_e_caixa():
-    """O índice de texto do Qdrant é minúsculo; a comparação em
-    `_pontuacao` é feita sobre `content.lower()`."""
-    assert _limpar_termos(["Elastômero", "INJEÇÃO"], "borracha") == ["elastomero", "injecao"]
+def test_preserva_acento_porque_o_acervo_tem_acento():
+    """REGRESSÃO REAL (achada na revisão de 18/09): a primeira versão devolvia
+    "elastomero", "laminacao", "flexivel" — e nenhum deles casava com nada.
+
+    O texto indexado é o texto cru do boletim, com acento (`payload["content"]`
+    em ingestion.py). As duas pontas que consomem estes termos comparam sem
+    remover acento: `engine._pontuacao` faz `palavra in content.lower()`, e o
+    índice MatchText do Qdrant é criado com `lowercase=True` mas SEM ascii
+    folding. Tirar o acento aqui zerava o recall do bloco inteiro.
+    """
+    limpos = _limpar_termos(["Elastômero", "INJEÇÃO"], "borracha")
+    assert limpos == ["elastômero", "injeção"]
+
+    conteudo_do_boletim = "Resina de elastômero para injeção em molde fechado".lower()
+    for termo in limpos:
+        assert termo in conteudo_do_boletim, f"{termo!r} não casaria com o acervo"
+
+
+def test_termo_de_varias_palavras_atravessa_inteiro():
+    """A primeira versão achatava "espuma flexível" em "espuma" + "flexível".
+    "espuma" ocorre em quase todo boletim: promovê-la a candidato próprio
+    enchia o lote de `scroll` com o ruído que a stoplist existe para evitar."""
+    assert _limpar_termos(["espuma flexível"], "colchão") == ["espuma flexível"]
+
+
+def test_termo_composto_sobrevive_quando_so_parte_dele_e_generica():
+    """"sistema de vazamento" é exemplo literal do prompt. Quebrado, virava o
+    fragmento órfão "vazamento" — "sistema" cai na stoplist e "de" é curto
+    demais para o índice."""
+    assert _limpar_termos(["sistema de vazamento"], "enchimento") == ["sistema de vazamento"]
+
+
+def test_termo_composto_so_de_palavras_genericas_e_descartado():
+    assert _limpar_termos(["sistema de poliuretano"], "cola") == []
 
 
 def test_descarta_token_curto_demais_para_o_indice():
@@ -109,10 +139,39 @@ def test_nao_repete_termo():
 def test_expande_pergunta_leiga_em_termos_do_acervo():
     with patch.object(
         query_expansion.litellm, "completion",
-        return_value=_resposta_do_modelo('["adesivo", "espuma flexivel", "laminacao"]'),
+        return_value=_resposta_do_modelo('["adesivo", "espuma flexível", "laminação"]'),
     ):
         termos = expandir_termos_do_dominio("tem cola pra colchão?")
-    assert termos == ["adesivo", "espuma", "flexivel", "laminacao"]
+    assert termos == ["adesivo", "espuma flexível", "laminação"]
+
+
+def test_chamada_ao_modelo_tem_timeout():
+    """Sem timeout, o padrão do litellm é 6000 s. Esta chamada é síncrona e
+    fica NA FRENTE de toda a recuperação: um provedor lento — não com erro,
+    lento — penduraria a pergunta do vendedor por minutos antes de o fail-open
+    agir. O fail-open cobre falha, não lentidão."""
+    with patch.object(
+        query_expansion.litellm, "completion",
+        return_value=_resposta_do_modelo("[]"),
+    ) as completion:
+        expandir_termos_do_dominio("tem cola pra colchão?")
+
+    timeout = completion.call_args.kwargs.get("timeout")
+    assert timeout is not None, "chamada de tradução sem timeout"
+    assert 0 < timeout <= 30
+
+
+def test_defeito_na_limpeza_tambem_e_fail_open():
+    """A docstring promete "nunca levanta exceção". Antes, o try/except cobria
+    só a chamada de rede, e um defeito em `_limpar_termos` escapava do
+    módulo — promessa maior que o código."""
+    with patch.object(
+        query_expansion.litellm, "completion",
+        return_value=_resposta_do_modelo('["adesivo"]'),
+    ), patch.object(
+        query_expansion, "_limpar_termos", side_effect=RuntimeError("defeito na limpeza")
+    ):
+        assert expandir_termos_do_dominio("tem cola pra colchão?") == []
 
 
 def test_falha_do_modelo_nao_levanta_e_devolve_vazio():
@@ -135,11 +194,29 @@ def test_desligado_por_configuracao_nao_chama_o_modelo():
 
 def test_respeita_o_teto_de_termos():
     """Cada termo vira um scroll próprio no Qdrant — o teto é o custo."""
-    muitos = '["adesivo","elastomero","laminacao","injecao","solado","painel","verniz","selante"]'
+    muitos = '["adesivo","elastômero","laminação","injeção","solado","painel","verniz","selante"]'
     with patch.object(query_expansion, "EXPANSAO_MAX_TERMOS", 3), \
          patch.object(query_expansion.litellm, "completion",
                       return_value=_resposta_do_modelo(muitos)):
         assert len(expandir_termos_do_dominio("tem cola?")) == 3
+
+
+def test_teto_conta_termos_e_nao_palavras():
+    """Enquanto os termos compostos eram quebrados, seis termos de duas
+    palavras viravam doze entradas e o corte deixava passar só TRÊS conceitos
+    — um terço do que a configuração promete."""
+    compostos = (
+        '["espuma flexível","espuma rígida","sistema de vazamento",'
+        '"adesivo estrutural","solado injetado","painel isolante"]'
+    )
+    with patch.object(query_expansion, "EXPANSAO_MAX_TERMOS", 6), \
+         patch.object(query_expansion.litellm, "completion",
+                      return_value=_resposta_do_modelo(compostos)):
+        termos = expandir_termos_do_dominio("preciso de algo macio pra estofado")
+
+    assert len(termos) == 6
+    assert "espuma flexível" in termos
+    assert "painel isolante" in termos
 
 
 def test_pergunta_repetida_nao_chama_o_modelo_de_novo():

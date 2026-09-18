@@ -56,6 +56,7 @@ from app.config import (
     EXPANSAO_CONSULTA_ATIVA,
     EXPANSAO_CONSULTA_MODELO,
     EXPANSAO_MAX_TERMOS,
+    EXPANSAO_TIMEOUT_SEGUNDOS,
 )
 
 logger = logging.getLogger(__name__)
@@ -81,13 +82,15 @@ em Boletins Técnicos de poliuretano (PU) no Brasil.
 Devolva SOMENTE um array JSON de strings, sem nenhum outro texto.
 
 Regras:
-- Cada item é um ÚNICO termo técnico (1 ou 2 palavras), em português do Brasil, minúsculo.
+- Cada item é um ÚNICO termo técnico (1 a 3 palavras), em português do Brasil, minúsculo.
+- ESCREVA COM ACENTUAÇÃO CORRETA. O termo é procurado literalmente no texto dos boletins,
+  que é escrito com acento: "elastômero" encontra, "elastomero" não encontra nada.
 - Inclua o termo que a indústria usa no lugar da palavra leiga. Exemplos do que se espera:
-  "cola" -> "adesivo"; "borracha" -> "elastomero"; "colchao" -> "espuma flexivel";
-  "isopor duro" -> "espuma rigida"; "esponja" -> "espuma"; "endurecedor" -> "catalisador";
+  "cola" -> "adesivo"; "borracha" -> "elastômero"; "colchão" -> "espuma flexível";
+  "isopor duro" -> "espuma rígida"; "esponja" -> "espuma"; "endurecedor" -> "catalisador";
   "tinta" -> "verniz"; "enchimento" -> "sistema de vazamento".
 - Inclua também o nome do PROCESSO ou da PEÇA quando for evidente na pergunta
-  (ex: "laminacao", "injecao", "moldagem", "solado", "painel", "estofamento").
+  (ex: "laminação", "injeção", "moldagem", "solado", "painel", "estofamento").
 - NÃO inclua termos genéricos que aparecem em qualquer documento do setor:
   poliuretano, pu, produto, sistema, material, quimico, aplicacao, industria, formulacao.
 - NÃO invente código de produto, número, marca, norma nem valor de especificação.
@@ -139,30 +142,66 @@ def _extrair_lista_json(texto: str) -> List[str]:
 
 
 def _limpar_termos(termos: List[str], query: str) -> List[str]:
-    """Descarta o que não ajuda a discriminar: termo genérico demais, termo
-    curto demais para o índice de texto do Qdrant (min_token_len=3 em
-    `content`) e termo que já estava na pergunta."""
+    """Descarta o que não ajuda a discriminar e devolve o termo COMO ELE
+    APARECE NO ACERVO.
+
+    DUAS REGRAS QUE JÁ FORAM VIOLADAS E CUSTARAM O RECALL DO BLOCO INTEIRO:
+
+    1. O ACENTO FICA. A primeira versão normalizava o termo com
+       `_normalizar_para_regra`, devolvendo "elastomero", "laminacao",
+       "flexivel". Só que o texto indexado é o texto cru do boletim
+       (`ingestion.py`, `payload["content"] = chunk`), e as duas pontas que
+       consomem estes termos comparam SEM remover acento:
+         - `engine._pontuacao` faz `palavra in content.lower()` — `lower()`
+           não mexe em acento;
+         - o índice `MatchText` do Qdrant é criado com `TokenizerType.WORD,
+           lowercase=True` e SEM ascii folding, então o token indexado é
+           "elastômero".
+       Resultado medido: de "elastômero", "espuma flexível", "laminação",
+       "adesivo", só "adesivo" casava. A normalização continua existindo, mas
+       só para COMPARAR (contra a stoplist e contra as palavras da pergunta);
+       o que sai da função é a forma acentuada.
+
+    2. O TERMO DE VÁRIAS PALAVRAS NÃO É QUEBRADO. A primeira versão achatava
+       "espuma flexível" em "espuma" + "flexível" e "sistema de vazamento" em
+       "vazamento" — um fragmento órfão, sem âncora. Pior: promovia "espuma",
+       que ocorre em quase todo boletim, a candidato de busca próprio, enchendo
+       o lote de `scroll` com o ruído que `_TERMOS_GENERICOS_DEMAIS` existe
+       para evitar. O termo agora atravessa inteiro, e o teto de
+       `EXPANSAO_MAX_TERMOS` volta a ser contado em termos, como documentado.
+    """
     from app.rag.engine import _normalizar_para_regra  # import tardio: evita ciclo
 
     ja_na_pergunta = set(re.findall(r"[a-zà-öø-ÿ]{3,}", _normalizar_para_regra(query)))
-    limpos = []
+    limpos: List[str] = []
+    vistos = set()
     for termo in termos:
         candidato = " ".join(str(termo).lower().split())
         if not candidato or len(candidato) > 40:
             continue
-        palavras = candidato.split()
-        if len(palavras) > 2:
+        normalizadas = [_normalizar_para_regra(p) for p in candidato.split()]
+        if len(normalizadas) > 3:
             continue
-        for palavra in palavras:
-            normalizada = _normalizar_para_regra(palavra)
-            if len(normalizada) < 3:
-                continue
-            if normalizada in _TERMOS_GENERICOS_DEMAIS:
-                continue
-            if normalizada in ja_na_pergunta:
-                continue
-            limpos.append(normalizada)
-    return list(dict.fromkeys(limpos))
+        # Palavras de ligação ("de", "em") não são pesquisáveis — o índice usa
+        # min_token_len=3 — mas continuam dentro do termo, porque é assim que a
+        # expressão aparece no boletim.
+        significativas = [n for n in normalizadas if len(n) >= 3]
+        if not significativas:
+            continue
+        # Só descarta quando NENHUMA palavra significativa discrimina. Um termo
+        # como "sistema de vazamento" sobrevive inteiro: "sistema" é genérico,
+        # "vazamento" não é.
+        if all(
+            n in _TERMOS_GENERICOS_DEMAIS or n in ja_na_pergunta
+            for n in significativas
+        ):
+            continue
+        chave = " ".join(normalizadas)
+        if chave in vistos:
+            continue
+        vistos.add(chave)
+        limpos.append(candidato)
+    return limpos
 
 
 def termos_expandidos_em_cache(query: str) -> List[str]:
@@ -207,16 +246,28 @@ def expandir_termos_do_dominio(query: str) -> List[str]:
             temperature=0,
             max_tokens=200,
             num_retries=1,
+            # O timeout NÃO é detalhe de afinação: esta chamada é síncrona e
+            # fica NA FRENTE de toda a recuperação, em todo caminho leigo. O
+            # fail-open protege contra o provedor que FALHA; sem timeout não
+            # protege contra o provedor que fica LENTO, e a pergunta do
+            # vendedor penduraria até o padrão do litellm (6000 s). Uma
+            # tradução que não chega em poucos segundos não vale a espera —
+            # a busca sem ela é o comportamento antigo, que funciona.
+            timeout=EXPANSAO_TIMEOUT_SEGUNDOS,
         )
         conteudo = resposta.choices[0].message.content
+        termos = _limpar_termos(_extrair_lista_json(conteudo), query)[:EXPANSAO_MAX_TERMOS]
     except Exception as e:
         # WARNING, não ERROR: o motor continua funcionando sem isto. Mas
         # continua sendo registrado, porque uma expansão silenciosamente morta
         # devolve o sistema ao comportamento que motivou este módulo.
+        #
+        # O `try` cobre a limpeza e a leitura do JSON além da chamada de rede:
+        # a docstring promete que esta função nunca levanta, e antes um defeito
+        # em `_limpar_termos` escapava do módulo, deixando essa promessa maior
+        # que o código.
         logger.warning("Expansão de consulta indisponível (%s) — seguindo sem tradução.", e)
         return []
-
-    termos = _limpar_termos(_extrair_lista_json(conteudo), query)[:EXPANSAO_MAX_TERMOS]
 
     with _cache_lock:
         if len(_cache) >= _LIMITE_DO_CACHE:

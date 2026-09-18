@@ -135,7 +135,13 @@ def test_palavras_da_pergunta_continuam_sendo_pesquisadas(cliente_qdrant):
 
 def test_segunda_busca_vetorial_usa_a_consulta_traduzida(cliente_qdrant):
     """O embedding da pergunta leiga é o sinal mais fraco do motor; a pergunta
-    traduzida costuma ser uma consulta melhor. Ela soma candidatos."""
+    traduzida costuma ser uma consulta melhor. Ela soma candidatos.
+
+    A asserção olha o texto da SEGUNDA chamada especificamente. A versão
+    anterior só checava que a pergunta aparecia em alguma das chamadas — e
+    passava mesmo quando a segunda busca SUBSTITUÍA a pergunta pelos termos,
+    porque a primeira chamada já satisfazia a condição sozinha.
+    """
     embeddings_pedidos = []
 
     def _embedding(texto, _modelo):
@@ -147,9 +153,14 @@ def test_segunda_busca_vetorial_usa_a_consulta_traduzida(cliente_qdrant):
          patch("app.rag.engine.expandir_termos_do_dominio", return_value=["adesivo"]):
         retrieve_products_context("tem cola pra espuma?")
 
-    assert "tem cola pra espuma?" in embeddings_pedidos
-    assert any("adesivo" in texto for texto in embeddings_pedidos)
     assert cliente_qdrant.search.call_count == 2
+    assert len(embeddings_pedidos) == 2
+    consulta_original, consulta_traduzida = embeddings_pedidos
+    assert consulta_original == "tem cola pra espuma?"
+    assert "adesivo" in consulta_traduzida
+    assert "tem cola pra espuma?" in consulta_traduzida, (
+        "a consulta traduzida tem que SOMAR à pergunta, não substituí-la"
+    )
 
 
 def test_resultado_repetido_entre_as_duas_buscas_nao_duplica(cliente_qdrant):
@@ -167,6 +178,58 @@ def test_resultado_repetido_entre_as_duas_buscas_nao_duplica(cliente_qdrant):
     chaves = [(d["filename"], d["chunk_index"]) for d in docs]
     assert len(chaves) == len(set(chaves))
     assert ("Boletim FLEXX AG 2070.pdf", 1) in chaves
+
+
+# --- hipótese não expulsa evidência real ------------------------------------
+
+def test_hit_so_de_termo_traduzido_nao_expulsa_o_resultado_da_pergunta(cliente_qdrant):
+    """REGRESSÃO REAL (achada na revisão de 18/09): era o único caminho em que
+    a tradução podia deixar a recuperação PIOR do que antes de existir.
+
+    `keyword_hits` entrava inteiro na lista de prioritários. Bastavam seis
+    trechos alcançados só por termo traduzido — uma HIPÓTESE de vocabulário
+    produzida por um modelo — para zerar as vagas e descartar todos os trechos
+    que a pergunta real encontrou pelo vetor.
+    """
+    ruido = [
+        _hit(f"Ruido {i}.pdf", i, "adesivo para laminação industrial")
+        for i in range(8)
+    ]
+    cliente_qdrant.scroll.return_value = (ruido, None)
+    cliente_qdrant.search.return_value = [
+        _hit("Boletim FLEXX AG 2066.pdf", 0, "produção de rolhas de cortiça aglomerada")
+    ]
+
+    with patch("app.rag.engine._get_qdrant_client", return_value=cliente_qdrant), \
+         patch("app.rag.engine.get_embedding", return_value=[0.1, 0.2]), \
+         patch("app.rag.engine.expandir_termos_do_dominio",
+               return_value=["adesivo", "laminação"]):
+        docs = retrieve_products_context("tem cola pra rolha de cortiça?")
+
+    nomes = [d["filename"] for d in docs]
+    assert "Boletim FLEXX AG 2066.pdf" in nomes, (
+        "o documento achado pela pergunta original foi expulso por trechos de hipótese"
+    )
+
+
+def test_hit_de_palavra_do_usuario_continua_prioritario(cliente_qdrant):
+    """A correção acima não pode rebaixar o caminho por palavra-chave que já
+    existia: um trecho que casa com a palavra DO VENDEDOR continua na frente
+    do semântico, com ou sem tradução ativa."""
+    cliente_qdrant.scroll.return_value = (
+        [_hit("Boletim FLEXX AG 2066.pdf", 0, "rolhas de cortiça aglomerada e adesivo")],
+        None,
+    )
+    cliente_qdrant.search.return_value = [
+        _hit(f"Semantico {i}.pdf", i, "outro assunto") for i in range(8)
+    ]
+
+    with patch("app.rag.engine._get_qdrant_client", return_value=cliente_qdrant), \
+         patch("app.rag.engine.get_embedding", return_value=[0.1, 0.2]), \
+         patch("app.rag.engine.expandir_termos_do_dominio", return_value=["adesivo"]):
+        docs = retrieve_products_context("tem cola pra rolha de cortiça?")
+
+    assert docs[0]["filename"] == "Boletim FLEXX AG 2066.pdf"
 
 
 # --- fail-open --------------------------------------------------------------

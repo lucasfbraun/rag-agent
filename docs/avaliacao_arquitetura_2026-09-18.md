@@ -95,7 +95,7 @@ e errando**, o que torna impossível perceber melhora ou piora.
    reconstruído por heurística. Com uma coluna `natureza = 'isocianato'`, o
    commit "exclui isocianatos da lista de elastômeros" não existiria.
 
-6. **Nenhum teste mede acerto de recuperação.** São 45 arquivos de teste, todos
+6. **Nenhum teste mede acerto de recuperação.** São 46 arquivos de teste, todos
    sobre comportamento programado com dependências simuladas. Não há conjunto de
    perguntas com resposta esperada rodando contra o acervo real, então cada
    correção pode ter quebrado um caso anterior sem que ninguém saiba.
@@ -142,6 +142,14 @@ Quatro decisões deliberadas:
 - **Os termos somam, nunca substituem.** A pergunta original continua sendo o
   critério; a tradução só amplia onde procurar. Os termos entram na busca
   textual e numa segunda busca vetorial, cujo resultado é mesclado sem duplicar.
+  Um trecho alcançado **apenas** por termo traduzido não vale o mesmo que um
+  alcançado pelas palavras do próprio vendedor: ele fica abaixo dos prioritários
+  e se alterna com os hits semânticos da pergunta real, em vez de competir com
+  eles pelas mesmas vagas.
+- **O termo vai para a busca como ele aparece no acervo,** com acento e com as
+  palavras que o compõem, sem quebrar. O texto indexado é o texto cru do
+  boletim, e tanto `_pontuacao` quanto o índice `MatchText` do Qdrant comparam
+  sem remover acento.
 - **Fail-open em dois níveis.** O módulo devolve lista vazia em qualquer falha, e
   o chamador em `engine.py` ainda envolve a chamada em `try/except`. O primeiro é
   promessa do módulo, o segundo é garantia do chamador: um recurso que existe
@@ -154,8 +162,46 @@ Quatro decisões deliberadas:
 
 Configuração em `.env`: `EXPANSAO_CONSULTA_ATIVA` (padrão `true`),
 `EXPANSAO_CONSULTA_MODELO` (padrão: primeiro modelo da allowlist),
-`EXPANSAO_MAX_TERMOS` (padrão 6). A chave de desligar existe para comparar o
-motor com e sem tradução sobre as mesmas perguntas, sem reverter código.
+`EXPANSAO_MAX_TERMOS` (padrão 6), `EXPANSAO_TIMEOUT_SEGUNDOS` (padrão 8). A
+chave de desligar existe para comparar o motor com e sem tradução sobre as
+mesmas perguntas, sem reverter código. O timeout não é afinação: a tradução é
+síncrona e fica na frente de toda a recuperação, e o fail-open protege contra o
+provedor que falha, não contra o que fica lento.
+
+**Destino de dado a registrar:** como `EXPANSAO_CONSULTA_MODELO` é fixo e não
+acompanha o seletor da tela, o texto da pergunta do usuário vai para esse
+provedor mesmo quando ele escolheu outro modelo para conversar. Apenas a
+pergunta — a tradução não recebe nenhum documento do acervo, e `incluir_sensivel`
+não a afeta. Instalações que exijam provedor único definem a variável.
+
+### Revisão independente e o que ela corrigiu
+
+Os dois blocos passaram por revisão cética antes de serem considerados prontos.
+A comparação A/B da suíte completa contra o commit anterior deu listas de falha
+idênticas (144 falhas em ambos, todas `psycopg2.OperationalError` por ausência
+de PostgreSQL no ambiente de desenvolvimento) — zero regressões. Mas a revisão
+encontrou **dois defeitos graves na primeira versão do bloco 2**, ambos
+corrigidos e agora cobertos por teste:
+
+1. **A tradução removia os acentos** (`_limpar_termos` normalizava com
+   `_normalizar_para_regra`), devolvendo "elastomero", "laminacao", "flexivel".
+   Como o acervo é escrito com acento e nenhuma das duas pontas de consumo faz
+   ascii folding, a maioria dos termos traduzidos nunca casava com nada: dos
+   exemplos do próprio prompt, só "cola" → "adesivo" funcionava. O bloco
+   entregava uma fração do recall que prometia.
+2. **Trechos alcançados só por termo traduzido entravam como prioritários** e,
+   a partir de seis, zeravam as vagas e expulsavam do contexto todos os trechos
+   que a pergunta real havia encontrado pelo vetor. Era o único caminho em que a
+   tradução podia deixar a recuperação **pior** do que antes de existir.
+   Reproduzido e travado por teste de mutação.
+
+Corrigidos junto: termos compostos eram quebrados em palavras soltas (gerando
+fragmentos órfãos e promovendo "espuma" a candidato de busca de altíssima
+frequência); o teto de `EXPANSAO_MAX_TERMOS` era contado em palavras e não em
+termos, entregando um terço dos conceitos configurados; a chamada de tradução
+não tinha timeout; o `try/except` do módulo não cobria a limpeza dos termos,
+deixando a docstring prometendo mais do que o código; e uma variável declarada
+vazia no `.env` desligaria a tradução em silêncio.
 
 Testes: `backend/tests/test_query_expansion.py` (módulo isolado) e
 `backend/tests/test_query_expansion_no_retriever.py` (integração com o

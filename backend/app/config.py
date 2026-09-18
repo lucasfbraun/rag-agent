@@ -75,13 +75,34 @@ EXPANSAO_CONSULTA_ATIVA = os.getenv("EXPANSAO_CONSULTA_ATIVA", "true").lower() =
 # é o modelo validado em uso contínuo neste projeto (ver comentário da tupla).
 # A tradução é uma tarefa curta e barata — não há motivo para gastar o modelo
 # caro aqui, nem para acoplá-la ao modelo que o usuário escolheu na tela.
-EXPANSAO_CONSULTA_MODELO = os.getenv("EXPANSAO_CONSULTA_MODELO", MODELOS_DE_CHAT_EM_ORDEM[0])
+#
+# CONSEQUÊNCIA A SABER: como este modelo é fixo e não acompanha o seletor da
+# tela, a pergunta digitada pelo usuário vai para ESTE provedor mesmo quando ele
+# escolheu outro para conversar. Só o texto da pergunta — a tradução não vê
+# documento nenhum do acervo. Quem precisar de um único provedor para tudo
+# define esta variável.
+#
+# `or` em vez do default de `os.getenv`: variável DECLARADA e VAZIA no .env
+# devolve "", não o default — e "" chegaria ao litellm como nome de modelo,
+# derrubando a tradução em silêncio (fail-open) em toda pergunta. Com `or`,
+# vazio e ausente se comportam igual, que é o que o .env.example promete.
+EXPANSAO_CONSULTA_MODELO = (
+    os.getenv("EXPANSAO_CONSULTA_MODELO") or MODELOS_DE_CHAT_EM_ORDEM[0]
+)
 
 # Teto de termos traduzidos. Cada termo vira um `scroll` próprio no Qdrant na
-# busca por palavra-chave, então este número é diretamente o custo da expansão
-# em ida-e-volta de rede. 6 é ponto de partida para experimento, não valor
+# busca por palavra-chave — e `_variantes_palavra_chave` pode gerar mais de uma
+# flexão por termo, então o custo real em ida-e-volta é um pequeno múltiplo
+# deste número, não ele exato. 6 é ponto de partida para experimento, não valor
 # validado — ajuste junto com a medição, não no escuro.
 EXPANSAO_MAX_TERMOS = int(os.getenv("EXPANSAO_MAX_TERMOS", "6"))
+
+# A tradução é síncrona e fica NA FRENTE de toda a recuperação no caminho
+# leigo. Sem teto, o padrão do litellm é 6000 s: um provedor lento (não com
+# erro — lento) penduraria a pergunta do vendedor por minutos antes de o
+# fail-open agir. Uma tradução que não chega em poucos segundos não vale a
+# espera, porque a busca sem ela é exatamente o comportamento anterior.
+EXPANSAO_TIMEOUT_SEGUNDOS = float(os.getenv("EXPANSAO_TIMEOUT_SEGUNDOS", "8"))
 
 # Banco relacional (Fase 5 — RBAC & Governança). Usuários/perfis, separado do Qdrant (vetorial).
 POSTGRES_HOST = os.getenv("POSTGRES_HOST", "localhost")

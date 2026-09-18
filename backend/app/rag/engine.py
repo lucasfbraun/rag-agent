@@ -3,6 +3,7 @@ import logging
 import re
 import unicodedata
 from concurrent.futures import ThreadPoolExecutor
+from itertools import zip_longest
 from typing import List, Dict, Any, Optional
 import litellm
 from qdrant_client.http import models as qmodels
@@ -1411,27 +1412,59 @@ def retrieve_products_context(
     keyword_hits = [hit for hit in keyword_hits if disponivel(hit)]
     semantic_hits = [hit for hit in semantic_hits if disponivel(hit)]
 
+    # Um hit de palavra-chave alcançado SÓ por termo traduzido não vale o mesmo
+    # que um alcançado pelas palavras do próprio vendedor. O termo traduzido é
+    # uma HIPÓTESE de vocabulário produzida por um modelo (ver
+    # app.rag.query_expansion) — tratá-lo como prioritário fazia seis trechos
+    # de hipótese zerarem as vagas e EXPULSAREM do contexto os trechos que a
+    # pergunta real encontrou. Era o único caminho em que a tradução podia
+    # deixar a recuperação PIOR do que antes de existir.
+    def _casa_com_palavra_do_usuario(payload: Dict[str, Any]) -> bool:
+        texto = (payload.get("content") or "").lower()
+        return any(
+            (
+                bool(re.search(r"\b(?:poliuretanos?|pu)\b", texto))
+                if palavra == "poliuretano"
+                else palavra in texto
+            )
+            for palavra in palavras_chave
+        )
+
+    if termos_expandidos:
+        keyword_hits_do_usuario = [h for h in keyword_hits if _casa_com_palavra_do_usuario(h)]
+        keyword_hits_traduzidos = [h for h in keyword_hits if not _casa_com_palavra_do_usuario(h)]
+    else:
+        keyword_hits_do_usuario, keyword_hits_traduzidos = keyword_hits, []
+
     # Referência cruzada vem primeiro: em perguntas sobre X dentro de Y, a
     # evidência frequentemente mora apenas no boletim de Y.
-    # Depois: seção pedida > match exato de código > palavra-chave > semântico.
+    # Depois: seção pedida > match exato de código > palavra-chave do usuário.
     prioritarios: List[Dict[str, Any]] = list(relation_hits)
     vistos = {(h.get("filename"), h.get("chunk_index")) for h in prioritarios}
-    for h in [*secao_hits, *exact_hits, *keyword_hits]:
+    for h in [*secao_hits, *exact_hits, *keyword_hits_do_usuario]:
         chave = (h.get("filename"), h.get("chunk_index"))
         if chave not in vistos:
             prioritarios.append(h)
             vistos.add(chave)
 
-    if not prioritarios:
-        # Sem nenhum hit prioritário, o vetor é a única evidência que existe —
-        # e é justamente a situação da pergunta leiga. Quando houve tradução,
-        # o teto sobe um pouco para caber a consulta original E a traduzida;
-        # sem tradução, nada muda em relação ao comportamento anterior.
-        teto = top_k + (_VAGAS_EXTRAS_COM_CONSULTA_TRADUZIDA if termos_expandidos else 0)
-        return _ordenar_por_secao(semantic_hits[:teto], secoes)
+    # Abaixo dos prioritários, a evidência da pergunta real (vetor) e a da
+    # hipótese (termo traduzido) se alternam, em vez de uma esgotar as vagas da
+    # outra. Sem tradução, `keyword_hits_traduzidos` é vazio e isto degenera
+    # exatamente no comportamento anterior: só os hits semânticos, na ordem.
+    complemento: List[Dict[str, Any]] = []
+    for semantico, traduzido in zip_longest(semantic_hits, keyword_hits_traduzidos):
+        for h in (semantico, traduzido):
+            if h is None:
+                continue
+            chave = (h.get("filename"), h.get("chunk_index"))
+            if chave not in vistos:
+                complemento.append(h)
+                vistos.add(chave)
 
-    complemento = [h for h in semantic_hits if (h.get("filename"), h.get("chunk_index")) not in vistos]
-    vagas_restantes = max(0, top_k - len(prioritarios))
+    # O teto sobe um pouco quando houve tradução porque aí duas consultas
+    # diferentes disputam o mesmo orçamento de contexto. Sem tradução, é top_k.
+    teto = top_k + (_VAGAS_EXTRAS_COM_CONSULTA_TRADUZIDA if termos_expandidos else 0)
+    vagas_restantes = max(0, teto - len(prioritarios))
     return _ordenar_por_secao(prioritarios + complemento[:vagas_restantes], secoes)
 
 
