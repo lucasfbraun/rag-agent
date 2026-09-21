@@ -43,14 +43,15 @@ Acompanhamento do desenvolvimento:
    # ou via API:
    curl http://localhost:8000/api/health
    ```
-4. Aplique as migrações do banco relacional:
+4. As migrações do banco relacional são aplicadas **automaticamente** no boot
+   do container: o `ENTRYPOINT` é `python -m app.startup`, que roda
+   `alembic upgrade head` antes de entregar o processo ao uvicorn
+   (`backend/app/startup.py`). Não há passo manual — inclusive depois de um
+   `git pull` que traga migração nova, basta subir o container.
    ```bash
-   docker exec -it pu_matcher_backend alembic upgrade head
+   # Só se precisar conferir em que revisão o banco está:
+   docker exec -it pu_matcher_backend alembic current
    ```
-   > **Também a cada `git pull` que traga migração nova.** O backend não roda
-   > `upgrade` sozinho no boot: aplicar DDL automaticamente num container que
-   > reinicia é como se perde banco sem perceber. Se uma tela reclamar de coluna
-   > inexistente depois de atualizar, é este passo que faltou.
 5. Indexe documentos técnicos (coloque os arquivos em `data/raw_documents/` antes):
    ```bash
    # CLI (recomendado):
@@ -266,6 +267,41 @@ O que o agente faz com cada um:
 - Se uma orientação interna **contradisser um boletim**, o agente mostra os dois lados com as fontes e encaminha para a equipe técnica — não escolhe sozinho.
 
 O treinamento fica numa coleção separada do acervo, então **reindexar o acervo não apaga o que a equipe ensinou**.
+
+### Terminologia do catálogo
+
+Quarta forma de ensinar o agente, e a única que **não** passa por pergunta e
+resposta. Fica na aba *Terminologia do catálogo*, dentro de **Treinar agente**.
+
+O acervo usa códigos corporativos — `FLEXX® TH`, `FLEXX® RG`, `FLEXX® RIM`. As
+pessoas dizem *elastômero*, *rígidos*, *moldado por reação*. Cadastrar essa
+tradução é o que faz o agente responder pelo nome que se usa na empresa.
+
+**Por que isso não é "conhecimento" nem "correção".** As três modalidades de
+treinamento são indexadas no Qdrant e recuperadas por *similaridade* para dentro
+do prompt do modelo. Um apelido de linha cadastrado assim faria o agente *saber*
+em prosa que TH é a linha de elastômeros — enquanto a consulta estrutural, que
+lê a árvore de pastas e não o prompt, continuaria devolvendo zero. Terminologia
+é lida **deterministicamente** pelo resolvedor de classificações.
+
+**O ganho vai além de "produtos da linha elastômero".** O mesmo resolvedor
+alimenta o nível mais forte da cascata de evidência. Cadastrar um apelido
+promove a pergunta de natureza daquele termo — *"quais produtos são
+elastômeros?"* — de "o termo aparece no documento" para "a hierarquia do
+catálogo classifica assim".
+
+| | Antes do cadastro | Depois |
+|---|---|---|
+| *produtos da linha elastômero* | não encontra a linha | lista os TH |
+| *quais produtos são elastômeros* | menção no documento | classificação estrutural |
+| *produtos de borracha* | menção no documento | classificação estrutural (via tradução leigo→técnico) |
+
+A linha vem de um **seletor com as classificações reais do acervo**, não de
+campo livre — digitar `FLEXX TH` onde o acervo diz `FLEXX® TH` criaria um
+apelido que nunca resolve, sem erro visível em lugar nenhum. Cadastro exige
+*Treinar o agente*; entrar em uso exige *Aprovar treinamento*, porque um apelido
+muda o resultado de consultas apresentadas como a evidência mais forte que
+existe.
 
 ### Validar respostas (medir o acerto)
 

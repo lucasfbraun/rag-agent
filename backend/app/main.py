@@ -15,6 +15,8 @@ from app.auth.admin_router import router as admin_router
 from app.auth.perfil_router import router as perfil_router
 from app.upload_router import router as upload_router
 from app.treinamento_router import router as treinamento_router
+from app.termo_negocio_router import router as termo_negocio_router
+from app.termo_negocio_service import registrar_no_resolvedor as registrar_terminologia_no_resolvedor
 from app.conversation_router import router as conversation_router
 from app.validacao_router import router as validacao_router
 from app.auth.permissions import Permission, has_permission, require_permission
@@ -44,8 +46,15 @@ app.include_router(admin_router)
 app.include_router(perfil_router)
 app.include_router(upload_router)
 app.include_router(treinamento_router)
+app.include_router(termo_negocio_router)
 app.include_router(conversation_router)
 app.include_router(validacao_router)
+
+# Liga a terminologia cadastrada pela equipe ao resolvedor de classificações do
+# catálogo. Fica AQUI, e não em `app.rag.catalog_stats`, de propósito: aquele
+# módulo não conhece o banco, e `tools/diagnostico_extracao.py` e o CLI o
+# importam sem Postgres no ambiente. Ver `app.termo_negocio_service`.
+registrar_terminologia_no_resolvedor()
 
 # ---------------------------------------------------------------------------
 # Schemas

@@ -27,6 +27,7 @@ MODELS_URL = f"{API_BASE}/api/models"
 DOCUMENTOS_URL = f"{API_BASE}/api/documentos"
 PERFIS_URL = f"{API_BASE}/api/auth/perfis"
 TREINAMENTO_URL = f"{API_BASE}/api/treinamento"
+TERMINOLOGIA_URL = f"{API_BASE}/api/terminologia"
 VALIDACAO_URL = f"{API_BASE}/api/validacao"
 
 # `page_icon` aceita caminho de arquivo além de emoji — o símbolo da marca
@@ -639,6 +640,10 @@ def _api_usuarios(metodo: str, caminho: str = "", **kwargs):
 
 def _api_treinamento(metodo: str, caminho: str = "", **kwargs):
     return _chamar_api(f"{TREINAMENTO_URL}{caminho}", metodo, **kwargs)
+
+
+def _api_terminologia(metodo: str, caminho: str = "", **kwargs):
+    return _chamar_api(f"{TERMINOLOGIA_URL}{caminho}", metodo, **kwargs)
 
 
 def _api_validacao(metodo: str, caminho: str = "", **kwargs):
@@ -1357,6 +1362,112 @@ def _render_cartao_treinamento(item: dict, pode_aprovar: bool):
                         st.error(retorno)
 
 
+def _render_terminologia(pode_treinar: bool, pode_aprovar: bool):
+    """Apelido que a empresa usa para uma linha do catálogo.
+
+    A linha vem de um SELETOR, não de campo livre: o acervo escreve
+    "FLEXX® TH", e alguém digitando "FLEXX TH" criaria um apelido que nunca
+    resolve, sem erro visível em lugar nenhum. A lista vem do próprio acervo.
+    """
+    st.caption(
+        "O acervo usa códigos — FLEXX® TH, FLEXX® RG, FLEXX® RIM. As pessoas "
+        "dizem elastômero, rígidos, moldado por reação. Cadastre aqui a "
+        "tradução e o agente passa a responder pelo nome que se usa na empresa."
+    )
+    st.info(
+        "Isto **não** é o mesmo que ensinar um fato ao agente. Um apelido muda o "
+        "resultado das consultas de **linha e de natureza**: com ele, "
+        '"quais produtos são elastômeros?" passa a ser respondida pela '
+        "hierarquia do catálogo — a evidência mais forte que existe — em vez de "
+        "por menção no texto dos documentos.",
+        icon="🏷️",
+    )
+
+    ok, termos = _api_terminologia("GET")
+    if not ok:
+        st.error(termos)
+        return
+
+    if pode_treinar:
+        ok_cls, classificacoes = _api_terminologia("GET", "/classificacoes")
+        if not ok_cls:
+            st.error(classificacoes)
+        elif not classificacoes:
+            st.warning(
+                "Nenhuma classificação encontrada no acervo. Indexe os documentos "
+                "antes de cadastrar terminologia."
+            )
+        else:
+            with st.form("form_terminologia", clear_on_submit=True):
+                classificacao = st.selectbox(
+                    "Linha do catálogo (como está no acervo)", classificacoes
+                )
+                termo = st.text_input(
+                    "Como a empresa chama essa linha",
+                    max_chars=200,
+                    placeholder="ex: elastômero",
+                )
+                observacao = st.text_area(
+                    "Observação (opcional)",
+                    max_chars=2000,
+                    placeholder="ex: é como vendas e engenharia se referem à linha",
+                )
+                if st.form_submit_button(
+                    "Cadastrar terminologia", type="primary", use_container_width=True
+                ):
+                    if len(termo.strip()) < 2:
+                        st.error("O termo precisa ter pelo menos 2 caracteres.")
+                    else:
+                        ok_post, retorno = _api_terminologia("POST", json={
+                            "classificacao": classificacao,
+                            "termo": termo.strip(),
+                            "observacao": observacao.strip() or None,
+                        })
+                        if ok_post:
+                            st.success("Terminologia enviada para aprovação.")
+                            st.rerun()
+                        st.error(retorno)
+
+    st.divider()
+    if not termos:
+        st.info("Nenhuma terminologia cadastrada ainda.")
+        return
+
+    for item in termos:
+        rotulo_status = {
+            "pendente": "⏳ Pendente", "aprovado": "✅ Em uso", "rejeitado": "🚫 Recusado",
+        }.get(item["status"], item["status"])
+        with st.container(border=True):
+            st.markdown(f'**{item["termo"]}** → `{item["classificacao"]}` · {rotulo_status}')
+            if item.get("observacao"):
+                st.caption(item["observacao"])
+            if item.get("motivo_decisao"):
+                st.caption(f'Motivo da recusa: {item["motivo_decisao"]}')
+            if pode_aprovar and item["status"] == "pendente":
+                coluna_ok, coluna_nao = st.columns(2)
+                with coluna_ok:
+                    if st.button("Aprovar", key=f'aprova-termo-{item["id"]}',
+                                 use_container_width=True):
+                        ok_a, retorno = _api_terminologia(
+                            "POST", f'/{item["id"]}/aprovar'
+                        )
+                        if ok_a:
+                            st.rerun()
+                        st.error(retorno)
+                with coluna_nao:
+                    motivo = st.text_input(
+                        "Motivo da recusa", key=f'motivo-termo-{item["id"]}'
+                    )
+                    if st.button("Recusar", key=f'recusa-termo-{item["id"]}',
+                                 use_container_width=True):
+                        ok_r, retorno = _api_terminologia(
+                            "POST", f'/{item["id"]}/recusar', json={"motivo": motivo}
+                        )
+                        if ok_r:
+                            st.rerun()
+                        st.error(retorno)
+
+
 def _render_pagina_treinamento():
     _titulo_com_icone("Treinar o agente")
     pode_treinar = _pode_treinar_agente()
@@ -1370,6 +1481,9 @@ def _render_pagina_treinamento():
     rotulos_abas = [rotulo]
     if pode_treinar:
         rotulos_abas = [rotulo, "Novo ensinamento"] if pode_aprovar else ["Novo ensinamento", rotulo]
+    # A terminologia é a última aba sempre: é a modalidade menos frequente
+    # (cinquenta e três linhas, cadastradas uma vez) e a mais estrutural.
+    rotulos_abas = [*rotulos_abas, "Terminologia do catálogo"]
     abas = st.tabs(rotulos_abas)
     indice_lista = 0 if pode_aprovar or not pode_treinar else 1
     with abas[indice_lista]:
@@ -1381,6 +1495,8 @@ def _render_pagina_treinamento():
         indice_novo = 1 if pode_aprovar else 0
         with abas[indice_novo]:
             _render_form_treinamento()
+    with abas[-1]:
+        _render_terminologia(pode_treinar, pode_aprovar)
 
 
 _ROTULO_VEREDITO = {

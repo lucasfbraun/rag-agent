@@ -9,6 +9,7 @@ subpasta administrativa entre o produto e o arquivo — `Obsoletos`,
 `Certificados`, etc.) — não existe um campo estruturado "código de produto"
 na ingestão hoje. Ver `_produto_do_filepath`.
 """
+import logging
 import re
 import unicodedata
 from typing import Any, Dict, List, Optional
@@ -18,6 +19,8 @@ from qdrant_client.http import models as qmodels
 from app.rag.ingestion import get_qdrant_client
 from app.rag.exceptions import RetrievalIndisponivelError
 from app.config import COLLECTION_NAME
+
+logger = logging.getLogger(__name__)
 
 _SEPARADOR_CAMINHO = re.compile(r"[\\/]+")
 
@@ -907,6 +910,42 @@ def _aliases_de_rotulo_classificacao(rotulo: str) -> set[str]:
     return aliases
 
 
+# Apelidos cadastrados pela equipe na tela (tabela `termos_de_negocio`).
+#
+# INJETADO, não importado. Este módulo não conhece o banco de propósito:
+# `tools/diagnostico_extracao.py` e o CLI o importam sem Postgres no ambiente, e
+# um `from app.termo_negocio_service import ...` aqui derrubaria os dois. Quem
+# tem o banco (app.startup) registra a fonte; quem não tem simplesmente fica
+# com o mapa de código, que é o comportamento anterior.
+_fonte_de_aliases_cadastrados = None
+
+
+def registrar_fonte_de_aliases_cadastrados(fonte) -> None:
+    """Registra a função que devolve {termo_normalizado: {rotulo, ...}}.
+
+    Chamada uma vez no startup da aplicação. Testes registram um stub e
+    restauram com `registrar_fonte_de_aliases_cadastrados(None)`.
+    """
+    global _fonte_de_aliases_cadastrados
+    _fonte_de_aliases_cadastrados = fonte
+
+
+def _aliases_cadastrados(termo: str) -> set:
+    """Classificações que a equipe associou a este termo. Fail-open.
+
+    Uma falha ao ler o cadastro NÃO pode derrubar uma consulta de catálogo: o
+    resultado sem os apelidos é exatamente o comportamento anterior a este
+    recurso, e é melhor que um erro na cara do vendedor.
+    """
+    if _fonte_de_aliases_cadastrados is None:
+        return set()
+    try:
+        return set(_fonte_de_aliases_cadastrados().get(termo, set()))
+    except Exception as e:  # pragma: no cover - caminho de degradação
+        logger.warning("Apelidos cadastrados indisponíveis (%s) — seguindo sem eles.", e)
+        return set()
+
+
 def _resolver_classificacoes_catalogo(
     termo_classificacao: str,
     classificacoes_disponiveis: set[str],
@@ -921,8 +960,12 @@ def _resolver_classificacoes_catalogo(
     # Defeito silencioso, e do pior tipo — só apareceria num acervo onde as
     # duas coisas coexistem, provavelmente no dia em que alguém renomeasse a
     # pasta e a resposta continuasse a mesma sem explicação.
+    # Três fontes, unidas: o mapa de código (aliases validados aqui), o que a
+    # equipe cadastrou na tela, e a descoberta dinâmica pelos caminhos do
+    # Qdrant. A união é o que permite cadastrar apelido sem esconder a pasta.
     por_alias = classificacoes_disponiveis.intersection(
-        _ALIASES_CLASSIFICACAO_CATALOGO.get(termo, set())
+        set(_ALIASES_CLASSIFICACAO_CATALOGO.get(termo, set()))
+        | _aliases_cadastrados(termo)
     )
     por_descoberta = {
         classificacao

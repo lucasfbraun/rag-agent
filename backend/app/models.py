@@ -345,6 +345,81 @@ class ItemTreinamento(Base):
     decidido_por: Mapped["User | None"] = relationship(foreign_keys=[decidido_por_id], lazy="joined")
 
 
+class TermoDeNegocio(Base):
+    """Apelido que a empresa usa para uma linha do catálogo.
+
+    POR QUE NÃO É UMA QUARTA MODALIDADE DE `ItemTreinamento`
+
+    As três modalidades de treinamento (correção, conhecimento, exemplo) são
+    indexadas no Qdrant e recuperadas POR SIMILARIDADE para dentro do prompt do
+    LLM. Um apelido de linha cadastrado assim faria o agente "saber", em prosa,
+    que TH é a linha de elastômeros — e a consulta estrutural
+    (`listar_produtos_por_classificacao_catalogo`) continuaria devolvendo ZERO,
+    porque ela lê a árvore de pastas do acervo, não o prompt.
+
+    Essa é exatamente a armadilha que já custou uma rodada neste projeto. Por
+    isso a terminologia mora numa tabela própria e é lida DETERMINISTICAMENTE
+    pelo resolvedor de classificações, não injetada em prompt nenhum.
+
+    O efeito é duplo, e o segundo é o que importa mais: além de responder
+    "produtos da linha elastômero", o mapa alimenta o nível
+    `classificacao_estrutural` da cascata de evidência — o mais forte que
+    existe. Cadastrar um apelido promove a pergunta de natureza daquele termo
+    de "menção no documento" para "a hierarquia do catálogo classifica assim".
+    """
+    __tablename__ = "termos_de_negocio"
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+
+    # Rótulo COMO ESTÁ no acervo ("FLEXX® TH"), para exibir, e a forma
+    # normalizada ("flexx th"), que é por onde o resolvedor compara. Guardar as
+    # duas evita normalizar a cada consulta e preserva o texto que a pessoa viu
+    # na tela quando escolheu.
+    classificacao: Mapped[str] = mapped_column(String(200), nullable=False)
+    classificacao_rotulo: Mapped[str] = mapped_column(String(200), nullable=False, index=True)
+
+    # O apelido de negócio ("elastômero"), e sua forma normalizada sem acento,
+    # que é a chave de busca — quem pergunta digita "elastomero" tanto quanto
+    # "elastômero".
+    termo: Mapped[str] = mapped_column(String(200), nullable=False)
+    termo_normalizado: Mapped[str] = mapped_column(String(200), nullable=False, index=True)
+
+    observacao: Mapped[str | None] = mapped_column(Text, nullable=True)
+
+    # Mesma disciplina de correção e conhecimento: afirma um FATO sobre o
+    # catálogo que o agente vai repetir como verdade da empresa, então passa
+    # por aprovação antes de valer.
+    status: Mapped[StatusDocumento] = mapped_column(
+        SAEnum(StatusDocumento, name="status_documento"),
+        nullable=False, default=StatusDocumento.PENDENTE, index=True,
+    )
+    motivo_decisao: Mapped[str | None] = mapped_column(Text, nullable=True)
+
+    criado_por_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("users.id"), nullable=False, index=True
+    )
+    decidido_por_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("users.id"), nullable=True
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, default=_utcnow, index=True
+    )
+    decidido_em: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+    criado_por: Mapped["User"] = relationship(foreign_keys=[criado_por_id], lazy="joined")
+    decidido_por: Mapped["User | None"] = relationship(foreign_keys=[decidido_por_id], lazy="joined")
+
+    __table_args__ = (
+        # O mesmo apelido para a mesma linha, duas vezes, é ruído — e duas
+        # linhas DIFERENTES podendo reivindicar o mesmo apelido é legítimo
+        # (o resolvedor devolve as duas), então a unicidade é do par.
+        UniqueConstraint(
+            "classificacao_rotulo", "termo_normalizado",
+            name="uq_termo_de_negocio_classificacao_termo",
+        ),
+    )
+
+
 class Veredito(str, enum.Enum):
     """O julgamento técnico de uma resposta já dada.
 
