@@ -21,6 +21,15 @@ from app.rag.query_expansion import (
     expandir_termos_do_dominio,
     termos_expandidos_em_cache,
 )
+from app.rag.caminhos import (
+    CAMINHO_APLICACAO,
+    CAMINHO_BUSCA_REVERSA,
+    CAMINHO_CLASSIFICACAO,
+    CAMINHO_CONVERSACIONAL,
+    CAMINHO_FORA_DE_ESCOPO,
+    CAMINHO_NATUREZA,
+    CAMINHO_REQUISITOS_COMPOSTOS,
+)
 from app.rag.treinamento import montar_bloco as montar_bloco_de_treinamento
 from app.rag.exceptions import RetrievalIndisponivelError
 from app.rag.catalog_stats import (
@@ -1866,6 +1875,38 @@ def _executar_tool_calls(tool_calls, *, ver_custos: bool, ver_laudo_completo: bo
     return [executar(call) for call in tool_calls]
 
 
+def _termos_efetivamente_pesquisados(query_recuperacao: str) -> List[str]:
+    """Os termos que a busca textual realmente usou, para registro.
+
+    Reconstrói o que `retrieve_products_context` montou internamente — as
+    palavras-chave da pergunta mais os termos traduzidos — lendo o CACHE da
+    expansão, nunca chamando o LLM de novo. Só faz sentido depois de
+    `_preparar_contexto`, que é quem popula esse cache.
+
+    Serve para responder, meses depois, a pergunta que hoje não tem resposta:
+    "esta resposta errada foi porque a busca procurou a palavra errada?".
+    Sem o registro, a única forma de saber é reproduzir a consulta — e a
+    tradução pode ter mudado no meio tempo.
+    """
+    palavras = _extrair_palavras_chave(query_recuperacao)
+    traduzidos = termos_expandidos_em_cache(query_recuperacao)
+    return list(dict.fromkeys(palavras + traduzidos))
+
+
+def _com_rastro(
+    resposta: Dict[str, Any], caminho: str, termos: Optional[List[str]] = None
+) -> Dict[str, Any]:
+    """Anexa a identidade do caminho e os termos buscados ao resultado.
+
+    É anexado AQUI, no orquestrador, e não dentro de cada detector, porque é
+    aqui que a decisão de qual caminho atende acontece — a cascata de `if`
+    logo abaixo É a decisão. Cada detector continua ignorando que existe
+    medição, e um detector novo que alguém esqueça de marcar cai em
+    `CAMINHO_DESCONHECIDO` no relatório em vez de mentir sobre qual foi.
+    """
+    return {**resposta, "caminho": caminho, "termos_busca": list(termos or [])}
+
+
 def run_pu_matcher_agent(
     query: str,
     template_id: str = "proposta_tecnica_completa",
@@ -1884,19 +1925,24 @@ def run_pu_matcher_agent(
     decide permissão, só encaminha a decisão já tomada."""
     resposta_fora_do_escopo = _responder_fora_do_escopo(query)
     if resposta_fora_do_escopo is not None:
-        return {
-            "answer": resposta_fora_do_escopo,
-            "sources": [],
-            "model_used": "escopo-deterministico",
-        }
+        return _com_rastro(
+            {
+                "answer": resposta_fora_do_escopo,
+                "sources": [],
+                "model_used": "escopo-deterministico",
+            },
+            CAMINHO_FORA_DE_ESCOPO,
+        )
 
     resposta_reversa = _responder_busca_reversa_produto(query, ver_custos)
     if resposta_reversa is not None:
-        return resposta_reversa
+        return _com_rastro(
+            resposta_reversa, CAMINHO_BUSCA_REVERSA, _detectar_codigos_produto(query)
+        )
 
     resposta_composta = _responder_requisitos_compostos(query)
     if resposta_composta is not None:
-        return resposta_composta
+        return _com_rastro(resposta_composta, CAMINHO_REQUISITOS_COMPOSTOS)
 
     # Classificação explícita ("tecnologia X", "linha Y") tem precedência: o
     # usuário nomeou a hierarquia, e ali a resposta é exata.
@@ -1906,24 +1952,32 @@ def run_pu_matcher_agent(
         if termo_natureza:
             resposta_natureza = _responder_natureza_do_produto(query, termo_natureza)
             if resposta_natureza is not None:
-                return {
-                    "answer": resposta_natureza,
-                    "sources": [],
-                    "model_used": "catalogo-estruturado",
-                }
+                return _com_rastro(
+                    {
+                        "answer": resposta_natureza,
+                        "sources": [],
+                        "model_used": "catalogo-estruturado",
+                    },
+                    CAMINHO_NATUREZA,
+                    [termo_natureza],
+                )
 
     if classificacao_catalogo:
-        return {
-            "answer": _responder_listagem_classificacao_catalogo(
-                query, classificacao_catalogo
-            ),
-            "sources": [],
-            "model_used": "catalogo-estruturado",
-        }
+        return _com_rastro(
+            {
+                "answer": _responder_listagem_classificacao_catalogo(
+                    query, classificacao_catalogo
+                ),
+                "sources": [],
+                "model_used": "catalogo-estruturado",
+            },
+            CAMINHO_CLASSIFICACAO,
+            [classificacao_catalogo],
+        )
 
     resposta_aplicacao = _responder_aplicacao_com_evidencia(query)
     if resposta_aplicacao is not None:
-        return resposta_aplicacao
+        return _com_rastro(resposta_aplicacao, CAMINHO_APLICACAO)
 
     query_recuperacao = _montar_query_recuperacao(query, history)
     docs, context_str = _preparar_contexto(query_recuperacao, ver_custos)
@@ -1969,7 +2023,11 @@ MENSAGEM / DEMANDA DO VENDEDOR OU CLIENTE:
 
     answer = _aplicar_guardrails_resposta(query, answer, history)
     sources = list(set([d.get("filename") for d in docs if d.get("filename")]))
-    return {"answer": answer, "sources": sources, "model_used": model_name}
+    return _com_rastro(
+        {"answer": answer, "sources": sources, "model_used": model_name},
+        CAMINHO_CONVERSACIONAL,
+        _termos_efetivamente_pesquisados(query_recuperacao),
+    )
 
 
 def stream_pu_matcher_agent(
@@ -1997,7 +2055,8 @@ def stream_pu_matcher_agent(
     resposta_fora_do_escopo = _responder_fora_do_escopo(query)
     if resposta_fora_do_escopo is not None:
         yield _json.dumps({
-            "type": "meta", "sources": [], "model_used": "escopo-deterministico"
+            "type": "meta", "sources": [], "model_used": "escopo-deterministico",
+            "caminho": CAMINHO_FORA_DE_ESCOPO, "termos_busca": [],
         }) + "\n"
         yield _json.dumps({
             "type": "delta", "content": resposta_fora_do_escopo
@@ -2012,6 +2071,8 @@ def stream_pu_matcher_agent(
                 "type": "meta",
                 "sources": resposta_reversa["sources"],
                 "model_used": resposta_reversa["model_used"],
+                "caminho": CAMINHO_BUSCA_REVERSA,
+                "termos_busca": _detectar_codigos_produto(query),
             }) + "\n"
             yield _json.dumps({
                 "type": "delta", "content": resposta_reversa["answer"],
@@ -2025,6 +2086,7 @@ def stream_pu_matcher_agent(
                 "type": "meta",
                 "sources": resposta_composta["sources"],
                 "model_used": resposta_composta["model_used"],
+                "caminho": CAMINHO_REQUISITOS_COMPOSTOS, "termos_busca": [],
             }) + "\n"
             yield _json.dumps({
                 "type": "delta", "content": resposta_composta["answer"],
@@ -2044,7 +2106,8 @@ def stream_pu_matcher_agent(
             # de encerrar num beco sem saída (ver `_responder_natureza_do_produto`).
             if resposta_natureza is not None:
                 yield _json.dumps({
-                    "type": "meta", "sources": [], "model_used": "catalogo-estruturado"
+                    "type": "meta", "sources": [], "model_used": "catalogo-estruturado",
+                    "caminho": CAMINHO_NATUREZA, "termos_busca": [termo_natureza],
                 }) + "\n"
                 yield _json.dumps({
                     "type": "delta", "content": resposta_natureza,
@@ -2054,7 +2117,9 @@ def stream_pu_matcher_agent(
 
         if classificacao_catalogo:
             yield _json.dumps({
-                "type": "meta", "sources": [], "model_used": "catalogo-estruturado"
+                "type": "meta", "sources": [], "model_used": "catalogo-estruturado",
+                "caminho": CAMINHO_CLASSIFICACAO,
+                "termos_busca": [classificacao_catalogo],
             }) + "\n"
             yield _json.dumps({
                 "type": "delta",
@@ -2071,6 +2136,7 @@ def stream_pu_matcher_agent(
                 "type": "meta",
                 "sources": resposta_aplicacao["sources"],
                 "model_used": resposta_aplicacao["model_used"],
+                "caminho": CAMINHO_APLICACAO, "termos_busca": [],
             }) + "\n"
             yield _json.dumps({
                 "type": "delta", "content": resposta_aplicacao["answer"],
@@ -2104,7 +2170,11 @@ MENSAGEM / DEMANDA DO VENDEDOR OU CLIENTE:
     messages.append({"role": "user", "content": user_prompt})
 
     sources = list(set([d.get("filename") for d in docs if d.get("filename")]))
-    yield _json.dumps({"type": "meta", "sources": sources, "model_used": model_name}) + "\n"
+    yield _json.dumps({
+        "type": "meta", "sources": sources, "model_used": model_name,
+        "caminho": CAMINHO_CONVERSACIONAL,
+        "termos_busca": _termos_efetivamente_pesquisados(query_recuperacao),
+    }) + "\n"
 
     try:
         resposta_inicial = litellm.completion(

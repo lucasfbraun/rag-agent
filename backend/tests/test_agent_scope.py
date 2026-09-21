@@ -39,10 +39,16 @@ def test_stream_de_pergunta_culinaria_nao_consulta_catalogo_nem_modelo():
 
     preparar_contexto.assert_not_called()
     completion.assert_not_called()
+    # `caminho`/`termos_busca` entraram no `meta` em 18/09/2026 (rastro de
+    # recuperação, ver app/rag/caminhos.py). A igualdade exata continua sendo
+    # o que se quer aqui: garante que a recusa determinística não passou a
+    # carregar fonte nem modelo de chat por acidente.
     assert eventos[0] == {
         "type": "meta",
         "sources": [],
         "model_used": "escopo-deterministico",
+        "caminho": "escopo-deterministico",
+        "termos_busca": [],
     }
     assert "fora do escopo do PU Matcher" in eventos[1]["content"]
     assert eventos[-1] == {"type": "done"}
