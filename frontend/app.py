@@ -27,6 +27,7 @@ MODELS_URL = f"{API_BASE}/api/models"
 DOCUMENTOS_URL = f"{API_BASE}/api/documentos"
 PERFIS_URL = f"{API_BASE}/api/auth/perfis"
 TREINAMENTO_URL = f"{API_BASE}/api/treinamento"
+VALIDACAO_URL = f"{API_BASE}/api/validacao"
 
 # `page_icon` aceita caminho de arquivo além de emoji — o símbolo da marca
 # substitui o 🎯 placeholder na aba do navegador e no atalho do PWA.
@@ -625,6 +626,12 @@ def _pode_acessar_treinamento() -> bool:
     return _pode_treinar_agente() or _pode_aprovar_treinamento()
 
 
+def _pode_validar_respostas() -> bool:
+    """Perfil técnico. O vendedor leigo continua só perguntando — é isso que
+    faz o veredito valer alguma coisa."""
+    return _tem_permissao("validate_answers")
+
+
 def _api_usuarios(metodo: str, caminho: str = "", **kwargs):
     """Chamada às rotas de administração de usuários."""
     return _chamar_api(f"{USERS_URL}{caminho}", metodo, **kwargs)
@@ -632,6 +639,10 @@ def _api_usuarios(metodo: str, caminho: str = "", **kwargs):
 
 def _api_treinamento(metodo: str, caminho: str = "", **kwargs):
     return _chamar_api(f"{TREINAMENTO_URL}{caminho}", metodo, **kwargs)
+
+
+def _api_validacao(metodo: str, caminho: str = "", **kwargs):
+    return _chamar_api(f"{VALIDACAO_URL}{caminho}", metodo, **kwargs)
 
 
 def _chamar_api(url: str, metodo: str, **kwargs):
@@ -1372,6 +1383,190 @@ def _render_pagina_treinamento():
             _render_form_treinamento()
 
 
+_ROTULO_VEREDITO = {
+    "correta": "✅ Correta",
+    "incorreta": "❌ Incorreta",
+    "incompleta": "⚠️ Incompleta",
+    "divergente": "🔀 Vereditos divergentes",
+}
+
+
+def _percentual(taxa) -> str:
+    """`None` não vira 0%. Sem julgamento não existe taxa, e mostrar 0% ao
+    técnico seria afirmar que o sistema erra tudo — coisa que o dado não diz."""
+    return "—" if taxa is None else f"{taxa * 100:.1f}%"
+
+
+def _render_cartao_para_validar(item: dict):
+    """Uma resposta real, com tudo que é preciso para julgá-la sem sair da tela.
+
+    Mostra caminho do motor, fontes e termos pesquisados junto da resposta:
+    sem isso o técnico marca "errada" e ninguém descobre se o erro foi de
+    recuperação (procurou a palavra errada), de evidência (achou o documento e
+    leu mal) ou de catálogo (o produto certo não está indexado)."""
+    with st.container(border=True):
+        st.caption(
+            f"{item['created_at'][:10]} · {item['caminho_rotulo']}"
+            + (f" · {item['model_used']}" if item.get("model_used") else "")
+        )
+        st.markdown(f"**Pergunta:** {item['pergunta'] or '(não localizada)'}")
+        with st.expander("Resposta que o agente deu", expanded=False):
+            st.markdown(item["resposta"])
+        if item.get("fontes"):
+            st.caption("📄 Fontes citadas: " + ", ".join(item["fontes"]))
+        if item.get("termos_busca"):
+            st.caption("🔎 Termos pesquisados: " + ", ".join(item["termos_busca"]))
+
+        with st.form(f"veredito_{item['mensagem_id']}", clear_on_submit=True):
+            veredito = st.radio(
+                "Esta resposta está…",
+                options=("correta", "incorreta", "incompleta"),
+                format_func=lambda v: _ROTULO_VEREDITO[v],
+                horizontal=True,
+                key=f"vd_{item['mensagem_id']}",
+            )
+            # Os dois campos são opcionais de propósito: exigir a resposta
+            # certa de quem só tem tempo de marcar "errado" faria o técnico
+            # não marcar nada, e meia informação registrada vale mais que a
+            # informação inteira que ninguém escreveu.
+            resposta_correta = st.text_area(
+                "Qual seria a resposta certa? (opcional)",
+                key=f"rc_{item['mensagem_id']}", height=80,
+            )
+            justificativa = st.text_area(
+                "Por quê? (opcional)",
+                key=f"jt_{item['mensagem_id']}", height=68,
+            )
+            if st.form_submit_button("Registrar veredito", type="primary"):
+                ok, retorno = _api_validacao(
+                    "POST", f"/mensagens/{item['mensagem_id']}",
+                    json={
+                        "veredito": veredito,
+                        "resposta_correta": resposta_correta.strip() or None,
+                        "justificativa": justificativa.strip() or None,
+                    },
+                )
+                if ok:
+                    st.rerun()
+                st.error(retorno)
+
+
+def _render_aba_fila():
+    st.caption(
+        "Estas são perguntas que as pessoas realmente fizeram. Não há como "
+        "criar uma pergunta de avaliação aqui, e isso é deliberado: pergunta "
+        "inventada mede o quanto quem a inventou conhece o motor, não o "
+        "quanto o motor serve a quem o usa."
+    )
+    filtro_col, limite_col = st.columns([3, 1])
+    with filtro_col:
+        so_negativas = st.checkbox(
+            "Só respostas que alguém marcou como 'não útil'",
+            help=(
+                "O vendedor é leigo, então isso não é julgamento técnico — é "
+                "só o sinal mais barato de por onde começar quando o "
+                "histórico é grande e o tempo é curto."
+            ),
+        )
+    with limite_col:
+        limite = st.number_input("Quantas", min_value=5, max_value=200, value=25, step=5)
+
+    ok, itens = _api_validacao(
+        "GET", "/fila",
+        params={
+            "apenas_sem_veredito": True,
+            "apenas_com_feedback_negativo": so_negativas,
+            "limite": int(limite),
+        },
+    )
+    if not ok:
+        st.error(itens)
+        return
+    if not itens:
+        st.info(
+            "Nenhuma resposta aguardando validação. Se o sistema acabou de "
+            "entrar no ar, isto é esperado: o conjunto de avaliação se forma "
+            "conforme as pessoas usam o agente."
+        )
+        return
+    for item in itens:
+        _render_cartao_para_validar(item)
+
+
+def _render_aba_relatorio():
+    ok, relatorio = _api_validacao("GET", "/relatorio")
+    if not ok:
+        st.error(relatorio)
+        return
+
+    for aviso in relatorio.get("avisos", []):
+        st.warning(aviso)
+
+    colunas = st.columns(4)
+    colunas[0].metric("Taxa de acerto", _percentual(relatorio["taxa_acerto"]))
+    colunas[1].metric("Respostas validadas", relatorio["total_respostas_validadas"])
+    colunas[2].metric("Respostas no período", relatorio["total_respostas_no_periodo"])
+    colunas[3].metric("Cobertura", _percentual(relatorio.get("cobertura")))
+
+    st.subheader("Taxa por caminho do motor")
+    st.caption(
+        "É esta tabela que diz ONDE o sistema erra. A taxa geral sozinha "
+        "mistura mecanismos que não têm relação um com o outro — se o caminho "
+        "determinístico acerta 90% e o conversacional 40%, a fila de trabalho "
+        "inteira é outra."
+    )
+    if not relatorio["por_caminho"]:
+        st.info("Nenhum veredito registrado ainda.")
+    else:
+        st.dataframe(
+            [
+                {
+                    "Caminho": c["rotulo"],
+                    "Taxa": _percentual(c["taxa_acerto"]),
+                    "n": c["total"],
+                    "Corretas": c["corretas"],
+                    "Incorretas": c["incorretas"],
+                    "Incompletas": c["incompletas"],
+                    "Divergentes": c["divergentes"],
+                    "Amostra": "ok" if c["amostra_suficiente"] else "insuficiente",
+                }
+                for c in relatorio["por_caminho"]
+            ],
+            use_container_width=True, hide_index=True,
+        )
+
+    st.subheader(f"Conjunto de regressão ({len(relatorio['regressao'])})")
+    st.caption(
+        "Perguntas reais que erraram. Toda mudança no motor deveria ser "
+        "conferida contra esta lista antes de ser chamada de melhora."
+    )
+    for item in relatorio["regressao"]:
+        with st.container(border=True):
+            st.markdown(
+                f"{_ROTULO_VEREDITO.get(item['veredito'], item['veredito'])} · "
+                f"_{item['caminho_rotulo']}_"
+            )
+            st.markdown(f"**{item['pergunta']}**")
+            for correcao in item.get("correcoes", []):
+                if correcao.get("resposta_correta"):
+                    st.markdown(f"→ **Resposta certa:** {correcao['resposta_correta']}")
+                if correcao.get("justificativa"):
+                    st.caption(f"Porquê: {correcao['justificativa']}")
+
+
+def _render_pagina_validacao():
+    _titulo_com_icone("Validar respostas do agente")
+    st.caption(
+        "Medição, não memória: nada registrado aqui volta para o agente. "
+        "Para ensinar o agente, use a tela de treinamento."
+    )
+    fila, relatorio = st.tabs(["Fila de validação", "Relatório de acerto"])
+    with fila:
+        _render_aba_fila()
+    with relatorio:
+        _render_aba_relatorio()
+
+
 def _render_pagina_administracao():
     """Área de administração: usuários e perfis, em abas.
 
@@ -1553,6 +1748,10 @@ with st.sidebar:
             if st.button("Treinar agente", icon=":material/school:", use_container_width=True):
                 st.session_state.pagina = "treinamento"
                 st.rerun()
+        if _pode_validar_respostas():
+            if st.button("Validar respostas", icon=":material/fact_check:", use_container_width=True):
+                st.session_state.pagina = "validacao"
+                st.rerun()
         if _pode_administrar_usuarios():
             if st.button("Usuários e perfis", icon=":material/group:", use_container_width=True):
                 st.session_state.pagina = "usuarios"
@@ -1695,6 +1894,16 @@ if st.session_state.pagina == "treinamento":
         st.session_state.pagina = "chat"
         st.rerun()
     _render_pagina_treinamento()
+    st.stop()
+
+if st.session_state.pagina == "validacao":
+    # Conveniência de interface, não autorização: quem forjar a chamada
+    # esbarra em Permission.VALIDATE_ANSWERS no backend, que é onde a decisão
+    # mora (mesma disciplina das outras páginas desta tela).
+    if not _pode_validar_respostas():
+        st.session_state.pagina = "chat"
+        st.rerun()
+    _render_pagina_validacao()
     st.stop()
 
 _titulo_com_icone("Assistente de Vendas Técnicas &amp; Match de Produtos")
