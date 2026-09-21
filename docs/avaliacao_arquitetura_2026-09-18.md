@@ -80,6 +80,7 @@ e errando**, o que torna impossível perceber melhora ou piora.
    `client.scroll(..., limit=50)` percorre a coleção em ordem de ID — é
    paginação, não busca. Se trezentos trechos contêm "cortiça", voltam cinquenta
    arbitrários, e o trecho certo pode nunca entrar nos candidatos.
+   ✅ **Corrigido em 21/09** — ver a seção "Sessão de 21/09" abaixo.
 
 4. **A unidade de recuperação é o trecho, não o produto.** Um produto vive em
    vários arquivos (boletim, FISPQ, homologação) e vários trechos, e nada
@@ -211,6 +212,95 @@ com o assunto passariam a fazer chamada de rede a cada execução.
 
 Nenhum dos dois blocos mexe em ingestão, embedding ou payload. **Não é necessário
 reindexar o acervo.**
+
+## Cascata de evidência: o caso "quais produtos são elastômeros?"
+
+Relatado pelo usuário depois dos dois blocos acima. A pergunta respondia "não
+encontrei" num acervo com centenas de boletins.
+
+**A causa não era recuperação.** `listar_produtos_por_aplicacao` varre a coleção
+inteira — não há `top_k`, não há corte. Era a REGRA DE ACEITAÇÃO: exigia o
+boletim conter literalmente "<produto> é um elastômero", com uma de três
+cópulas. Boletim técnico não escreve assim; escreve "sistema bicomponente para
+obtenção de elastômeros". Zero, sempre, por mais documentos que existissem.
+
+Essa regra foi apertada de propósito, depois que um isocianato apareceu listado
+como elastômero por participar de uma combinação. A correção trocou um erro pelo
+oposto — de listar demais para não listar nada. É o pêndulo que acontece sem
+medição, e o motivo pelo qual o item 0 vale mais que qualquer ajuste pontual.
+
+**O problema não era de elastômero.** Havia seis funções codificadas só para
+esse termo e uma só para "rígidos". Adesivo, selante, catalisador e borracha não
+tinham caminho nenhum.
+
+**A saída foi ordenar a evidência**, com o termo como parâmetro em todos os
+níveis: `classificacao_estrutural` (a árvore de pastas do catálogo — a única
+prova independente de como o boletim foi redigido) > `identidade_declarada` (o
+boletim diz que o produto É aquilo) > `composicao_comprovada` (o boletim prova
+que produz ou compõe aquilo — não é o mesmo que ser) > `mencao_no_documento` (o
+termo aparece no texto — nunca apresentado como classificação). Uma varredura
+calcula os quatro e devolve `nivel_atendido`. Quando a cascata não encontra nada
+em nível nenhum, ela não responde: devolve a pergunta ao caminho conversacional,
+porque um beco sem saída determinístico era o sintoma original.
+
+As exclusões viraram dado: aditivos e catalisadores não são o material que a
+reação produz — para qualquer natureza, não só elastômero — com escape para quem
+pergunta pela própria família auxiliar.
+
+## Sessão de 21/09: cinco frentes
+
+**Diagnóstico de extração** (`tools/diagnostico_extracao.py`). Mede quanto do
+acervo a ingestão perde em silêncio, classificando o motivo (escaneado sem OCR,
+`.doc` legado, corrompido, vazio) e reportando quantos **produtos ficam sem
+nenhum documento aproveitável**. É a única frente cujo resultado pode reordenar
+toda esta lista, e ainda não foi executada contra o acervo real.
+
+**Achado 3 corrigido.** A varredura de cada termo vai até o fim trazendo só IDs;
+o payload é buscado apenas dos candidatos escolhidos, ordenados por cobertura de
+termos. Truncagem pelo teto sai em log. A Query API do Qdrant faria isso no
+servidor, mas só existe a partir da 1.10 e a imagem fixada é a v1.9.2 — a
+reordenação é local por construção.
+
+**A cascata passou a citar a fonte.** O caminho determinístico afirmava "o
+Boletim declara que este produto é isso" com `sources: []`, contradizendo o
+Bloco 1. Agora o trecho citado é o trecho que decidiu, e no nível estrutural a
+resposta diz que a prova é a árvore do catálogo em vez de inventar uma frase.
+
+**Prompt e código voltaram a concordar.** `exigir_natureza` foi aposentado:
+prometia comprovação de natureza genericamente, mas era um no-op silencioso para
+qualquer termo fora de "elastômero" e "rígidos" — o modelo recebia busca textual
+comum acreditando ter recebido prova. O prompt ganhou critério para separar
+NATUREZA, FINALIDADE e CLASSIFICAÇÃO ESTRUTURAL, e regras de como apresentar os
+quatro níveis.
+
+**Débito que permanece:** `spec_search.py` ainda tem um ramo codificado por
+elastômero. Não é o mesmo caso — generalizá-lo exigiria o boletim dizer "produz
+colchão" para achar produto para colchão, e removê-lo traria de volta "aditivo
+para elastômeros" atendendo a pedido de elastômero. O que falta ali é um
+conceito que o código não tem naquele ponto: saber se o termo é natureza ou
+finalidade. A distinção existe na entrada do motor e não chega àquela varredura.
+
+## Nota de método
+
+Os dois blocos e a cascata passaram por revisão independente antes de serem
+considerados prontos. Em todas as rodadas, os testes escritos junto com o código
+passavam — e a revisão encontrou defeitos reais que eles não pegavam:
+
+- a tradução removia os acentos, e dos exemplos do próprio prompt só
+  "cola"→"adesivo" casava com o acervo;
+- trechos alcançados só por termo traduzido expulsavam do contexto a evidência
+  que a pergunta real havia encontrado;
+- o plural em `-es` nunca alcançava o singular, então "quais produtos são
+  catalisadores?" devolvia zero pelo mesmo mecanismo que a cascata acabara de
+  corrigir para elastômero;
+- a exclusão de famílias auxiliares removia justamente a resposta certa quando a
+  pergunta era pela própria família;
+- ~40% do código novo não tinha teste algum: a ferramenta MCP inteira podia ser
+  deletada com a suíte verde.
+
+O que separou teste útil de falso verde foi a **prova por mutação**: reverter a
+correção e confirmar que o teste quebra. Vários testes que pareciam sólidos
+passavam com a funcionalidade removida.
 
 ## O que continua em aberto
 

@@ -43,7 +43,15 @@ Acompanhamento do desenvolvimento:
    # ou via API:
    curl http://localhost:8000/api/health
    ```
-4. Indexe documentos técnicos (coloque os arquivos em `data/raw_documents/` antes):
+4. Aplique as migrações do banco relacional:
+   ```bash
+   docker exec -it pu_matcher_backend alembic upgrade head
+   ```
+   > **Também a cada `git pull` que traga migração nova.** O backend não roda
+   > `upgrade` sozinho no boot: aplicar DDL automaticamente num container que
+   > reinicia é como se perde banco sem perceber. Se uma tela reclamar de coluna
+   > inexistente depois de atualizar, é este passo que faltou.
+5. Indexe documentos técnicos (coloque os arquivos em `data/raw_documents/` antes):
    ```bash
    # CLI (recomendado):
    docker exec -it pu_matcher_backend python -m app.cli ingest
@@ -51,8 +59,8 @@ Acompanhamento do desenvolvimento:
    # Ou via API REST (roda em background):
    curl -X POST http://localhost:8000/api/ingest -H "Content-Type: application/json" -d '{"dir_path": "/app/data/raw_documents"}'
    ```
-5. Crie o primeiro usuário Admin TI (obrigatório — sem ele ninguém consegue logar; ver "Autenticação & Perfis (RBAC)" abaixo para o comando).
-6. Acesse a interface em `http://localhost:8501` e faça login com o usuário criado no passo anterior.
+6. Crie o primeiro usuário Admin TI (obrigatório — sem ele ninguém consegue logar; ver "Autenticação & Perfis (RBAC)" abaixo para o comando).
+7. Acesse a interface em `http://localhost:8501` e faça login com o usuário criado no passo anterior.
    > Desde a Sessão 27, `8501` é servido por um proxy Caddy na frente do Streamlit (serviço `proxy` no Compose), não pelo container `frontend` diretamente — necessário pro Service Worker do PWA funcionar (ver seção abaixo). Pra quem debuga direto no container, o Streamlit em si continua ouvindo em `8501` só na rede interna do Compose (sem porta publicada no host).
 
 ### Instalando em Ubuntu/Debian (servidor Linux)
@@ -259,6 +267,54 @@ O que o agente faz com cada um:
 
 O treinamento fica numa coleção separada do acervo, então **reindexar o acervo não apaga o que a equipe ensinou**.
 
+### Validar respostas (medir o acerto)
+
+Quem tem a permissão *Validar tecnicamente respostas já dadas* vê o atalho
+**Validar respostas** na barra lateral. Concedida por padrão a `tecnico`,
+`quimico_pd` e `admin_ti` — **não** ao vendedor.
+
+**Por que isso existe.** Até aqui, saber se o agente melhorou dependia da
+sensação de quem usava. Foi assim que o projeto acumulou uma série de commits
+`fix:` em que cada correção resolvia a queixa da vez e criava a oposta, sem
+ninguém perceber. Quem faz as perguntas é leigo no catálogo, por definição —
+então quem julga a resposta tem que ser outra pessoa.
+
+**Não confunda com as duas coisas parecidas que já existiam:**
+
+| | Quem | Para quê | Volta para o agente? |
+|---|---|---|---|
+| Útil / não útil (`feedback`) | quem perguntou | satisfação de quem usou | não |
+| Treinamento (`itens_treinamento`) | quem sabe o assunto | **ensinar** o agente | sim, após aprovação |
+| Veredito técnico (`vereditos_tecnicos`) | quem sabe o assunto | **medir** o acerto | **nunca** |
+
+O veredito é deliberadamente inerte: nada dele é lido em tempo de resposta. Um
+veredito pode virar item de treinamento depois, por ato explícito de alguém —
+mas isso é outra decisão, com a aprovação que aquele fluxo exige. Misturar os
+dois foi um incidente real (achado 2 de `docs/avaliacao_agente_2026-09-10.md`).
+
+Três vereditos, não dois: *correta*, *incorreta* e **incompleta**. A terceira é
+o desfecho mais comum deste motor — cita um produto certo e omite cinco — e
+contá-la como acerto esconderia exatamente o buraco de recall que interessa.
+
+O relatório sai por tela, endpoint (`GET /api/validacao/relatorio`) ou CLI:
+
+```bash
+docker exec -it pu_matcher_backend python -m app.cli relatorio-validacao
+docker exec -it pu_matcher_backend python -m app.cli relatorio-validacao --formato json > relatorio-AAAA-MM-DD.json
+```
+
+Ele entrega a taxa geral e a **taxa por caminho do motor, ordenada do pior para
+o melhor** — é essa tabela que diz onde trabalhar. Sem ela, "catálogo
+estruturado: 65%" agruparia cinco detectores diferentes num número que não
+aponta nada.
+
+**Nas primeiras semanas o relatório vai dizer que não há resposta validada, ou
+que a amostra é pequena. Isso é o desenho funcionando.** Só respostas dadas a
+partir da migration `f1c93a7b2d45` carregam o caminho do motor, e o número só
+significa algo depois de uso real mais julgamento técnico. Sem julgamento a taxa
+é `None`, nunca `0.0` — zero seria lido como "erra tudo". Especificação completa
+em [docs/spec_validacao_tecnica.md](docs/spec_validacao_tecnica.md).
+
 ### Evidência para aplicações
 
 Quando a pergunta pede produtos para uma aplicação, o agente só apresenta um
@@ -297,17 +353,21 @@ imersão` e não depende do LLM para fazer a interseção.
 │   ├── mcp/                 # Ferramentas MCP (catálogo ERP, normas)
 │   └── rag/                 # Ingestão e motor do agente investigativo
 │       ├── engine.py        # Recuperação híbrida, prompt do agente e guardrails
-│       ├── catalog_stats.py # Listagem/contagem por nome, família, aplicação e tipo
+│       ├── catalog_stats.py # Listagem por nome/família/aplicação + cascata de evidência por natureza
+│       ├── query_expansion.py # Tradução leigo → vocabulário do acervo, antes de buscar
+│       ├── caminhos.py      # Nomes dos caminhos do motor (para medir acerto por caminho)
 │       ├── spec_search.py   # Busca por VALOR de especificação técnica (ver seção abaixo)
 │       └── doc_sections.py  # Seções do boletim (vantagens, reatividade, embalagens…)
+│   └── validacao_service.py # Vereditos técnicos e relatório de acerto (ver "Validar respostas")
 ├── backend/alembic/        # Migrations do banco relacional (Fase 5)
+├── tools/diagnostico_extracao.py  # Mede o que a ingestão perde em silêncio (ver seção abaixo)
 ├── frontend/app.py          # Interface de chat Streamlit (com tela de login + card de PWA)
 ├── frontend/static/         # manifest.json, service-worker.js e ícone do PWA (Sessão 27)
 ├── .streamlit/config.toml   # Tema (paleta da marca) + enableStaticServing
 ├── proxy/Caddyfile          # Proxy reverso — serve o Service Worker em "/" (ver seção PWA)
 ├── IDENTIDADE_VISUAL.md     # Guia de paleta/tipografia da marca (origem: projeto FIDC) + aplicação aqui
 ├── data/raw_documents/      # TDS, catálogos e homologações (não versionado)
-└── docs/                    # Documentos originais da proposta, guia técnico e spec_rbac.md
+└── docs/                    # Proposta, guia técnico, avaliações de arquitetura e specs (RBAC, treinamento, validação)
 ```
 
 ## O que o agente consegue responder
@@ -409,6 +469,32 @@ docker exec -it pu_matcher_backend python -m app.cli health
 docker exec -it pu_matcher_backend python -m app.cli ingest
 docker exec -it pu_matcher_backend python -m app.cli ingest --dir /app/data/raw_documents
 ```
+
+## Diagnóstico de extração do acervo
+
+Mede **quanto do acervo a ingestão perde em silêncio**. Boletim antigo
+digitalizado, FISPQ escaneada e `.doc` binário legado não rendem texto, entram
+como arquivo ignorado num `print` que ninguém guarda — e nenhum ajuste de
+recuperação encontra o que não está no índice.
+
+```bash
+# NO HOST, não dentro do container: a pasta de rede do acervo não está
+# montada no Docker. Somente leitura — não indexa e não toca no Qdrant.
+python3 tools/diagnostico_extracao.py --limite 200          # amostra rápida
+python3 tools/diagnostico_extracao.py --csv perdidos.csv    # acervo inteiro
+```
+
+Usa a mesma `extract_text_from_file` da ingestão e os mesmos filtros de
+deduplicação, para o número refletir o que seria indexado de verdade. Classifica
+o motivo de cada perda — escaneado sem OCR, `.doc` legado, corrompido, vazio —
+porque "1.200 arquivos falharam" não ajuda a decidir nada, e "900 escaneados,
+250 legado, 50 corrompidos" aponta três ações diferentes.
+
+Reporta também duas perdas que nenhuma contagem de arquivo mostra: quanto texto
+os aprovados rendem (PDF que extrai só o cabeçalho passa pelo filtro de 40
+caracteres e vira um chunk que nunca será um bom resultado de busca) e — o
+número que mais importa — quantos **produtos ficam sem nenhum documento
+aproveitável**, ou seja, quantos o agente é incapaz de achar, faça o que fizer.
 
 ## Backup (Qdrant + Postgres)
 

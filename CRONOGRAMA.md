@@ -213,10 +213,19 @@ O checklist abaixo (`--full` concluído, 11.273 trechos) descreve o estado **his
 
 - [ ] Selecionar grupo piloto de vendedores/técnicos de campo
 - [ ] Rodar testes com casos reais de clientes (histórico recente de demandas)
-- [ ] Coletar métricas: taxa de acerto do match, tempo de resposta, satisfação do vendedor
+- [x] **Infraestrutura de medição do acerto** — **feito 2026-09-21** (adiantado fora de ordem, ver nota): `vereditos_tecnicos` + migração `f1c93a7b2d45`, permissão `validate_answers`, tela *Validar respostas*, endpoint `GET /api/validacao/relatorio` e `python -m app.cli relatorio-validacao`. Cada resposta passou a registrar o **caminho do motor** que a atendeu e os termos pesquisados — antes, `model_used` agrupava cinco detectores diferentes sob `"catalogo-estruturado"`. O relatório entrega a taxa por caminho ordenada do pior para o melhor. Ver `docs/spec_validacao_tecnica.md`.
+- [ ] Selecionar grupo piloto e começar a alimentar o relatório com julgamento técnico real
 - [ ] Ajustar prompt/templates com base no feedback
+- [ ] Transformar a lista de regressão do relatório em suíte executada a cada mudança
 
 **Dependências:** Fases 1–6 estáveis o suficiente para uso supervisionado.
+
+**Nota:** a infraestrutura de medição foi adiantada porque a ausência dela já
+cobrou preço real: uma série de commits `fix:` em que cada correção resolvia a
+queixa da vez e criava a oposta, sem ninguém perceber (ver
+`docs/avaliacao_arquitetura_2026-09-18.md`, item 0 de "O que continua em
+aberto"). A ferramenta existe; ela só passa a significar alguma coisa depois de
+uso real mais julgamento técnico, e não há atalho para isso.
 
 ---
 

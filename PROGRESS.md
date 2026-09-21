@@ -5,6 +5,117 @@ Ver visão geral de fases em [CRONOGRAMA.md](CRONOGRAMA.md).
 
 ---
 
+## 2026-09-21 — Sessão 59: cinco frentes em paralelo, com revisão independente
+
+Cinco trabalhos isolados em worktrees e integrados um a um. Os cinco primeiros
+agentes morreram no limite de sessão; quatro deixaram trabalho aproveitável no
+worktree e foram retomados, um foi refeito do zero.
+
+**Diagnóstico de extração** (`tools/diagnostico_extracao.py`). Ninguém sabia
+quanto do acervo NUNCA foi indexado: arquivo sem texto extraível vira um
+`print` no resumo da ingestão e some. O script varre a árvore sem indexar,
+usando a mesma `extract_text_from_file` e os mesmos filtros de deduplicação, e
+classifica o motivo de cada perda — escaneado sem OCR, `.doc` legado,
+corrompido, vazio. Reporta também quantos **produtos ficam sem nenhum documento
+aproveitável**: o número que diz quantos o agente é incapaz de achar, faça o que
+fizer. Ainda não foi rodado contra o acervo real (precisa da rede da empresa).
+
+**Busca textual deixou de cortar em 50 IDs arbitrários.** `client.scroll` é
+paginação por ordem de ID, não busca por relevância: num acervo em que
+trezentos trechos contêm "cortiça", voltavam cinquenta arbitrários e o trecho
+certo podia nunca entrar. Agora a varredura vai até o fim do termo trazendo só
+IDs, e o payload é buscado apenas dos candidatos escolhidos, ordenados por
+cobertura de termos. Truncagem pelo teto sai em log — o defeito corrigido era,
+na essência, uma falha silenciosa. Os mocks dos testes também estavam infiéis:
+devolviam tudo de uma vez ignorando `limit`, o que tornava o teste cego ao
+próprio defeito que ele existia para pegar.
+
+**A cascata de natureza passou a citar a fonte.** O caminho determinístico
+afirmava "o Boletim declara que este produto é isso" com `sources: []` — sem
+nenhum documento para conferir, contradizendo o Bloco 1. A cascata já tinha
+`filepath` e `content` no momento em que aceitava cada produto e jogava fora.
+Agora o trecho citado é o trecho que DECIDIU (padrão de aceitação e de recorte
+vêm da mesma fonte), e no nível estrutural a resposta diz que a prova é a árvore
+do catálogo em vez de inventar uma frase de boletim.
+
+**Prompt, descrições de ferramenta e código voltaram a contar a mesma história.**
+`exigir_natureza` foi aposentado: prometia comprovação de natureza genericamente,
+mas só funcionava para "elastômero" e "rígidos" — para qualquer outro termo era
+um no-op silencioso, e o modelo recebia busca textual comum acreditando ter
+recebido prova. A cobertura dos testes foi migrada, não descartada. O prompt
+ganhou um critério utilizável para separar NATUREZA, FINALIDADE e CLASSIFICAÇÃO
+ESTRUTURAL, e um bloco sobre como apresentar os quatro níveis de evidência.
+
+**Ciclo de validação técnica** (`vereditos_tecnicos`, migração `f1c93a7b2d45`).
+`model_used` agrupava cinco detectores sob `"catalogo-estruturado"` — a
+distinção que o relatório precisa medir. Agora cada resposta registra o caminho
+do motor e os termos pesquisados, e quem tem `validate_answers` marca
+correta/incorreta/incompleta. O relatório sai por tela, endpoint e CLI, com a
+taxa por caminho ordenada do pior para o melhor. Nada disso volta para o prompt
+em tempo real: é medição, não memória. Ver `docs/spec_validacao_tecnica.md`.
+
+**Estado:** 505 testes das suítes sem banco passando. Conflito de merge real
+entre dois trabalhos (um assumiu `sources: []` enquanto o outro passou a
+devolver fontes reais) resolvido preservando os dois.
+
+**Próximos passos:** rodar o diagnóstico de extração no servidor — o resultado
+pode reordenar a fila inteira; começar a validação técnica para o relatório
+deixar de estar vazio.
+
+---
+
+## 2026-09-18 — Sessão 58: avaliação de arquitetura e o caminho do usuário leigo
+
+Origem: o usuário relatou que as respostas não batem com a realidade quando ele
+pergunta **como leigo**, sem conhecer os produtos. A avaliação completa está em
+`docs/avaliacao_arquitetura_2026-09-18.md`.
+
+**Diagnóstico.** O motor é RAG documental aplicado a um problema de catálogo
+estruturado. Dos cinco caminhos de recuperação, quatro exigem que quem pergunta
+já fale a língua do acervo (código de produto, nome de seção, palavra literal,
+formulação já corrigida) — porque foram construídos corrigindo perguntas
+induzidas. O leigo cai sempre no quinto, a busca vetorial pura, que é o mais
+fraco. E o erro era invisível: o template era injetado como ordem incondicional
+("OBRIGATÓRIO... ESTRITAMENTE") já com o veredito preenchido, então o sistema
+tinha a mesma aparência acertando e errando.
+
+**Bloco 1 — a apresentação segue o desfecho.** O prompt exige classificar o
+desfecho antes de escrever (candidato com evidência / inconclusivo / nada
+encontrado / falta informação), e "nada encontrado" é declarado resposta
+legítima. Status de requisito ganhou três estados, incluindo "não informado".
+
+**Bloco 2 — tradução leigo → técnico.** Uma chamada curta ao LLM traduz a
+pergunta para o vocabulário dos boletins antes de recuperar. Só no caminho
+leigo, somando à pergunta original, fail-open em dois níveis, e com aviso ao
+agente de que termo traduzido é hipótese, não evidência de equivalência.
+
+**Revisão independente achou dois defeitos graves no Bloco 2**, ambos
+corrigidos: a tradução removia os acentos (dos exemplos do próprio prompt, só
+"cola"→"adesivo" casava com o acervo), e trechos alcançados só por termo
+traduzido entravam como prioritários, expulsando do contexto a evidência que a
+pergunta real havia encontrado.
+
+**Cascata de evidência genérica.** "quais produtos são elastômeros?" respondia
+"não encontrei" num acervo com centenas de boletins — não por falha de busca,
+mas por uma regra que exigia o boletim conter literalmente "<produto> é um
+elastômero". E havia seis funções codificadas só para esse termo. A saída foi
+ordenar a evidência em quatro níveis (classificação estrutural > identidade
+declarada > composição comprovada > menção no documento), com o termo como
+parâmetro em todos eles.
+
+**Uma segunda revisão achou seis defeitos nessa cascata**, dois dos quais
+reproduziam o mesmo bug com outras palavras: o plural em `-es` nunca alcançava o
+singular ("catalisadores" → "catalisadore"), e a exclusão de ADT/CAT não tinha
+escape, então perguntar pelos catalisadores removia justamente a resposta certa.
+Também: o detector sequestrava perguntas que não eram de natureza, e os
+invariantes eram recalculados a cada um dos ~11.000 trechos.
+
+**Lição de método:** os testes que eu mesmo escrevi passavam em todos esses
+casos. Foram os agentes de revisão e de teste — e a prova por mutação — que
+pegaram os defeitos reais.
+
+---
+
 ## 2026-09-14 — Sessão 57: classificação estrutural para qualquer linha
 
 A regra de tecnologia deixou de ser uma exceção exclusiva para rígidos. Foi
