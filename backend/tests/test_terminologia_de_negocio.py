@@ -187,6 +187,45 @@ def test_guarda_o_rotulo_como_o_acervo_escreve_e_nao_como_foi_digitado():
     assert item.termo_normalizado == "elastomero", "o acento não foi normalizado"
 
 
+@pytest.mark.parametrize(
+    "digitado,esperado",
+    [
+        ("Elastômero", "elastomero"),
+        ("moldado-por-reação", "moldado por reacao"),
+        ("HRB-H", "hrb h"),
+        ("  espuma   macia  ", "espuma macia"),
+    ],
+)
+def test_gravar_e_procurar_usam_a_mesma_normalizacao(digitado, esperado):
+    """REGRESSÃO REAL: havia duas funções de normalização neste módulo — uma
+    para o termo (minúsculo + sem acento) e outra para a classificação (que
+    também troca símbolo por espaço). Concordavam em "elastômero" e divergiam
+    em qualquer termo com hífen: "moldado-por-reação" era GRAVADO como
+    "moldado-por-reacao" e PROCURADO como "moldado por reacao" — nunca casava,
+    e não dava erro em lugar nenhum."""
+    from app.rag.catalog_stats import _rotulo_estrutural_catalogo
+    from app.termo_negocio_service import criar
+
+    with patch(
+        "app.termo_negocio_service.classificacoes_do_acervo",
+        return_value=CLASSIFICACOES_REAIS,
+    ):
+        item = criar(
+            _sessao_falsa(),
+            classificacao="FLEXX® TH",
+            termo=digitado,
+            observacao=None,
+            autor=_autor(),
+        )
+
+    assert item.termo_normalizado == esperado
+    # A ponta da PROCURA: é assim que `_resolver_classificacoes_catalogo`
+    # normaliza antes de consultar o mapa.
+    assert item.termo_normalizado == _rotulo_estrutural_catalogo(digitado), (
+        "gravar e procurar divergiram — o apelido nunca resolveria"
+    )
+
+
 def test_nasce_pendente_de_aprovacao():
     """Afirma um fato sobre o catálogo que o agente repete como verdade — e,
     diferente de uma correção, muda o resultado de consultas ESTRUTURAIS, que

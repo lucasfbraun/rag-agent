@@ -34,7 +34,6 @@ fraca — para "a hierarquia do catálogo classifica assim", a mais forte.
 import logging
 import threading
 import time
-import unicodedata
 import uuid
 from datetime import datetime, timezone
 from typing import Dict, List, Optional, Set
@@ -80,9 +79,18 @@ def normalizar(texto: str) -> str:
     return catalog_stats._rotulo_estrutural_catalogo(texto or "")
 
 
-def _sem_acento(texto: str) -> str:
-    decomposto = unicodedata.normalize("NFKD", (texto or "").lower())
-    return "".join(c for c in decomposto if not unicodedata.combining(c)).strip()
+# NÃO existe uma segunda função de normalização neste módulo, e isso é
+# deliberado. A primeira versão usava `_sem_acento` (minúsculo + sem acento)
+# para o termo e `normalizar` (que também troca símbolo por espaço) para a
+# classificação. As duas concordam em "elastômero", e divergem em qualquer
+# termo com hífen:
+#
+#     "moldado-por-reação"  gravado como "moldado-por-reacao"
+#                           procurado como "moldado por reacao"   -> nunca casa
+#
+# Um apelido que nunca casa não dá erro em lugar nenhum — exatamente a falha
+# silenciosa que este recurso existe para evitar. Uma função só, usada nas duas
+# pontas, é o que garante que gravar e procurar não podem divergir.
 
 
 # --- cache do mapa aprovado -------------------------------------------------
@@ -188,7 +196,7 @@ def criar(
         classificacao=disponiveis[rotulo],
         classificacao_rotulo=rotulo,
         termo=termo,
-        termo_normalizado=_sem_acento(termo),
+        termo_normalizado=normalizar(termo),
         observacao=(observacao or "").strip() or None,
         status=StatusDocumento.PENDENTE,
         criado_por_id=autor.id,

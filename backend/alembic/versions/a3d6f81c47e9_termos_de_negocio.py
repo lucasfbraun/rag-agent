@@ -13,6 +13,11 @@ Create Date: 2026-09-21
 """
 import sqlalchemy as sa
 from alembic import op
+# `sa.dialects.postgresql` NAO resolve por atributo: o submodulo precisa ser
+# importado. Sem isto a migration estoura AttributeError — e como
+# `app/startup.py` roda `alembic upgrade head` antes do uvicorn, o container
+# entraria em crash-loop no deploy.
+from sqlalchemy.dialects import postgresql
 
 revision = "a3d6f81c47e9"
 down_revision = "f1c93a7b2d45"
@@ -30,7 +35,7 @@ def upgrade() -> None:
 
     op.create_table(
         "termos_de_negocio",
-        sa.Column("id", sa.dialects.postgresql.UUID(as_uuid=True), primary_key=True),
+        sa.Column("id", postgresql.UUID(as_uuid=True), primary_key=True),
         sa.Column("classificacao", sa.String(200), nullable=False),
         sa.Column("classificacao_rotulo", sa.String(200), nullable=False),
         sa.Column("termo", sa.String(200), nullable=False),
@@ -40,13 +45,13 @@ def upgrade() -> None:
         sa.Column("motivo_decisao", sa.Text(), nullable=True),
         sa.Column(
             "criado_por_id",
-            sa.dialects.postgresql.UUID(as_uuid=True),
+            postgresql.UUID(as_uuid=True),
             sa.ForeignKey("users.id"),
             nullable=False,
         ),
         sa.Column(
             "decidido_por_id",
-            sa.dialects.postgresql.UUID(as_uuid=True),
+            postgresql.UUID(as_uuid=True),
             sa.ForeignKey("users.id"),
             nullable=True,
         ),
