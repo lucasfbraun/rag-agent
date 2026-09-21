@@ -115,6 +115,11 @@ def consultar_produtos_por_tipo(
     ferramenta devolve os quatro níveis e diz qual respondeu, para o agente
     apresentar a evidência que existe em vez de encerrar em "não encontrei"
     quando o nível mais forte está vazio.
+
+    Cada nível traz também `evidencias`: por produto listado, o documento de
+    origem e — nos níveis textuais — o trecho literal do boletim que o aceitou.
+    É o que o Bloco 1 da avaliação de arquitetura exige (toda afirmação técnica
+    com origem citável), porque quem lê a resposta não conhece os produtos.
     """
     try:
         return listar_produtos_por_tipo(
@@ -202,7 +207,7 @@ MCP_TOOLS_DEFINITIONS = [
         "type": "function",
         "function": {
             "name": "consultar_produtos_por_tipo",
-            "description": "Responde 'quais produtos SÃO X' (natureza/tipo do próprio produto: elastômero, adesivo, selante, catalisador, espuma, verniz...). Diferente de consultar_produtos_por_aplicacao, que responde 'produtos PARA X'. Devolve QUATRO níveis de evidência calculados na mesma varredura, do mais forte ao mais fraco — `classificacao_estrutural` (a hierarquia do catálogo classifica o produto assim), `identidade_declarada` (o Boletim do próprio produto diz que ele É aquilo), `composicao_comprovada` (o Boletim prova que ele produz ou compõe um sistema daquele tipo — NÃO é o mesmo que ser) e `mencao_no_documento` (o termo só aparece no texto; NUNCA apresente isto como classificação) — mais `nivel_atendido`, que diz qual deles respondeu. REGRA DE USO: apresente o nível atendido, diga explicitamente qual é a força daquela evidência, e quando o nível mais forte estiver vazio NÃO responda 'não encontrei' e pare: mostre o nível que tem resultado, rotulado pelo que ele realmente prova. Use `sinonimos` quando o vendedor usar uma palavra que o acervo não usa (ex: termo='borracha', sinonimos=['elastômero']).",
+            "description": "Responde 'quais produtos SÃO X' (natureza/tipo do próprio produto: elastômero, adesivo, selante, catalisador, espuma, verniz...). Diferente de consultar_produtos_por_aplicacao, que responde 'produtos PARA X'. Devolve QUATRO níveis de evidência calculados na mesma varredura, do mais forte ao mais fraco — `classificacao_estrutural` (a hierarquia do catálogo classifica o produto assim), `identidade_declarada` (o Boletim do próprio produto diz que ele É aquilo), `composicao_comprovada` (o Boletim prova que ele produz ou compõe um sistema daquele tipo — NÃO é o mesmo que ser) e `mencao_no_documento` (o termo só aparece no texto; NUNCA apresente isto como classificação) — mais `nivel_atendido`, que diz qual deles respondeu. CADA NÍVEL TRAZ `evidencias`: um mapa produto -> {`documento`, `trecho`, `tipo_de_prova`} com a ORIGEM CITÁVEL de cada produto listado. `tipo_de_prova='textual'` traz `trecho`, que é texto LITERAL do documento — cite-o entre aspas, nunca parafraseie nem reescreva. `tipo_de_prova='estrutural'` (só em `classificacao_estrutural`) NÃO tem trecho, porque ali a prova é o caminho na árvore do catálogo: cite `classificacao` e `documento` e NÃO invente uma frase do boletim. Na lista completa (`listar_todos=true`) vem só `documento`, sem trecho. REGRA DE USO: apresente o nível atendido, cite ao lado de cada produto o documento de origem (e o trecho quando houver), diga explicitamente qual é a força daquela evidência, e quando o nível mais forte estiver vazio NÃO responda 'não encontrei' e pare: mostre o nível que tem resultado, rotulado pelo que ele realmente prova. Use `sinonimos` quando o vendedor usar uma palavra que o acervo não usa (ex: termo='borracha', sinonimos=['elastômero']).",
             "parameters": {
                 "type": "object",
                 "properties": {

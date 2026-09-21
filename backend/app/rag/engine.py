@@ -747,13 +747,51 @@ _ORDEM_DOS_NIVEIS_NA_RESPOSTA = (
 )
 
 
-def _responder_natureza_do_produto(query: str, termo: str) -> Optional[str]:
+def _linha_do_produto_com_evidencia(
+    indice: int, produto: str, evidencia: Optional[Dict[str, Any]]
+) -> List[str]:
+    """Uma entrada da lista, com a fonte ao lado do produto.
+
+    BLOCO 1 DA AVALIAÇÃO DE ARQUITETURA: o usuário-alvo é um vendedor que não
+    conhece os produtos, então toda afirmação técnica precisa vir com o
+    documento de origem e — quando a prova é textual — o trecho literal. Este
+    caminho afirmava "o Boletim do próprio produto declara que ele é isso" sem
+    citar nada, e era a afirmação mais forte que o motor faz.
+
+    Sem evidência no payload a linha volta a ser só o nome: nenhum caminho da
+    resposta pode quebrar por falta de um campo (a ferramenta MCP é chamada
+    pelo LLM e o payload pode vir de uma versão anterior).
+    """
+    if not evidencia:
+        return [f"{indice}. {produto}"]
+    documento = evidencia.get("documento") or "documento não identificado"
+    linhas = [f"{indice}. **{produto}** — Fonte: {documento}"]
+    if evidencia.get("tipo_de_prova") == "estrutural":
+        # Nunca inventa trecho aqui: a prova é o caminho na árvore do catálogo,
+        # e citar uma frase do boletim como se fosse a origem desta
+        # classificação diria ao vendedor algo que o documento não afirma.
+        linhas.append(
+            f'   - Classificado no catálogo em "{evidencia.get("classificacao")}" '
+            "(prova estrutural: vem da árvore do catálogo, não de uma frase do documento)."
+        )
+    elif evidencia.get("trecho"):
+        linhas.append(f'   - Trecho do documento: "{evidencia["trecho"]}"')
+    return linhas
+
+
+def _responder_natureza_do_produto(
+    query: str, termo: str
+) -> Optional[Dict[str, Any]]:
     """Resposta determinística para "quais produtos são X", com a cascata.
 
     Nunca termina em "não encontrei" quando existe evidência mais fraca: mostra
     o nível que tem resultado e diz o que aquele nível realmente prova. Era o
     contrário disso que fazia a pergunta sobre elastômeros devolver zero num
     acervo com centenas de boletins.
+
+    Devolve `answer`/`sources`/`model_used`, como os demais caminhos
+    determinísticos do motor — `sources` era `[]` fixo nas duas rotas, o que
+    deixava a afirmação mais forte do motor sem nada para conferir.
     """
     texto = _normalizar_para_regra(query)
     listar_todos = bool(re.search(r"\b(?:todos|todas|completa|completo)\b", texto))
@@ -772,7 +810,14 @@ def _responder_natureza_do_produto(query: str, termo: str) -> Optional[str]:
         {"termo": termo, "listar_todos": listar_todos, "sinonimos": sinonimos},
     ))
     if payload.get("erro"):
-        return "Catálogo de produtos indisponível no momento. Tente novamente em instantes."
+        return {
+            "answer": (
+                "Catálogo de produtos indisponível no momento. "
+                "Tente novamente em instantes."
+            ),
+            "sources": [],
+            "model_used": "catalogo-estruturado",
+        }
 
     niveis = payload.get("niveis") or {}
     atendido = payload.get("nivel_atendido")
@@ -819,7 +864,19 @@ def _responder_natureza_do_produto(query: str, termo: str) -> Optional[str]:
             "",
         ])
 
-    linhas.extend(f"{i}. {p}" for i, p in enumerate(produtos, start=1))
+    evidencias = bucket.get("evidencias") or {}
+    for i, p in enumerate(produtos, start=1):
+        linhas.extend(_linha_do_produto_com_evidencia(i, p, evidencias.get(p)))
+
+    # `sources` de verdade, na mesma convenção dos outros caminhos do motor
+    # (`_responder_busca_reversa_produto`, `_responder_aplicacao_com_evidencia`):
+    # lista ordenada de nomes de documento, sem repetição.
+    fontes = sorted({
+        evidencias[p]["documento"]
+        for p in produtos
+        if evidencias.get(p, {}).get("documento")
+    })
+
     linhas.extend(["", ressalva])
 
     if sinonimos:
@@ -828,6 +885,18 @@ def _responder_natureza_do_produto(query: str, termo: str) -> Optional[str]:
         )
     if bucket.get("truncado"):
         linhas.extend(["", f"Quer que eu liste todos os {total}?"])
+    elif listar_todos and evidencias and not any(
+        evidencia.get("trecho") for evidencia in evidencias.values()
+    ):
+        # Ver `_resumo_lista` em app.rag.catalog_stats: a lista completa cita o
+        # documento de cada produto, mas não o trecho — centenas de citações
+        # literais numa resposta só não são conferíveis, são uma parede de
+        # texto. O vendedor precisa saber que o detalhe existe e como pedi-lo.
+        linhas.extend([
+            "",
+            "Na lista completa cito apenas o documento de cada produto. Pergunte "
+            "por um produto específico para ver o trecho literal que o sustenta.",
+        ])
 
     # Oferece o próximo nível quando ele tem mais a mostrar — o vendedor decide
     # se quer ver evidência mais fraca, em vez de o sistema decidir por ele.
@@ -846,7 +915,11 @@ def _responder_natureza_do_produto(query: str, termo: str) -> Optional[str]:
                 "Quer ver essa lista também?",
             ])
             break
-    return "\n".join(linhas)
+    return {
+        "answer": "\n".join(linhas),
+        "sources": fontes,
+        "model_used": "catalogo-estruturado",
+    }
 
 
 
@@ -1906,11 +1979,7 @@ def run_pu_matcher_agent(
         if termo_natureza:
             resposta_natureza = _responder_natureza_do_produto(query, termo_natureza)
             if resposta_natureza is not None:
-                return {
-                    "answer": resposta_natureza,
-                    "sources": [],
-                    "model_used": "catalogo-estruturado",
-                }
+                return resposta_natureza
 
     if classificacao_catalogo:
         return {
@@ -2044,10 +2113,12 @@ def stream_pu_matcher_agent(
             # de encerrar num beco sem saída (ver `_responder_natureza_do_produto`).
             if resposta_natureza is not None:
                 yield _json.dumps({
-                    "type": "meta", "sources": [], "model_used": "catalogo-estruturado"
+                    "type": "meta",
+                    "sources": resposta_natureza["sources"],
+                    "model_used": resposta_natureza["model_used"],
                 }) + "\n"
                 yield _json.dumps({
-                    "type": "delta", "content": resposta_natureza,
+                    "type": "delta", "content": resposta_natureza["answer"],
                 }) + "\n"
                 yield _json.dumps({"type": "done"}) + "\n"
                 return
