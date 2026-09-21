@@ -181,7 +181,7 @@ def test_guarda_o_rotulo_como_o_acervo_escreve_e_nao_como_foi_digitado():
             termo="Elastômero",
             observacao=None,
             autor=_autor(),
-        )
+        )[0]
     assert item.classificacao == "FLEXX® TH"
     assert item.classificacao_rotulo == "flexx th"
     assert item.termo_normalizado == "elastomero", "o acento não foi normalizado"
@@ -216,7 +216,7 @@ def test_gravar_e_procurar_usam_a_mesma_normalizacao(digitado, esperado):
             termo=digitado,
             observacao=None,
             autor=_autor(),
-        )
+        )[0]
 
     assert item.termo_normalizado == esperado
     # A ponta da PROCURA: é assim que `_resolver_classificacoes_catalogo`
@@ -243,7 +243,7 @@ def test_nasce_pendente_de_aprovacao():
             termo="moldado por reação",
             observacao=None,
             autor=_autor(),
-        )
+        )[0]
     assert item.status == StatusDocumento.PENDENTE
 
 
@@ -296,3 +296,141 @@ def test_mapa_so_carrega_termos_aprovados():
 
     assert mapa == {"elastomero": {"flexx th"}}
     assert "status" in capturado["consulta"].lower(), "a consulta não filtra por status"
+
+
+# --- vários apelidos de uma vez, e edição ----------------------------------
+
+def _servico():
+    from app import termo_negocio_service as s
+    return s
+
+
+def test_cadastra_varios_apelidos_para_a_mesma_linha_de_uma_vez():
+    """Uma linha do catálogo costuma ter mais de um nome de negócio. Sem isto,
+    cadastrar os apelidos exige submeter o formulário uma vez por apelido — e
+    quem tem 53 linhas para percorrer desiste no meio."""
+    from app.termo_negocio_service import criar
+
+    sessao = _sessao_falsa()
+    with patch(
+        "app.termo_negocio_service.classificacoes_do_acervo",
+        return_value=CLASSIFICACOES_REAIS,
+    ):
+        itens = criar(
+            sessao,
+            classificacao="FLEXX® TH",
+            termo="elastômero, borracha; TPU",
+            observacao="como vendas se refere à linha",
+            autor=_autor(),
+        )
+
+    assert [i.termo for i in itens] == ["elastômero", "borracha", "TPU"]
+    assert {i.classificacao for i in itens} == {"FLEXX® TH"}
+    assert {i.termo_normalizado for i in itens} == {"elastomero", "borracha", "tpu"}
+
+
+def test_duplicata_no_mesmo_envio_e_colapsada():
+    """"Elastômero" e "elastomero" são o mesmo apelido escrito de dois jeitos —
+    gravar os dois estouraria a constraint de unicidade com um 409 confuso."""
+    from app.termo_negocio_service import criar
+
+    with patch(
+        "app.termo_negocio_service.classificacoes_do_acervo",
+        return_value=CLASSIFICACOES_REAIS,
+    ):
+        itens = criar(
+            _sessao_falsa(),
+            classificacao="FLEXX® TH",
+            termo="Elastômero, elastomero, ELASTOMERO",
+            observacao=None,
+            autor=_autor(),
+        )
+    assert len(itens) == 1
+
+
+def test_editar_termo_aprovado_devolve_para_aprovacao():
+    """DISCIPLINA: um apelido em uso muda o resultado de consultas
+    estruturais, apresentadas ao vendedor como a evidência mais forte que
+    existe. Trocar "elastômero" por "borracha" sem nova revisão mudaria em
+    silêncio o que o agente afirma como verdade da empresa."""
+    from app.models import StatusDocumento, TermoDeNegocio
+    from app.termo_negocio_service import editar
+
+    item = TermoDeNegocio(
+        classificacao="FLEXX® TH", classificacao_rotulo="flexx th",
+        termo="elastômero", termo_normalizado="elastomero",
+        status=StatusDocumento.APROVADO, decidido_por_id="x", motivo_decisao=None,
+    )
+    sessao = MagicMock()
+    sessao.get.return_value = item
+
+    with patch(
+        "app.termo_negocio_service.classificacoes_do_acervo",
+        return_value=CLASSIFICACOES_REAIS,
+    ):
+        editar(sessao, "id", termo="borracha", autor=_autor())
+
+    assert item.termo == "borracha"
+    assert item.status == StatusDocumento.PENDENTE
+    assert item.decidido_por_id is None
+
+
+def test_editar_so_a_observacao_nao_derruba_a_aprovacao():
+    """Exigir revisão para um ajuste de texto treinaria as pessoas a aprovar
+    sem ler. A observação é nota para humano e não entra em resolução nenhuma."""
+    from app.models import StatusDocumento, TermoDeNegocio
+    from app.termo_negocio_service import editar
+
+    item = TermoDeNegocio(
+        classificacao="FLEXX® TH", classificacao_rotulo="flexx th",
+        termo="elastômero", termo_normalizado="elastomero",
+        status=StatusDocumento.APROVADO,
+    )
+    sessao = MagicMock()
+    sessao.get.return_value = item
+
+    editar(sessao, "id", observacao="corrigindo a nota", autor=_autor())
+
+    assert item.status == StatusDocumento.APROVADO
+    assert item.observacao == "corrigindo a nota"
+
+
+def test_editar_corrigindo_so_a_grafia_nao_derruba_a_aprovacao():
+    """"elastomero" → "elastômero" muda o texto exibido, não o que resolve:
+    os dois normalizam para a mesma chave."""
+    from app.models import StatusDocumento, TermoDeNegocio
+    from app.termo_negocio_service import editar
+
+    item = TermoDeNegocio(
+        classificacao="FLEXX® TH", classificacao_rotulo="flexx th",
+        termo="elastomero", termo_normalizado="elastomero",
+        status=StatusDocumento.APROVADO,
+    )
+    sessao = MagicMock()
+    sessao.get.return_value = item
+
+    with patch(
+        "app.termo_negocio_service.classificacoes_do_acervo",
+        return_value=CLASSIFICACOES_REAIS,
+    ):
+        editar(sessao, "id", termo="elastômero", autor=_autor())
+
+    assert item.termo == "elastômero"
+    assert item.status == StatusDocumento.APROVADO
+
+
+def test_editar_recusa_lista_de_termos():
+    """Editar é sobre UM item. Aceitar lista aqui criaria a expectativa de que
+    o item vira vários, que não é o que acontece."""
+    from app.termo_negocio_service import TermoInvalidoError, editar
+
+    item = MagicMock()
+    sessao = MagicMock()
+    sessao.get.return_value = item
+
+    with patch(
+        "app.termo_negocio_service.classificacoes_do_acervo",
+        return_value=CLASSIFICACOES_REAIS,
+    ):
+        with pytest.raises(TermoInvalidoError):
+            editar(sessao, "id", termo="borracha, TPU", autor=_autor())

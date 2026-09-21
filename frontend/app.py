@@ -1402,10 +1402,13 @@ def _render_terminologia(pode_treinar: bool, pode_aprovar: bool):
                 classificacao = st.selectbox(
                     "Linha do catálogo (como está no acervo)", classificacoes
                 )
-                termo = st.text_input(
+                termo = st.text_area(
                     "Como a empresa chama essa linha",
-                    max_chars=200,
-                    placeholder="ex: elastômero",
+                    max_chars=1000,
+                    placeholder="ex: elastômero, borracha, TPU",
+                    help="Vários de uma vez: separe por vírgula, ponto-e-vírgula "
+                         "ou quebra de linha. Cada um vira um apelido próprio da "
+                         "mesma linha.",
                 )
                 observacao = st.text_area(
                     "Observação (opcional)",
@@ -1424,7 +1427,12 @@ def _render_terminologia(pode_treinar: bool, pode_aprovar: bool):
                             "observacao": observacao.strip() or None,
                         })
                         if ok_post:
-                            st.success("Terminologia enviada para aprovação.")
+                            quantos = len(retorno) if isinstance(retorno, list) else 1
+                            st.success(
+                                f"{quantos} termo(s) enviado(s) para aprovação."
+                                if quantos > 1
+                                else "Terminologia enviada para aprovação."
+                            )
                             st.rerun()
                         st.error(retorno)
 
@@ -1443,6 +1451,45 @@ def _render_terminologia(pode_treinar: bool, pode_aprovar: bool):
                 st.caption(item["observacao"])
             if item.get("motivo_decisao"):
                 st.caption(f'Motivo da recusa: {item["motivo_decisao"]}')
+            if pode_treinar:
+                with st.expander("Editar"):
+                    if item["status"] == "aprovado":
+                        st.caption(
+                            "Mudar o termo ou a linha devolve este item para "
+                            "aprovação: ele está em uso e muda o resultado de "
+                            "consultas apresentadas como a evidência mais forte."
+                        )
+                    novo_termo = st.text_input(
+                        "Termo", value=item["termo"],
+                        key=f'edita-termo-{item["id"]}', max_chars=200,
+                    )
+                    nova_obs = st.text_area(
+                        "Observação", value=item.get("observacao") or "",
+                        key=f'edita-obs-{item["id"]}', max_chars=2000,
+                    )
+                    coluna_salvar, coluna_excluir = st.columns(2)
+                    with coluna_salvar:
+                        if st.button("Salvar", key=f'salva-termo-{item["id"]}',
+                                     use_container_width=True):
+                            ok_e, retorno_e = _api_terminologia(
+                                "PUT", f'/{item["id"]}',
+                                json={"termo": novo_termo.strip(),
+                                      "observacao": nova_obs.strip() or None},
+                            )
+                            if ok_e:
+                                st.rerun()
+                            st.error(retorno_e)
+                    with coluna_excluir:
+                        if pode_aprovar and st.button(
+                            "Excluir", key=f'exclui-termo-{item["id"]}',
+                            use_container_width=True,
+                        ):
+                            ok_x, retorno_x = _api_terminologia(
+                                "DELETE", f'/{item["id"]}'
+                            )
+                            if ok_x:
+                                st.rerun()
+                            st.error(retorno_x)
             if pode_aprovar and item["status"] == "pendente":
                 coluna_ok, coluna_nao = st.columns(2)
                 with coluna_ok:

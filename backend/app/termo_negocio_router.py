@@ -28,6 +28,7 @@ from app.termo_negocio_service import (
     aprovar,
     classificacoes_do_acervo,
     criar,
+    editar,
     excluir,
     listar,
     recusar,
@@ -124,15 +125,56 @@ def listar_classificacoes(_: User = Depends(_require_acesso)):
     return classificacoes_do_acervo()
 
 
-@router.post("", response_model=TermoResponse, status_code=status.HTTP_201_CREATED)
-def criar_termo(
+@router.post("", response_model=list[TermoResponse], status_code=status.HTTP_201_CREATED)
+def criar_termos(
     payload: TermoRequest,
     session: Session = Depends(get_session),
     usuario: User = Depends(require_permission(Permission.TRAIN_AGENT)),
 ):
+    """Cadastra UM ou VÁRIOS apelidos para a mesma linha.
+
+    `termo` aceita lista separada por vírgula, ponto-e-vírgula ou quebra de
+    linha: uma linha do catálogo costuma ter mais de um nome de negócio
+    (elastômero, borracha, TPU). Devolve sempre lista, mesmo para um só.
+    """
     with _commit_traduzindo_erros(session):
-        item = criar(
+        itens = criar(
             session,
+            classificacao=payload.classificacao,
+            termo=payload.termo,
+            observacao=payload.observacao,
+            autor=usuario,
+        )
+    for item in itens:
+        session.refresh(item)
+    return [TermoResponse.de(i) for i in itens]
+
+
+class EdicaoRequest(BaseModel):
+    """Todos opcionais: dá para corrigir só a observação sem mexer no resto."""
+    classificacao: str | None = Field(default=None, min_length=2, max_length=200)
+    termo: str | None = Field(default=None, min_length=2, max_length=200)
+    observacao: str | None = Field(default=None, max_length=2000)
+
+
+@router.put("/{item_id}", response_model=TermoResponse)
+def editar_termo(
+    item_id: uuid.UUID,
+    payload: EdicaoRequest,
+    session: Session = Depends(get_session),
+    usuario: User = Depends(require_permission(Permission.TRAIN_AGENT)),
+):
+    """Corrige um apelido já cadastrado.
+
+    Mexer no TERMO ou na LINHA de um item já aprovado o devolve para
+    PENDENTE — um apelido em uso muda o resultado de consultas estruturais,
+    apresentadas ao vendedor como a evidência mais forte que existe. Corrigir
+    só a observação não derruba a aprovação.
+    """
+    with _commit_traduzindo_erros(session):
+        item = editar(
+            session,
+            item_id,
             classificacao=payload.classificacao,
             termo=payload.termo,
             observacao=payload.observacao,

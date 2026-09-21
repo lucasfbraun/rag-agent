@@ -363,7 +363,7 @@ def test_classificacao_recem_indexada_nao_fica_escondida_pelo_cache():
                 termo="linha nova",
                 observacao=None,
                 autor=_autor(),
-            )
+            )[0]
     assert item.classificacao == "FLEXX® NOVA"
 
 

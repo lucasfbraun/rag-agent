@@ -32,6 +32,7 @@ resolvedor. Cadastrar "FLEXX® TH = elastômero" promove a pergunta de natureza
 fraca — para "a hierarquia do catálogo classifica assim", a mais forte.
 """
 import logging
+import re
 import threading
 import time
 import uuid
@@ -230,31 +231,64 @@ def classificacoes_do_acervo(forcar: bool = False) -> List[str]:
 
 # --- CRUD -------------------------------------------------------------------
 
-def criar(
-    session: Session,
-    *,
-    classificacao: str,
-    termo: str,
-    observacao: str | None,
-    autor: User,
-) -> TermoDeNegocio:
-    classificacao = (classificacao or "").strip()
-    termo = (termo or "").strip()
-    if len(classificacao) < 2:
-        raise TermoInvalidoError("Escolha a linha do catálogo.")
+def separar_termos(texto: str) -> List[str]:
+    """Quebra "elastômero, borracha, TPU" em três termos.
+
+    Vírgula, ponto-e-vírgula e quebra de linha — os três jeitos que alguém
+    naturalmente separa uma lista ao digitar. Sem isto, cadastrar os apelidos
+    de uma linha exige submeter o formulário uma vez por apelido, e quem tem
+    cinquenta e três linhas para percorrer desiste no meio.
+
+    Duplicatas dentro do mesmo envio são colapsadas pela forma NORMALIZADA:
+    "Elastômero" e "elastomero" são o mesmo apelido escrito de dois jeitos.
+    """
+    if not texto:
+        return []
+    # Vírgula, ponto-e-vírgula e quebra de linha — os três jeitos que
+    # alguém naturalmente separa uma lista ao digitar. Sem regex de
+    # propósito: a classe de caracteres aqui precisaria escapar quebra
+    # de linha, e é exatamente o tipo de detalhe que se quebra em
+    # silêncio numa edição futura.
+    normalizado = texto
+    for separador in (';', chr(10), chr(13)):
+        normalizado = normalizado.replace(separador, ',')
+    brutos = normalizado.split(',')
+    vistos, limpos = set(), []
+    for bruto in brutos:
+        termo = " ".join(bruto.split())
+        if not termo:
+            continue
+        chave = normalizar(termo)
+        if chave in vistos:
+            continue
+        vistos.add(chave)
+        limpos.append(termo)
+    return limpos
+
+
+def _validar_termo(termo: str) -> None:
     if len(termo) < 2:
-        raise TermoInvalidoError("O termo precisa ter pelo menos 2 caracteres.")
+        raise TermoInvalidoError(f'"{termo}": o termo precisa ter pelo menos 2 caracteres.')
+    if len(termo) > 200:
+        raise TermoInvalidoError(f'"{termo[:40]}…": termo longo demais (máx. 200).')
     # "---" tem 3 caracteres e normaliza para "". A chave vazia nunca resolve
     # para o que a pessoa quis E casa com QUALQUER pergunta cujo termo também
     # normalize para vazio — pelo nível `classificacao_estrutural`, o mais
     # forte da cascata. Falha silenciosa nas duas pontas.
     if len(normalizar(termo)) < 2:
         raise TermoInvalidoError(
-            "O termo precisa ter pelo menos 2 letras ou números — só símbolos "
-            "não identificam nada."
+            f'"{termo}": precisa ter pelo menos 2 letras ou números — '
+            "só símbolos não identificam nada."
         )
-    if len(termo) > 200 or len(classificacao) > 200:
-        raise TermoInvalidoError("Termo ou classificação longos demais (máx. 200).")
+
+
+def _resolver_classificacao(classificacao: str) -> tuple[str, str]:
+    """Devolve (rotulo_normalizado, rotulo_como_o_acervo_escreve)."""
+    classificacao = (classificacao or "").strip()
+    if len(classificacao) < 2:
+        raise TermoInvalidoError("Escolha a linha do catálogo.")
+    if len(classificacao) > 200:
+        raise TermoInvalidoError("Classificação longa demais (máx. 200).")
 
     rotulo = normalizar(classificacao)
     disponiveis = {normalizar(c): c for c in classificacoes_do_acervo()}
@@ -272,19 +306,113 @@ def criar(
             "Escolha uma das classificações listadas — um apelido apontando para "
             "uma linha inexistente nunca resolve, e não dá erro nenhum depois."
         )
+    return rotulo, disponiveis[rotulo]
 
-    item = TermoDeNegocio(
-        id=uuid.uuid4(),
-        # Guarda o rótulo COMO O ACERVO ESCREVE, não como a pessoa digitou.
-        classificacao=disponiveis[rotulo],
-        classificacao_rotulo=rotulo,
-        termo=termo,
-        termo_normalizado=normalizar(termo),
-        observacao=(observacao or "").strip() or None,
-        status=StatusDocumento.PENDENTE,
-        criado_por_id=autor.id,
-    )
-    session.add(item)
+
+def criar(
+    session: Session,
+    *,
+    classificacao: str,
+    termo: str,
+    observacao: str | None,
+    autor: User,
+) -> List[TermoDeNegocio]:
+    """Cadastra UM OU VÁRIOS apelidos para a mesma linha.
+
+    `termo` aceita lista separada por vírgula, ponto-e-vírgula ou quebra de
+    linha: uma linha do catálogo costuma ter mais de um nome de negócio
+    (elastômero, borracha, TPU), e cada um vira uma linha própria na tabela.
+
+    Devolve SEMPRE uma lista, mesmo para um termo só — assinatura única evita
+    que o chamador precise adivinhar o que voltou.
+    """
+    rotulo, rotulo_do_acervo = _resolver_classificacao(classificacao)
+
+    termos = separar_termos(termo)
+    if not termos:
+        raise TermoInvalidoError("Informe ao menos um termo.")
+    for candidato in termos:
+        _validar_termo(candidato)
+
+    criados = []
+    for candidato in termos:
+        item = TermoDeNegocio(
+            id=uuid.uuid4(),
+            # Guarda o rótulo COMO O ACERVO ESCREVE, não como a pessoa digitou.
+            classificacao=rotulo_do_acervo,
+            classificacao_rotulo=rotulo,
+            termo=candidato,
+            termo_normalizado=normalizar(candidato),
+            observacao=(observacao or "").strip() or None,
+            status=StatusDocumento.PENDENTE,
+            criado_por_id=autor.id,
+        )
+        session.add(item)
+        criados.append(item)
+    session.flush()
+    return criados
+
+
+def editar(
+    session: Session,
+    item_id,
+    *,
+    classificacao: str | None = None,
+    termo: str | None = None,
+    observacao: str | None = None,
+    autor: User,
+) -> TermoDeNegocio:
+    """Corrige um apelido já cadastrado.
+
+    DISCIPLINA DA APROVAÇÃO: mexer no TERMO ou na LINHA de um item já aprovado
+    o devolve para PENDENTE. Não é burocracia — um apelido aprovado muda o
+    resultado de consultas estruturais, apresentadas ao vendedor como a
+    evidência mais forte que existe. Trocar "elastômero" por "borracha" num
+    item em uso, sem nova revisão, mudaria em silêncio o que o agente afirma
+    como verdade da empresa.
+
+    Corrigir só a OBSERVAÇÃO não derruba a aprovação: ela é nota para humano e
+    não entra em resolução nenhuma. Exigir revisão para um ajuste de texto
+    treinaria as pessoas a aprovar sem ler.
+    """
+    item = _obter(session, item_id)
+    mudou_o_que_resolve = False
+
+    if classificacao is not None:
+        rotulo, rotulo_do_acervo = _resolver_classificacao(classificacao)
+        if rotulo != item.classificacao_rotulo:
+            item.classificacao = rotulo_do_acervo
+            item.classificacao_rotulo = rotulo
+            mudou_o_que_resolve = True
+
+    if termo is not None:
+        termos = separar_termos(termo)
+        if len(termos) != 1:
+            raise TermoInvalidoError(
+                "Na edição, informe um termo só. Para acrescentar outros "
+                "apelidos à mesma linha, use o cadastro."
+            )
+        _validar_termo(termos[0])
+        if normalizar(termos[0]) != item.termo_normalizado or termos[0] != item.termo:
+            if normalizar(termos[0]) != item.termo_normalizado:
+                mudou_o_que_resolve = True
+            item.termo = termos[0]
+            item.termo_normalizado = normalizar(termos[0])
+
+    if observacao is not None:
+        item.observacao = (observacao or "").strip() or None
+
+    if mudou_o_que_resolve and item.status == StatusDocumento.APROVADO:
+        item.status = StatusDocumento.PENDENTE
+        item.motivo_decisao = None
+        item.decidido_por_id = None
+        item.decidido_em = None
+        logger.info(
+            "Termo %s voltou para aprovação: o que ele resolve mudou.", item.id
+        )
+
+    item_autor = autor  # mantido para auditoria futura; hoje só o log acima
+    del item_autor
     session.flush()
     return item
 

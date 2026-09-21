@@ -296,6 +296,24 @@ catálogo classifica assim".
 | *quais produtos são elastômeros* | menção no documento | classificação estrutural |
 | *produtos de borracha* | menção no documento | classificação estrutural (via tradução leigo→técnico) |
 
+**Vários apelidos para a mesma linha, de uma vez.** Uma linha costuma ter mais
+de um nome de negócio — separe por vírgula, ponto-e-vírgula ou quebra de linha:
+
+```
+FLEXX® TH  →  elastômero, borracha, TPU
+```
+
+Cada um vira um apelido próprio, e qualquer um deles resolve para a linha.
+Duplicatas no mesmo envio são colapsadas pela forma normalizada ("Elastômero" e
+"elastomero" são o mesmo apelido escrito de dois jeitos).
+
+**Editar.** Cada item tem *Editar*. Mexer no **termo** ou na **linha** de um item
+já aprovado o devolve para a fila de aprovação — ele está em uso e muda o
+resultado de consultas apresentadas ao vendedor como a evidência mais forte que
+existe. Corrigir só a **observação**, ou só a grafia de um termo (`elastomero` →
+`elastômero`, que normalizam para a mesma chave), não derruba a aprovação:
+exigir revisão para ajuste de texto treinaria as pessoas a aprovar sem ler.
+
 A linha vem de um **seletor com as classificações reais do acervo**, não de
 campo livre — digitar `FLEXX TH` onde o acervo diz `FLEXX® TH` criaria um
 apelido que nunca resolve, sem erro visível em lugar nenhum. Cadastro exige
