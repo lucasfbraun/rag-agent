@@ -7,7 +7,10 @@ import enum
 import uuid
 from datetime import datetime, timezone
 
-from sqlalchemy import String, Text, DateTime, Boolean, Integer, ForeignKey, Enum as SAEnum
+from sqlalchemy import (
+    String, Text, DateTime, Boolean, Integer, ForeignKey, UniqueConstraint,
+    Enum as SAEnum,
+)
 from sqlalchemy.dialects.postgresql import UUID, JSONB
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
@@ -173,6 +176,22 @@ class ConversationMessage(Base):
     content: Mapped[str] = mapped_column(Text, nullable=False)
     sources: Mapped[list | None] = mapped_column(JSONB, nullable=True)
     model_used: Mapped[str | None] = mapped_column(String(100), nullable=True)
+
+    # --- Rastro de recuperação (2026-09-18) ---
+    # Existe para uma pergunta que o sistema não sabia responder: DE ONDE veio
+    # esta resposta? `model_used` agrupa cinco detectores diferentes sob
+    # "catalogo-estruturado", o que apaga exatamente a distinção que o
+    # relatório de validação precisa medir. Ver app/rag/caminhos.py.
+    #
+    # Nulo em toda mensagem gravada antes desta migração, e continua nulo para
+    # mensagens de usuário (papel "user" não tem caminho de motor).
+    caminho: Mapped[str | None] = mapped_column(String(40), nullable=True, index=True)
+    # Os termos que a busca textual efetivamente procurou — palavras-chave da
+    # pergunta mais os termos traduzidos pela expansão. É o que permite dizer,
+    # depois, se a resposta errada veio de o motor ter procurado a palavra
+    # errada, sem ter de reproduzir a consulta (a tradução pode ter mudado).
+    termos_busca: Mapped[list | None] = mapped_column(JSONB, nullable=True)
+
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, default=_utcnow, index=True
     )
@@ -324,3 +343,114 @@ class ItemTreinamento(Base):
 
     criado_por: Mapped["User"] = relationship(foreign_keys=[criado_por_id], lazy="joined")
     decidido_por: Mapped["User | None"] = relationship(foreign_keys=[decidido_por_id], lazy="joined")
+
+
+class Veredito(str, enum.Enum):
+    """O julgamento técnico de uma resposta já dada.
+
+    Três valores, e não dois, porque "incompleta" é o desfecho mais comum e o
+    mais informativo deste motor: a resposta cita um produto certo mas deixa
+    de fora outros cinco que também atendem. Tratar isso como "incorreta"
+    esconde que a recuperação funcionou em parte; tratar como "correta"
+    esconde o buraco de recall, que é justamente o defeito estrutural
+    documentado em docs/avaliacao_arquitetura_2026-09-18.md.
+    """
+    CORRETA = "correta"
+    INCORRETA = "incorreta"
+    INCOMPLETA = "incompleta"
+
+
+class VereditoTecnico(Base):
+    """Julgamento de um técnico sobre uma resposta que o agente JÁ deu.
+
+    POR QUE ISTO EXISTE
+
+    Nenhum dos ~380 testes do projeto prova que a taxa de acerto sobre o
+    acervo real melhorou; todos verificam comportamento programado com
+    dependência simulada. O usuário que opera o sistema é leigo no catálogo e
+    só consegue dizer "melhorou" por sensação — foi assim que se acumulou uma
+    série de commits `fix:` em que cada correção criava a oposta. Quem sabe a
+    resposta certa é a Qualidade / Engenharia de Aplicação.
+
+    POR QUE UMA TABELA NOVA, E NÃO `Feedback` NEM `ItemTreinamento`
+
+    - `Feedback` é o útil/não útil de quem PERGUNTOU. É sinal de satisfação de
+      um leigo, não julgamento de correção. Somar os dois num campo só
+      destruiria a distinção que dá valor a este registro: quem avalia aqui
+      não é quem perguntou.
+    - `ItemTreinamento` é conhecimento curado que VOLTA para o agente — vai
+      para uma coleção Qdrant e entra no contexto de respostas futuras. Um
+      veredito não pode ter esse destino: o projeto já teve um incidente com
+      feedback bruto sendo injetado no prompt (achado 2 de
+      docs/avaliacao_agente_2026-09-10.md). Isto aqui é MEDIÇÃO, não memória —
+      nada neste módulo é lido pelo motor em tempo de resposta.
+
+      Nada impede que um veredito "incorreta" com `resposta_correta` escrita
+      vire, DEPOIS e por decisão de alguém, um `ItemTreinamento` do tipo
+      correção. Mas é um segundo ato deliberado, com a aprovação que aquele
+      fluxo já exige, e não um efeito colateral de medir.
+
+    POR QUE O CONTEÚDO É COPIADO E NÃO SÓ REFERENCIADO
+
+    `mensagem_id` aponta para a resposta real (é ela que torna o conjunto de
+    avaliação feito de perguntas REAIS, e não inventadas), mas a conversa
+    pertence ao vendedor e ele pode apagá-la — `conversations` já apaga as
+    mensagens em cascata. Se o veredito morresse junto, o conjunto de
+    regressão encolheria sozinho, em silêncio, por uma ação de limpeza de
+    alguém que não faz ideia de que existe medição. Por isso pergunta,
+    resposta, caminho, modelo e fontes são copiados no momento do julgamento,
+    e a FK é `SET NULL`: o vínculo se perde, o dado não.
+
+    É a mesma escolha que `Feedback` já fazia ao guardar query/answer em vez
+    de um ID de interação — aqui ela é deliberada, não uma limitação.
+    """
+    __tablename__ = "vereditos_tecnicos"
+    __table_args__ = (
+        # Dois técnicos podem divergir sobre a mesma resposta, e essa
+        # divergência é informação — o relatório a mostra em vez de escondê-la.
+        # O que não pode é a mesma pessoa gerar duas linhas: reavaliar é
+        # corrigir o próprio julgamento, não criar um segundo.
+        UniqueConstraint(
+            "mensagem_id", "avaliado_por_id", name="uq_veredito_mensagem_avaliador"
+        ),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+
+    mensagem_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("conversation_messages.id", ondelete="SET NULL"),
+        nullable=True,
+        index=True,
+    )
+
+    # Cópias do momento do julgamento (ver docstring).
+    pergunta: Mapped[str] = mapped_column(Text, nullable=False)
+    resposta: Mapped[str] = mapped_column(Text, nullable=False)
+    caminho: Mapped[str | None] = mapped_column(String(40), nullable=True, index=True)
+    model_used: Mapped[str | None] = mapped_column(String(100), nullable=True)
+    fontes: Mapped[list | None] = mapped_column(JSONB, nullable=True)
+    termos_busca: Mapped[list | None] = mapped_column(JSONB, nullable=True)
+
+    veredito: Mapped[Veredito] = mapped_column(
+        SAEnum(Veredito, name="veredito_resposta"), nullable=False, index=True
+    )
+    # Opcionais de propósito: exigir a resposta certa de quem só quer marcar
+    # "errado" faria o técnico não marcar nada. Meia informação registrada vale
+    # mais que a informação inteira que ninguém teve tempo de escrever.
+    resposta_correta: Mapped[str | None] = mapped_column(Text, nullable=True)
+    justificativa: Mapped[str | None] = mapped_column(Text, nullable=True)
+
+    avaliado_por_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("users.id"), nullable=False, index=True
+    )
+
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, default=_utcnow, index=True
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, default=_utcnow, onupdate=_utcnow
+    )
+
+    mensagem: Mapped["ConversationMessage | None"] = relationship(lazy="joined")
+    avaliado_por: Mapped["User"] = relationship(lazy="joined")

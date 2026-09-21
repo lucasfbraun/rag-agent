@@ -72,7 +72,18 @@ def save_exchange(
     answer: str,
     sources: list[str] | None = None,
     model_used: str | None = None,
+    caminho: str | None = None,
+    termos_busca: list[str] | None = None,
 ) -> Conversation:
+    """Grava o par pergunta/resposta.
+
+    `caminho` e `termos_busca` (2026-09-18) são o rastro de recuperação: qual
+    dos mecanismos do motor atendeu e o que a busca textual efetivamente
+    procurou. Ficam na mensagem do assistente porque é ela que o técnico
+    julga depois — sem eles, o relatório de validação sabe QUANTO o sistema
+    erra mas não ONDE. Default `None` mantém compatível quem chama sem passar
+    (e é o valor de toda mensagem anterior a esta mudança).
+    """
     if conversation_id is None:
         conversation = Conversation(user_id=user_id, title="Nova conversa")
         session.add(conversation)
@@ -102,6 +113,8 @@ def save_exchange(
                 content=answer,
                 sources=sources or [],
                 model_used=model_used,
+                caminho=caminho,
+                termos_busca=list(termos_busca) if termos_busca else None,
             ),
         ]
     )

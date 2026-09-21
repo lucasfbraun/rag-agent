@@ -50,6 +50,14 @@ class Permission(str, enum.Enum):
     # conhecimento afirmam fatos que o agente repete como verdade da empresa.
     TRAIN_AGENT = "train_agent"
     APPROVE_TRAINING = "approve_training"
+    # Sessão 58: julgar tecnicamente se uma resposta JÁ DADA estava certa, para
+    # medir a taxa de acerto do motor. Separada de APPROVE_TRAINING de
+    # propósito, apesar da vizinhança: aquela decide o que o agente vai
+    # REPETIR como verdade; esta só registra medição, e nada do que ela grava
+    # volta para o prompt. São riscos de tamanhos diferentes, então quem pode
+    # uma não precisa poder a outra. Quem valida também não é quem pergunta —
+    # o vendedor leigo continua com VIEW_CATALOG e nada mais.
+    VALIDATE_ANSWERS = "validate_answers"
 
 
 # Rótulo de cada permissão na tela de perfis. Fica aqui, junto do enum, porque
@@ -68,6 +76,7 @@ ROTULOS_DE_PERMISSAO: dict[Permission, str] = {
     Permission.APPROVE_UPLOADS: "Aprovar ou recusar documentos enviados",
     Permission.TRAIN_AGENT: "Treinar o agente (corrigir respostas, registrar conhecimento)",
     Permission.APPROVE_TRAINING: "Aprovar correções e conhecimento antes de valerem",
+    Permission.VALIDATE_ANSWERS: "Validar tecnicamente respostas já dadas (medição de acerto)",
 }
 
 # A permissão que caracteriza um perfil "administrador". Quem a tem enxerga a

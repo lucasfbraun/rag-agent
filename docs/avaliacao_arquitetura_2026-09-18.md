@@ -216,14 +216,17 @@ reindexar o acervo.**
 
 Em ordem de retorno, e sem mudança em relação ao diagnóstico acima:
 
-0. **Conjunto de avaliação e harness.** Perguntas reais com resposta esperada,
-   rodando contra o acervo, reportando recall e regressão. É o que torna tudo o
-   mais mensurável. O usuário é a persona certa para fornecer as perguntas
-   leigas, mas não é quem pode dizer qual era a resposta certa — isso vem da
-   Qualidade ou da Engenharia de Aplicação. O caminho natural é registrar as
-   perguntas reais do uso (tabelas `feedback` e `conversation_messages` já
-   existem) e um técnico marcar certo/errado periodicamente, em vez de alguém
-   inventar perguntas induzidas.
+0. **Conjunto de avaliação e harness.** ✅ **Implementado** — ver
+   [spec_validacao_tecnica.md](spec_validacao_tecnica.md). Foi pelo caminho
+   previsto aqui: as respostas passaram a gravar qual caminho do motor as
+   produziu, um técnico marca correta/incorreta/incompleta sobre perguntas
+   reais do uso, e o relatório dá taxa geral, **taxa por caminho** e lista de
+   regressão. Ninguém inventa pergunta, e sem histórico o relatório diz que
+   não há histórico em vez de dar número.
+
+   O que continua faltando deste item: a lista de regressão ainda não é
+   **executada** contra o motor automaticamente. Ela é o insumo; transformá-la
+   em suíte que roda a cada mudança é o próximo passo.
 1. **Catálogo estruturado no PostgreSQL**, preenchido por extração com LLM na
    ingestão, uma vez, offline, com o trecho de origem citado em cada campo.
    Elimina como classe tudo que virou `fix:` nas últimas semanas.

@@ -16,6 +16,7 @@ from app.auth.perfil_router import router as perfil_router
 from app.upload_router import router as upload_router
 from app.treinamento_router import router as treinamento_router
 from app.conversation_router import router as conversation_router
+from app.validacao_router import router as validacao_router
 from app.auth.permissions import Permission, has_permission, require_permission
 from app.models import User
 from app.db import get_session
@@ -44,6 +45,7 @@ app.include_router(perfil_router)
 app.include_router(upload_router)
 app.include_router(treinamento_router)
 app.include_router(conversation_router)
+app.include_router(validacao_router)
 
 # ---------------------------------------------------------------------------
 # Schemas
@@ -222,6 +224,8 @@ def match_product(
             answer=res["answer"],
             sources=res.get("sources"),
             model_used=res.get("model_used"),
+            caminho=res.get("caminho"),
+            termos_busca=res.get("termos_busca"),
         )
         return {**res, "conversation_id": str(conversation.id)}
     except ConversationNotFoundError:
@@ -287,6 +291,13 @@ def match_product_stream(
         answer_parts = []
         sources = []
         model_used = req.model_name
+        # Rastro de recuperação: só o evento `meta` o conhece, e ele chega
+        # antes do primeiro delta. Guardar aqui é o que permite gravá-lo junto
+        # da resposta lá no `done` — sem isso o caminho do motor se perderia
+        # no streaming e metade do histórico ficaria sem o campo que o
+        # relatório de validação agrupa.
+        caminho = None
+        termos_busca = None
         failed = False
 
         for raw_event in generator:
@@ -299,6 +310,8 @@ def match_product_stream(
             if event.get("type") == "meta":
                 sources = event.get("sources") or []
                 model_used = event.get("model_used") or req.model_name
+                caminho = event.get("caminho")
+                termos_busca = event.get("termos_busca")
                 event["conversation_id"] = str(conversation.id)
                 yield json.dumps(event) + "\n"
             elif event.get("type") == "delta":
@@ -318,6 +331,8 @@ def match_product_stream(
                         answer=answer,
                         sources=sources,
                         model_used=model_used,
+                        caminho=caminho,
+                        termos_busca=termos_busca,
                     )
                 yield raw_event
             else:
