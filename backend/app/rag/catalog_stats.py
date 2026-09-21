@@ -301,51 +301,21 @@ def _conteudo_declara_produto_como_isocianato(filepath: str, content: str) -> bo
     return _conteudo_declara_produto_como("isocianato", filepath, content)
 
 
-def _conteudo_declara_produto_como_elastomero(filepath: str, content: str) -> bool:
-    """Detecta identidade explícita, não apenas uso na produção do material."""
-    return _conteudo_declara_produto_como("elastomero", filepath, content)
-
-
 def _rotulo_estrutural_catalogo(valor: str) -> str:
     """Normaliza um segmento da hierarquia sem preservar marcas/símbolos."""
     return re.sub(r"[^a-z0-9]+", " ", _normalizar_sem_acentos(valor)).strip()
 
 
-def _conteudo_comprova_tecnologia_rigido(filepath: str, content: str) -> bool:
-    """Confirma que o produto está classificado na tecnologia ``FLEXX RG``.
-
-    O texto do boletim não basta para esta classificação: produtos de outras
-    tecnologias podem produzir, compor ou ser destinados a espumas rígidas.
-    A fonte de verdade é a árvore tecnológica do catálogo, onde RG agrupa os
-    produtos rígidos e pode conter subfamílias como RGE e RGT.
-    """
-    nome_arquivo = _SEPARADOR_CAMINHO.split(filepath)[-1]
-    if "boletim" not in _normalizar_sem_acentos(nome_arquivo):
-        return False
-    del content  # A classificação vem da hierarquia, não de menção textual.
-    partes = [
-        parte.strip()
-        for parte in _SEPARADOR_CAMINHO.split(filepath)
-        if parte.strip()
-    ]
-    rotulos = [_rotulo_estrutural_catalogo(parte) for parte in partes]
-    # Um documento histórico não comprova que o produto continua ativo. Se
-    # também existir um boletim atual, outro ponto do Qdrant incluirá o produto.
-    if any(
-        rotulo in {"obsoleto", "obsoletos", "revisao anterior"}
-        for rotulo in rotulos[:-1]
-    ):
-        return False
-    produto = _produto_do_filepath(filepath)
-    rotulo_produto = _rotulo_estrutural_catalogo(produto or "")
-    # Evita transformar subpastas como ``OB``, ``COM ISO 4416`` e os nomes das
-    # próprias famílias (sem código) em produtos do resultado.
-    if not re.match(r"^flexx\s+rg[a-z]*\b.*\d", rotulo_produto):
-        return False
-    return any(
-        rotulo == "flexx rg"
-        for rotulo in rotulos[:-1]
-    )
+# REMOVIDAS em 21/09/2026, junto com o parâmetro `exigir_natureza`:
+#   `_conteudo_declara_produto_como_elastomero` — era um apelido de uma linha
+#   para `_conteudo_declara_produto_como("elastomero", ...)`, que já é genérica
+#   por termo e alimenta o nível `identidade_declarada` da cascata.
+#   `_conteudo_comprova_tecnologia_rigido` — reimplementava, só para RG, a
+#   leitura da árvore do catálogo que `_documento_atual_com_produto_catalogavel`
+#   + `_classificacoes_do_filepath` fazem para QUALQUER linha (obsoletos,
+#   INATIVO, pastas "COM ISO" e pastas de família sem código inclusive), e que
+#   `listar_produtos_por_classificacao_catalogo` e o nível
+#   `classificacao_estrutural` já usam.
 
 
 def _conteudo_comprova_tipo_elastomero(filepath: str, content: str) -> bool:
@@ -600,7 +570,6 @@ def _resumo_lista(produtos: set, listar_todos: bool) -> Dict[str, Any]:
 def listar_produtos_por_aplicacao(
     termo_busca: str = "",
     listar_todos: bool = False,
-    exigir_natureza: bool = False,
 ) -> Dict[str, Any]:
     """Lista produtos distintos do acervo, separando DUAS interpretações
     possíveis do mesmo termo — pedido do usuário: o agente precisa entender
@@ -638,11 +607,16 @@ def listar_produtos_por_aplicacao(
     detalhe de um item específico faz uma pergunta de acompanhamento, que
     aí sim usa retrieve_products_context normalmente.
 
-    Para termos relacionados a elastômero, `exigir_natureza=True` muda o
-    contrato: só aceita declaração explícita de que o próprio produto é um
-    elastômero. A forma padrão continua abrangendo matérias-primas/sistemas
-    que produzem elastômero, pois responde a pedidos como "produto para fazer
-    uma peça de elastômero".
+    ESTA FUNÇÃO NÃO RESPONDE "quais produtos SÃO X". Até 21/09/2026 ela
+    aceitava `exigir_natureza=True`, que prometia comprovar a natureza do
+    material e só funcionava para dois termos codificados à mão — "elastômero"
+    e "rígidos". Para qualquer outra palavra o parâmetro não fazia nada, em
+    silêncio: o modelo pedia prova de natureza e recebia uma busca textual
+    comum, sem saber. Natureza tem ferramenta própria desde então,
+    `listar_produtos_por_tipo`, que devolve os quatro níveis de evidência
+    ROTULADOS em vez de um bucket booleano — e o ramo de "rígidos" era, na
+    verdade, classificação de catálogo, que tem
+    `listar_produtos_por_classificacao_catalogo`.
 
     `listar_todos` (pedido do usuário): por padrão cada bucket devolve só
     uma prévia (10 produtos) + o total real, pra o agente perguntar se o
@@ -682,18 +656,7 @@ def listar_produtos_por_aplicacao(
                 busca_tipo_elastomero = termo_normalizado in {
                     "elastomero", "elastomeros", "elastomerico", "elastomericos",
                 }
-                busca_tecnologia_rigido = termo_normalizado in {
-                    "rigido", "rigidos", "rigida", "rigidas",
-                }
-                if exigir_natureza and busca_tipo_elastomero:
-                    bate = _conteudo_declara_produto_como_elastomero(
-                        payload.get("filepath") or "", content
-                    )
-                elif exigir_natureza and busca_tecnologia_rigido:
-                    bate = _conteudo_comprova_tecnologia_rigido(
-                        payload.get("filepath") or "", content
-                    )
-                elif busca_tipo_elastomero:
+                if busca_tipo_elastomero:
                     if _conteudo_declara_produto_como_isocianato(
                         payload.get("filepath") or "", content
                     ):

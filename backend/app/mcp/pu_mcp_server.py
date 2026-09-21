@@ -80,7 +80,6 @@ def consultar_estatisticas_catalogo() -> Dict[str, Any]:
 def consultar_produtos_por_aplicacao(
     termo_busca: str = "",
     listar_todos: bool = False,
-    exigir_natureza: bool = False,
 ) -> Dict[str, Any]:
     """Lista produtos distintos do acervo cujo conteúdo menciona a
     aplicação/uso dado. Sem `termo_busca` (vazio), lista TODOS os produtos
@@ -90,13 +89,14 @@ def consultar_produtos_por_aplicacao(
     `listar_todos` (pedido do usuário): por padrão devolve prévia de 10 + o
     total real; quando True, devolve todos, sem limite nenhum.
 
-    `exigir_natureza` ativa a comprovação da natureza do material. Para
-    tecnologia/linha da hierarquia, use a ferramenta de classificação."""
+    NÃO responde "quais produtos SÃO X" — isso é `consultar_produtos_por_tipo`,
+    que devolve os quatro níveis de evidência rotulados. O parâmetro
+    `exigir_natureza`, que prometia essa comprovação aqui e só existia para
+    dois termos codificados à mão, foi aposentado em 21/09/2026."""
     try:
         return listar_produtos_por_aplicacao(
             termo_busca,
             listar_todos=listar_todos,
-            exigir_natureza=exigir_natureza,
         )
     except RetrievalIndisponivelError as e:
         return {"erro": f"Catálogo indisponível no momento: {e}"}
@@ -187,13 +187,12 @@ MCP_TOOLS_DEFINITIONS = [
         "type": "function",
         "function": {
             "name": "consultar_produtos_por_aplicacao",
-            "description": "Lista/conta produtos distintos do acervo real, procurando `termo_busca` de DUAS formas independentes e devolvendo os resultados em DOIS blocos separados (nunca misturados): `por_nome_ou_familia` (o termo é a FAMÍLIA/CÓDIGO do NOME do produto, ex: 'CAT', 'TH', 'AG', 'COLOR' — o acervo segue o padrão FLEXX <FAMÍLIA> <NÚMERO>, ex: 'FLEXX CAT 42') e `por_aplicacao_ou_tipo` (o termo aparece no CONTEÚDO do documento como APLICAÇÃO/USO, ex: 'colchão', 'cortiça', 'automotivo', ou TIPO/NATUREZA DO PRODUTO, ex: 'cola', 'espuma', 'selante'). Os dois blocos podem vir os dois preenchidos ao mesmo tempo pro MESMO termo (ex: 'CAT' pode ser família E aparecer citado no conteúdo de outros produtos) — quando isso acontecer, NÃO junte os dois: são interpretações diferentes do termo, e cabe a você (ou ao usuário, se não estiver claro pelo contexto da conversa) decidir qual vale. SEM `termo_busca` (omitido/vazio), lista TODOS os produtos do catálogo em `por_nome_ou_familia`, sem filtro nenhum — use para 'liste todos os produtos' (sem categoria/família nenhuma citada). Use SEMPRE que o pedido for uma LISTAGEM ou CONTAGEM POR CATEGORIA/FAMÍLIA. Se o pedido for só 'quantos produtos catalogados' (um número, sem precisar da lista), use consultar_estatisticas_catalogo em vez desta, que é mais leve. Por padrão cada bloco devolve só uma prévia (10 produtos) + o total real — pergunte ao usuário se ele quer a lista completa ou só essa prévia antes de decidir; se ele pedir 'todos'/'a lista completa', chame de novo com listar_todos=true.",
+            "description": "Lista/conta produtos distintos do acervo real por APLICAÇÃO/FINALIDADE ('produtos PARA X') ou por FAMÍLIA do nome. Para 'produtos que SÃO X' (natureza/tipo do material) use consultar_produtos_por_tipo, e para 'produtos da tecnologia/linha X' use consultar_produtos_por_classificacao_catalogo — as três perguntas são diferentes e cada uma tem a sua ferramenta. Procura `termo_busca` de DUAS formas independentes e devolve os resultados em DOIS blocos separados (nunca misturados): `por_nome_ou_familia` (o termo é a FAMÍLIA/CÓDIGO do NOME do produto, ex: 'CAT', 'TH', 'AG', 'COLOR' — o acervo segue o padrão FLEXX <FAMÍLIA> <NÚMERO>, ex: 'FLEXX CAT 42') e `por_aplicacao_ou_tipo` (o termo aparece no CONTEÚDO do documento como APLICAÇÃO/USO, ex: 'colchão', 'cortiça', 'automotivo'). ATENÇÃO ao apresentar `por_aplicacao_ou_tipo`: o termo APARECER no documento não prova que o produto É aquilo nem que ele atende à aplicação — é menção no texto, e só. Os dois blocos podem vir os dois preenchidos ao mesmo tempo pro MESMO termo (ex: 'CAT' pode ser família E aparecer citado no conteúdo de outros produtos) — quando isso acontecer, NÃO junte os dois: são interpretações diferentes do termo, e cabe a você (ou ao usuário, se não estiver claro pelo contexto da conversa) decidir qual vale. SEM `termo_busca` (omitido/vazio), lista TODOS os produtos do catálogo em `por_nome_ou_familia`, sem filtro nenhum — use para 'liste todos os produtos' (sem categoria/família nenhuma citada). Use SEMPRE que o pedido for uma LISTAGEM ou CONTAGEM POR CATEGORIA/FAMÍLIA. Se o pedido for só 'quantos produtos catalogados' (um número, sem precisar da lista), use consultar_estatisticas_catalogo em vez desta, que é mais leve. Por padrão cada bloco devolve só uma prévia (10 produtos) + o total real — pergunte ao usuário se ele quer a lista completa ou só essa prévia antes de decidir; se ele pedir 'todos'/'a lista completa', chame de novo com listar_todos=true.",
             "parameters": {
                 "type": "object",
                 "properties": {
-                    "termo_busca": {"type": "string", "description": "Família/código do nome do produto (ex: 'CAT', 'TH', 'AG'), OU aplicação/uso, OU tipo de produto (ex: 'colchão', 'cortiça', 'cola', 'espuma'). Omita ou deixe vazio para listar TODOS os produtos, sem filtro."},
-                    "listar_todos": {"type": "boolean", "description": "true para listar TODOS os produtos encontrados, sem limite nenhum (só use depois que o usuário confirmar que quer a lista completa); false (padrão) devolve uma prévia de até 10"},
-                    "exigir_natureza": {"type": "boolean", "description": "true quando a pergunta pedir a natureza do próprio material, como 'produtos que são elastômeros'. Para tecnologia/linha/sublinha do catálogo, use consultar_produtos_por_classificacao_catalogo. Use false para busca ampla por aplicação/finalidade."}
+                    "termo_busca": {"type": "string", "description": "Família/código do nome do produto (ex: 'CAT', 'TH', 'AG') OU a aplicação/uso pedida (ex: 'colchão', 'cortiça', 'automotivo'). Omita ou deixe vazio para listar TODOS os produtos, sem filtro."},
+                    "listar_todos": {"type": "boolean", "description": "true para listar TODOS os produtos encontrados, sem limite nenhum (só use depois que o usuário confirmar que quer a lista completa); false (padrão) devolve uma prévia de até 10"}
                 }
             }
         }
@@ -325,7 +324,6 @@ def execute_mcp_tool(
         return json.dumps(consultar_produtos_por_aplicacao(
             arguments.get("termo_busca", ""),
             listar_todos=arguments.get("listar_todos", False),
-            exigir_natureza=arguments.get("exigir_natureza", False),
         ))
     elif tool_name == "consultar_produtos_por_tipo":
         return json.dumps(consultar_produtos_por_tipo(
