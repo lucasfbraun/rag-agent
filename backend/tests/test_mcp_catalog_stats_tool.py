@@ -54,7 +54,44 @@ def test_ferramenta_de_listagem_esta_registrada_na_lista_do_agente():
         t for t in MCP_TOOLS_DEFINITIONS
         if t["function"]["name"] == "consultar_produtos_por_aplicacao"
     )
-    assert "exigir_natureza" in ferramenta["function"]["parameters"]["properties"]
+    assert set(ferramenta["function"]["parameters"]["properties"]) == {
+        "termo_busca", "listar_todos",
+    }
+
+
+def test_ferramenta_de_aplicacao_nao_oferece_mais_caminho_de_natureza():
+    """`exigir_natureza` foi aposentado em 21/09/2026.
+
+    Era um caminho concorrente de `consultar_produtos_por_tipo` para a MESMA
+    pergunta ("produtos que são X"), com contrato incompatível (bucket
+    booleano contra quatro níveis rotulados) e implementado só para dois
+    termos codificados à mão — "elastômero" e "rígidos". Para qualquer outra
+    palavra o parâmetro não fazia nada, em silêncio: o modelo pedia prova de
+    natureza e recebia busca textual comum sem saber disso.
+    """
+    ferramenta = next(
+        t for t in MCP_TOOLS_DEFINITIONS
+        if t["function"]["name"] == "consultar_produtos_por_aplicacao"
+    )
+    assert "exigir_natureza" not in json.dumps(ferramenta, ensure_ascii=False)
+    # E a descrição precisa mandar a pergunta de natureza para o lugar certo,
+    # senão o modelo continua usando esta ferramenta para respondê-la.
+    assert "consultar_produtos_por_tipo" in ferramenta["function"]["description"]
+
+
+def test_execute_mcp_tool_ignora_exigir_natureza_vindo_do_modelo():
+    """Argumento de LLM não é confiável: um modelo com prompt em cache ainda
+    pode mandar o parâmetro aposentado, e isso não pode estourar o despacho."""
+    with patch(
+        "app.mcp.pu_mcp_server.listar_produtos_por_aplicacao",
+        return_value=_resultado_mock("elastômero"),
+    ) as mock_listar:
+        execute_mcp_tool(
+            "consultar_produtos_por_aplicacao",
+            {"termo_busca": "elastômero", "exigir_natureza": True},
+        )
+
+    mock_listar.assert_called_once_with("elastômero", listar_todos=False)
 
 
 def test_ferramenta_de_classificacao_catalogo_e_generica():
@@ -101,9 +138,7 @@ def test_execute_mcp_tool_lista_repassa_termo_busca_e_devolve_json_valido():
     ) as mock_listar:
         resultado = execute_mcp_tool("consultar_produtos_por_aplicacao", {"termo_busca": "colchão"})
 
-    mock_listar.assert_called_once_with(
-        "colchão", listar_todos=False, exigir_natureza=False
-    )
+    mock_listar.assert_called_once_with("colchão", listar_todos=False)
     dados = json.loads(resultado)
     assert dados["por_aplicacao_ou_tipo"]["produtos"] == ["A", "B"]
 
@@ -117,24 +152,7 @@ def test_execute_mcp_tool_lista_repassa_listar_todos_true():
     ) as mock_listar:
         execute_mcp_tool("consultar_produtos_por_aplicacao", {"termo_busca": "colchão", "listar_todos": True})
 
-    mock_listar.assert_called_once_with(
-        "colchão", listar_todos=True, exigir_natureza=False
-    )
-
-
-def test_execute_mcp_tool_repassa_exigencia_de_natureza_do_produto():
-    with patch(
-        "app.mcp.pu_mcp_server.listar_produtos_por_aplicacao",
-        return_value=_resultado_mock("elastômero"),
-    ) as mock_listar:
-        execute_mcp_tool(
-            "consultar_produtos_por_aplicacao",
-            {"termo_busca": "elastômero", "exigir_natureza": True},
-        )
-
-    mock_listar.assert_called_once_with(
-        "elastômero", listar_todos=False, exigir_natureza=True
-    )
+    mock_listar.assert_called_once_with("colchão", listar_todos=True)
 
 
 def test_execute_mcp_tool_lista_sem_termo_busca_lista_catalogo_inteiro():
@@ -146,9 +164,7 @@ def test_execute_mcp_tool_lista_sem_termo_busca_lista_catalogo_inteiro():
     ) as mock_listar:
         execute_mcp_tool("consultar_produtos_por_aplicacao", {})
 
-    mock_listar.assert_called_once_with(
-        "", listar_todos=False, exigir_natureza=False
-    )
+    mock_listar.assert_called_once_with("", listar_todos=False)
 
 
 def test_falha_no_qdrant_ao_listar_vira_erro_no_payload():

@@ -16,6 +16,7 @@ from app.rag.catalog_stats import (
     obter_estatisticas_catalogo,
     listar_produtos_por_aplicacao,
     listar_produtos_por_classificacao_catalogo,
+    listar_produtos_por_tipo,
     _produto_do_filepath,
     _termo_bate_no_nome_produto,
     _termo_bate_no_conteudo,
@@ -390,6 +391,13 @@ def test_natureza_elastomero_nao_inclui_produto_que_apenas_produz_elastomero():
     Um pré-polímero adequado para produzir o material curado responde a outra
     pergunta e não pode ser contado como se o produto comercial já fosse um
     elastômero.
+
+    MIGRADO em 21/09/2026 de `listar_produtos_por_aplicacao(exigir_natureza=True)`
+    para `listar_produtos_por_tipo`, quando o parâmetro foi aposentado. A
+    distinção que o teste protege não se perdeu: ela ficou MAIS explícita, em
+    dois níveis rotulados da cascata em vez de um bucket booleano — o
+    pré-polímero aparece como composição comprovada, e só o produto cujo
+    boletim declara identidade responde "é um elastômero".
     """
     fake_client = MagicMock()
     fake_client.scroll.return_value = (
@@ -407,52 +415,67 @@ def test_natureza_elastomero_nao_inclui_produto_que_apenas_produz_elastomero():
     )
 
     with patch("app.rag.catalog_stats.get_qdrant_client", return_value=fake_client):
-        resultado = listar_produtos_por_aplicacao(
-            "elastômero", listar_todos=True, exigir_natureza=True
-        )
+        resultado = listar_produtos_por_tipo("elastômero", listar_todos=True)
 
-    assert resultado["por_aplicacao_ou_tipo"]["produtos"] == ["FLEXX EL 100"]
+    niveis = resultado["niveis"]
+    assert resultado["nivel_atendido"] == "identidade_declarada"
+    assert niveis["identidade_declarada"]["produtos"] == ["FLEXX EL 100"]
+    assert niveis["composicao_comprovada"]["produtos"] == ["FLEXX TH T160DE1"]
 
 
 def test_tecnologia_rigidos_exclui_catalisador_semirrigido_e_inativo():
+    """"Rígidos" é uma TECNOLOGIA do catálogo, não uma busca de texto.
+
+    MIGRADO em 21/09/2026 de `listar_produtos_por_aplicacao(exigir_natureza=True)`
+    para `listar_produtos_por_classificacao_catalogo`, quando o parâmetro foi
+    aposentado. O ramo aposentado reimplementava, só para RG, a leitura da
+    árvore do catálogo que esta função já faz para QUALQUER linha — e o que ele
+    respondia era classificação estrutural, não natureza do material.
+
+    Cada ponto do acervo aqui é uma forma de se enganar: o catalisador que cita
+    "rígido" na aplicação, a blenda retardante para espumas rígidas, o poliol
+    semi-rígido, o registro INATIVO, o boletim guardado em Obsoletos, a venda
+    descontinuada, a pasta de combinação "COM ISO" e o poliol rígido de outra
+    linha. Nenhum deles pertence à tecnologia RG.
+    """
     fake_client = MagicMock()
     fake_client.scroll.return_value = (
         [
             _ponto_com_conteudo(
-                r"...\FLEXX CAT 136\Boletim FLEXX CAT 136.pdf",
+                r"...\Documentação de Produto\FLEXX® CAT\FLEXX CAT 136\Boletim FLEXX CAT 136.pdf",
                 "Catalisador para aplicação em tecnologias de espuma para o ramo de rígido telha.",
             ),
             _ponto_com_conteudo(
-                r"...\FLEXX AC 301\Boletim FLEXX AC 301.pdf",
+                r"...\Documentação de Produto\FLEXX® AC\FLEXX AC 301\Boletim FLEXX AC 301.pdf",
                 "FLEXX AC 301 é uma blenda retardante indicada para espumas rígidas.",
             ),
             _ponto_com_conteudo(
-                r"...\FLEXX PI 2078\Boletim FLEXX PI 2078.pdf",
+                r"...\Documentação de Produto\FLEXX® PI\FLEXX PI 2078\Boletim FLEXX PI 2078.pdf",
                 "FLEXX PI 2078 é um poliol que produz artigos semi-rígidos moldados.",
             ),
             _ponto_com_conteudo(
-                r"...\FLEXX® RG\FLEXX® RGE\FLEXX RGE 2800 INATIVO\Boletim FLEXX RGE 2800.pdf",
+                r"...\Documentação de Produto\FLEXX® RG\FLEXX® RGE\FLEXX RGE 2800 INATIVO\Boletim FLEXX RGE 2800.pdf",
                 "FLEXX RGE 2800 é um poliol que produz espuma de poliuretano rígido.",
             ),
             _ponto_com_conteudo(
-                r"...\FLEXX® RG\FLEXX® RGE\FLEXX RGE 2859\Boletim FLEXX RGE 2859.pdf",
+                r"...\Documentação de Produto\FLEXX® RG\FLEXX® RGE\FLEXX RGE 2859\Boletim FLEXX RGE 2859.pdf",
                 "FLEXX RGE 2859 é um poliol aditivado que, combinado com ISO, "
                 "produz espuma de poliuretano rígido estrutural.",
             ),
             _ponto_com_conteudo(
-                r"...\FLEXX® RG\FLEXX® RGT\FLEXX RGT 2483\Obsoletos\Boletim FLEXX RGT 2483.pdf",
+                r"...\Documentação de Produto\FLEXX® RG\FLEXX® RGT\FLEXX RGT 2483\Obsoletos\Boletim FLEXX RGT 2483.pdf",
                 "FLEXX RGT 2483 foi desenvolvido para espumas rígidas.",
             ),
             _ponto_com_conteudo(
-                r"...\FLEXX® RG\FLEXX® RGS\FLEXX RGS 2911 descontinuada a venda\Boletim FLEXX RGS 2911.pdf",
+                r"...\Documentação de Produto\FLEXX® RG\FLEXX® RGS\FLEXX RGS 2911 descontinuada a venda\Boletim FLEXX RGS 2911.pdf",
                 "FLEXX RGS 2911 foi desenvolvido para espumas rígidas.",
             ),
             _ponto_com_conteudo(
-                r"...\FLEXX® RG\FLEXX® RGE\COM ISO 4416\Boletim combinação.pdf",
+                r"...\Documentação de Produto\FLEXX® RG\FLEXX® RGE\COM ISO 4416\Boletim combinação.pdf",
                 "Combinação destinada a espuma rígida.",
             ),
             _ponto_com_conteudo(
-                r"...\FLEXX POL 3670\Boletim FLEXX POL 3670.pdf",
+                r"...\Documentação de Produto\FLEXX® POL\FLEXX POL 3670\Boletim FLEXX POL 3670.pdf",
                 "O FLEXX POL 3670 é um poliol poliéter rígido base sorbitol.",
             ),
         ],
@@ -460,28 +483,31 @@ def test_tecnologia_rigidos_exclui_catalisador_semirrigido_e_inativo():
     )
 
     with patch("app.rag.catalog_stats.get_qdrant_client", return_value=fake_client):
-        resultado = listar_produtos_por_aplicacao(
-            "rígido", listar_todos=True, exigir_natureza=True
+        resultado = listar_produtos_por_classificacao_catalogo(
+            "rígidos", listar_todos=True
         )
 
-    assert resultado["por_aplicacao_ou_tipo"]["produtos"] == ["FLEXX RGE 2859"]
+    assert resultado["produtos"] == ["FLEXX RGE 2859"]
 
 
 def test_tecnologia_rigidos_nao_confunde_produto_relacionado_com_classificacao():
-    """Produzir espuma rígida não muda a tecnologia catalogada do produto."""
+    """Produzir espuma rígida não muda a tecnologia catalogada do produto.
+
+    MIGRADO junto com o teste acima, pelo mesmo motivo.
+    """
     fake_client = MagicMock()
     fake_client.scroll.return_value = (
         [
             _ponto_com_conteudo(
-                r"...\FLEXX® SB\FLEXX SB 2460\Boletim FLEXX SB 2460.pdf",
+                r"...\Documentação de Produto\FLEXX® SB\FLEXX SB 2460\Boletim FLEXX SB 2460.pdf",
                 "FLEXX SB 2460, combinado com ISO, produz espuma rígida para prancha.",
             ),
             _ponto_com_conteudo(
-                r"...\FLEXX® POL\FLEXX POL 3670\Boletim FLEXX POL 3670.pdf",
+                r"...\Documentação de Produto\FLEXX® POL\FLEXX POL 3670\Boletim FLEXX POL 3670.pdf",
                 "FLEXX POL 3670 é um poliol poliéter rígido destinado a espumas rígidas.",
             ),
             _ponto_com_conteudo(
-                r"...\FLEXX® RG\FLEXX® RGE\FLEXX RGE 2859\Boletim FLEXX RGE 2859.pdf",
+                r"...\Documentação de Produto\FLEXX® RG\FLEXX® RGE\FLEXX RGE 2859\Boletim FLEXX RGE 2859.pdf",
                 "FLEXX RGE 2859, combinado com ISO, produz espuma rígida estrutural.",
             ),
         ],
@@ -489,11 +515,11 @@ def test_tecnologia_rigidos_nao_confunde_produto_relacionado_com_classificacao()
     )
 
     with patch("app.rag.catalog_stats.get_qdrant_client", return_value=fake_client):
-        resultado = listar_produtos_por_aplicacao(
-            "rígido", listar_todos=True, exigir_natureza=True
+        resultado = listar_produtos_por_classificacao_catalogo(
+            "rígidos", listar_todos=True
         )
 
-    assert resultado["por_aplicacao_ou_tipo"]["produtos"] == ["FLEXX RGE 2859"]
+    assert resultado["produtos"] == ["FLEXX RGE 2859"]
 
 
 def test_classificacao_catalogo_funciona_para_qualquer_linha_e_sublinha():

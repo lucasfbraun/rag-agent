@@ -1301,6 +1301,29 @@ def buscar_produtos_por_aplicacao_e_especificacoes(
                 content = payload.get("content") or ""
                 chave = (produto, filename)
                 termos_encontrados = set()
+                # DÉBITO CONHECIDO, MANTIDO DE PROPÓSITO (revisão de 21/09/2026).
+                #
+                # Este ramo é o último lugar do motor onde "elastômero" tem
+                # tratamento próprio. Ele é da mesma família do que foi
+                # generalizado em `catalog_stats` — mas NÃO é o mesmo caso, e
+                # trocar mecanicamente pela versão genérica
+                # (`_conteudo_comprova_composicao_do_termo`) quebraria a função:
+                #
+                #   - aplicar a prova de composição a TODO termo exigiria que o
+                #     boletim dissesse "produz colchão" para achar um produto
+                #     para colchão, e a maioria das aplicações some;
+                #   - remover o ramo e deixar só `_termo_bate_no_conteudo` traz
+                #     de volta o "Aditivo para elastômeros" como se atendesse a
+                #     um pedido de elastômero — a regressão que este ramo existe
+                #     para impedir (ver test_spec_search.py).
+                #
+                # O que falta para generalizar é um conceito que o código ainda
+                # não tem AQUI: saber se o termo pedido é uma NATUREZA ou uma
+                # FINALIDADE. Essa distinção já existe na entrada do motor
+                # (`_extrair_pedido_natureza_do_produto` contra
+                # `_extrair_aplicacao_explicita`), mas não chega até esta
+                # varredura, que recebe apenas uma lista de termos de aplicação.
+                # Enquanto não chegar, este ramo fica — sinalizado, não escondido.
                 for termo in termos:
                     if "elastomero" in _normalizar_sem_acentos(termo):
                         if _conteudo_comprova_tipo_elastomero(filepath, content):
