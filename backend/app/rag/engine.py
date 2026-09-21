@@ -35,7 +35,16 @@ from app.rag.spec_search import (
     interpretar_consulta_especificacoes,
     resumir_especificacoes_dos_documentos,
 )
-from app.config import QDRANT_HOST, QDRANT_PORT, COLLECTION_NAME, EMBEDDING_MODEL, DEFAULT_CHAT_MODEL
+from app.config import (
+    QDRANT_HOST,
+    QDRANT_PORT,
+    COLLECTION_NAME,
+    EMBEDDING_MODEL,
+    DEFAULT_CHAT_MODEL,
+    BUSCA_TEXTUAL_TETO_IDS_POR_TERMO,
+    BUSCA_TEXTUAL_PAGINA_SCROLL,
+    BUSCA_TEXTUAL_ORCAMENTO_PAYLOADS,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -1446,10 +1455,23 @@ def retrieve_products_context(
 
     if termos_de_busca:
         try:
-            candidatos_por_chave = {}
-            # Um scroll OR global limitado a 50 não é ranking: termos
-            # genéricos ocupavam o lote e "correia" nunca chegava aos
-            # candidatos. Cada termo/flexão recebe seu próprio lote curto.
+            # VARREDURA COMPLETA POR TERMO, PAYLOAD SÓ DOS ESCOLHIDOS.
+            #
+            # A versão anterior fazia `scroll(..., with_payload=True,
+            # limit=50)` por flexão. `scroll` é PAGINAÇÃO: percorre a coleção
+            # em ordem de ID e não ordena por relevância. Num acervo em que
+            # trezentos trechos contêm "cortiça", voltavam cinquenta
+            # ARBITRÁRIOS — o trecho certo podia nunca entrar nos candidatos,
+            # sem exceção, sem log e com a resposta final parecendo normal.
+            #
+            # Agora a varredura de cada termo vai até o fim (ou até o teto),
+            # trazendo só IDs, que são baratos. O corte acontece DEPOIS, sobre
+            # candidatos ordenados por quantos termos distintos cada trecho
+            # cobre — e só aí o payload (o texto de ~700 palavras) é buscado,
+            # apenas para os que sobreviveram.
+            termos_por_ponto: Dict[Any, set] = {}
+            varredura_incompleta: List[str] = []
+
             for palavra in termos_de_busca:
                 for variante in _variantes_palavra_chave(palavra):
                     filtro_palavra = qmodels.Filter(
@@ -1458,29 +1480,40 @@ def retrieve_products_context(
                         )],
                         must_not=sensibilidade_must_not,
                     )
-                    pontos, _ = client.scroll(
-                        collection_name=COLLECTION_NAME,
-                        scroll_filter=filtro_palavra,
-                        with_payload=True,
-                        with_vectors=False,
-                        limit=50,
-                    )
-                    for ponto in pontos:
-                        payload = ponto.payload
-                        chave = (payload.get("filename"), payload.get("chunk_index"))
-                        candidatos_por_chave[chave] = payload
-            candidatos = list(candidatos_por_chave.values())
+                    vistos_do_termo = 0
+                    offset_termo = None
+                    while vistos_do_termo < BUSCA_TEXTUAL_TETO_IDS_POR_TERMO:
+                        pagina = min(
+                            BUSCA_TEXTUAL_PAGINA_SCROLL,
+                            BUSCA_TEXTUAL_TETO_IDS_POR_TERMO - vistos_do_termo,
+                        )
+                        pontos, offset_termo = client.scroll(
+                            collection_name=COLLECTION_NAME,
+                            scroll_filter=filtro_palavra,
+                            with_payload=False,
+                            with_vectors=False,
+                            limit=pagina,
+                            offset=offset_termo,
+                        )
+                        for ponto in pontos:
+                            termos_por_ponto.setdefault(ponto.id, set()).add(palavra)
+                        vistos_do_termo += len(pontos)
+                        if offset_termo is None:
+                            break
+                    else:
+                        # Só chega aqui quem estourou o teto sem esgotar o
+                        # termo. A varredura ficou incompleta e isso PRECISA
+                        # aparecer: o defeito sendo corrigido aqui é, na
+                        # essência, uma falha silenciosa.
+                        varredura_incompleta.append(variante)
 
-            def _pontuacao(payload: Dict[str, Any]) -> int:
-                texto = (payload.get("content") or "").lower()
-                return sum(
-                    1
-                    for palavra in termos_de_busca
-                    if (
-                        bool(re.search(r"\b(?:poliuretanos?|pu)\b", texto))
-                        if palavra == "poliuretano"
-                        else palavra in texto
-                    )
+            if varredura_incompleta:
+                logger.warning(
+                    "Busca textual truncada em %s termo(s) (%s) — teto de %d IDs por termo. "
+                    "Termo genérico demais para discriminar; resultado pode estar incompleto.",
+                    len(varredura_incompleta),
+                    ", ".join(sorted(set(varredura_incompleta))[:5]),
+                    BUSCA_TEXTUAL_TETO_IDS_POR_TERMO,
                 )
 
             # Exige pelo menos 2 termos batendo (ou o único, se só houver 1) —
@@ -1490,11 +1523,31 @@ def retrieve_products_context(
             # neles que a pergunta leiga tem chance de bater, já que as
             # palavras originais ("cola", "colchão") não estão no texto dos
             # boletins ("adesivo", "espuma flexível").
+            #
+            # A pontuação agora vem da COBERTURA DE TERMOS medida pelo índice
+            # do Qdrant, não de `palavra in content.lower()` sobre uma amostra
+            # arbitrária. É o mesmo sinal, medido sobre o conjunto inteiro e
+            # sem depender de acentuação ou de recontagem local.
             minimo = 2 if len(termos_de_busca) > 1 else 1
-            candidatos_pontuados = [(c, _pontuacao(c)) for c in candidatos]
-            candidatos_pontuados = [(c, p) for c, p in candidatos_pontuados if p >= minimo]
-            candidatos_pontuados.sort(key=lambda item: item[1], reverse=True)
-            keyword_hits = [c for c, _ in candidatos_pontuados][:top_k]
+            ids_ordenados = sorted(
+                (pid for pid, ts in termos_por_ponto.items() if len(ts) >= minimo),
+                key=lambda pid: len(termos_por_ponto[pid]),
+                reverse=True,
+            )[:BUSCA_TEXTUAL_ORCAMENTO_PAYLOADS]
+
+            if ids_ordenados:
+                registros = client.retrieve(
+                    collection_name=COLLECTION_NAME,
+                    ids=ids_ordenados,
+                    with_payload=True,
+                    with_vectors=False,
+                )
+                # `retrieve` não garante a ordem dos ids pedidos; reordena pela
+                # cobertura de termos, que é o critério de relevância aqui.
+                por_id = {r.id: r.payload for r in registros if r.payload}
+                keyword_hits = [
+                    por_id[pid] for pid in ids_ordenados if pid in por_id
+                ][:top_k]
         except Exception as e:
             logger.warning(
                 "Falha na busca por palavras-chave (%s) — seguindo só com busca semântica.", e

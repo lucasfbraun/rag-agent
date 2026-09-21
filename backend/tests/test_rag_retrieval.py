@@ -167,11 +167,65 @@ def test_detectar_codigos_produto_nao_ignora_familia_real_parecida_com_stopword(
     assert _detectar_codigos_produto("boletim RG 2464") == ["rg 2464"]
 
 
+# A busca por palavra-chave deixou de trazer o payload no `scroll` (que é
+# paginação por ordem de ID, não busca) e passa a varrer só os IDs, buscando o
+# texto com `client.retrieve` apenas dos candidatos escolhidos. Os testes
+# precisam do mesmo seam: sem isto, `retrieve` devolveria um MagicMock e nenhum
+# trecho chegaria ao contexto.
+
 def _hit(filename, chunk_index, content="texto"):
     payload = {"filename": filename, "chunk_index": chunk_index, "content": content}
     ponto = MagicMock()
     ponto.payload = payload
     return ponto
+
+
+def _scroll_fiel(pontos):
+    """Devolve, para cada termo pesquisado, os pontos cujo CONTEÚDO realmente o
+    contém — que é o que o índice de texto do Qdrant faz.
+
+    O mock anterior roteava por termo à mão e devolvia ruído para termos que não
+    apareciam no texto daqueles pontos. Isso passava despercebido enquanto o
+    motor reconferia os termos no conteúdo depois do `scroll`; hoje ele confia
+    no índice, que é o sinal mais preciso (casa token inteiro, não substring).
+    Um mock infiel testaria o motor contra um Qdrant que não existe.
+    """
+    def _scroll(**kwargs):
+        filtro = kwargs.get("scroll_filter")
+        termos = [
+            cond.match.text
+            for cond in (getattr(filtro, "must", None) or [])
+            if hasattr(getattr(cond, "match", None), "text")
+        ]
+        if not termos:
+            return ([], None)
+        casam = [
+            p for p in pontos
+            if any(t.lower() in (p.payload.get("content") or "").lower() for t in termos)
+        ]
+        # PAGINA DE VERDADE. Um mock que devolve tudo de uma vez, ignorando
+        # `limit`, torna o teste cego ao defeito que ele existe para pegar:
+        # o corte arbitrário só aparece quando o resultado não cabe na página.
+        inicio = int(kwargs.get("offset") or 0)
+        limite = int(kwargs.get("limit") or len(casam) or 1)
+        fatia = casam[inicio:inicio + limite]
+        proximo = inicio + limite if inicio + limite < len(casam) else None
+        return (fatia, proximo)
+    return _scroll
+
+
+def _ligar_retrieve(fake_client, pontos):
+    """Dá id a cada ponto e faz `retrieve(ids=...)` devolver os certos."""
+    por_id = {}
+    for indice, ponto in enumerate(pontos):
+        ponto.id = f"ponto-{indice}"
+        por_id[ponto.id] = ponto
+    fake_client.retrieve.side_effect = lambda **kw: [
+        por_id[pid] for pid in kw["ids"] if pid in por_id
+    ]
+    return fake_client
+
+
 
 
 def test_codigo_de_produto_detectado_prioriza_match_exato_sobre_semantico():
@@ -180,7 +234,9 @@ def test_codigo_de_produto_detectado_prioriza_match_exato_sobre_semantico():
     fake_client = MagicMock()
     fake_client.get_collections.return_value = _fake_collections([COLLECTION_NAME])
     # busca exata (scroll) acha o produto certo
-    fake_client.scroll.return_value = ([_hit("Boletim FLEXX AG 2032.pdf", 0)], None)
+    ponto_codigo = _hit("Boletim FLEXX AG 2032.pdf", 0)
+    fake_client.scroll.return_value = ([ponto_codigo], None)
+    _ligar_retrieve(fake_client, [ponto_codigo])
     # busca semântica erra feio (embedding local confundindo códigos)
     hit_errado = MagicMock()
     hit_errado.payload = {"filename": "Pró Bloq Cimento Elástico.pdf", "chunk_index": 0, "content": "outro produto"}
@@ -355,7 +411,8 @@ def test_palavra_chave_com_duas_ou_mais_batendo_prioriza_sobre_semantico():
         "filename": "Boletim qualquer.pdf", "chunk_index": 0,
         "content": "menciona rolha uma vez só, nada mais bate",
     }
-    fake_client.scroll.return_value = ([hit_certo, hit_fraco], None)
+    fake_client.scroll.side_effect = _scroll_fiel([hit_certo, hit_fraco])
+    _ligar_retrieve(fake_client, [hit_certo, hit_fraco])
     hit_errado = MagicMock()
     hit_errado.payload = {"filename": "FISPQ CLEAR 165.pdf", "chunk_index": 0, "content": "produto sem relacao"}
     fake_client.search.return_value = [hit_errado]
@@ -368,46 +425,74 @@ def test_palavra_chave_com_duas_ou_mais_batendo_prioriza_sobre_semantico():
     assert not any(r["filename"] == "Boletim qualquer.pdf" for r in result)
 
 
-def test_termo_discriminante_nao_some_por_limite_global_de_50_candidatos():
-    """Regressão real: a consulta com pneus/peças/correias fazia um único
-    scroll OR limitado a 50. A ordem não é relevância e nenhum TH correto
-    entrou no lote, apesar de o boletim conter todos os termos pedidos."""
+def test_trecho_certo_alem_dos_50_primeiros_ids_ainda_chega_ao_contexto():
+    """REGRESSÃO REAL: `client.scroll` é PAGINAÇÃO, percorre a coleção em ordem
+    de ID e não ordena por relevância. Com `limit=50` fixo por termo, um acervo
+    em que centenas de trechos contêm a palavra devolvia cinquenta ARBITRÁRIOS,
+    e o trecho certo podia nunca entrar nos candidatos — sem exceção, sem log, e
+    com a resposta final parecendo normal.
+
+    Aqui o trecho certo é o ÚLTIMO da ordem de ID, atrás de 80 trechos que
+    também contêm os termos. Ele só chega ao contexto porque a varredura agora
+    vai até o fim do termo e o corte acontece depois, por cobertura de termos.
+    """
     from app.config import COLLECTION_NAME
 
     fake_client = MagicMock()
     fake_client.get_collections.return_value = _fake_collections([COLLECTION_NAME])
+
+    # 80 trechos que batem em QUASE todos os termos — enchem os primeiros IDs
+    # de cada um deles. Só não têm "correia".
+    ruido = [
+        _hit(f"FISPQ {i}.pdf", 0, "elastômero pneu industrial peça mecânica")
+        for i in range(80)
+    ]
+    # O certo cobre TODOS os termos, inclusive "correia", e está no fim da ordem
+    # de ID — atrás dos 80. Com um corte de 50 por termo ele fica de fora de
+    # cinco das seis varreduras, e a sexta ("correia") sozinha não alcança o
+    # mínimo de dois termos: some do contexto sem deixar rastro.
     hit_certo = _hit(
         "BOLETIM TÉCNICO FLEXX TH T160DE1.pdf",
         0,
         "produz elastômero de poliuretano para pneus industriais sólidos, "
         "peças mecânicas e correias transportadoras",
     )
-    ruido = [_hit(f"FISPQ {i}.pdf", 0, "produto usado corretamente") for i in range(50)]
+    todos = [*ruido, hit_certo]
 
-    def scroll_por_termo(**kwargs):
-        filtro = kwargs["scroll_filter"]
-        termos_must = [cond.match.text for cond in (filtro.must or []) if hasattr(cond.match, "text")]
-        if "correia" in termos_must:
-            return ([hit_certo], None)
-        return (ruido, None)
+    fake_client.scroll.side_effect = _scroll_fiel(todos)
+    _ligar_retrieve(fake_client, todos)
 
-    fake_client.scroll.side_effect = scroll_por_termo
-    hit_semantico = MagicMock()
-    hit_semantico.payload = {
-        "filename": "Boletim FLEXX ADT 431.pdf",
-        "chunk_index": 0,
-        "content": "aditivo para elastômeros",
-    }
+    hit_semantico = _hit("Boletim FLEXX ADT 431.pdf", 0, "aditivo para elastômeros")
     fake_client.search.return_value = [hit_semantico]
 
-    with patch("app.rag.engine._get_qdrant_client", return_value=fake_client), \
-         patch("app.rag.engine.get_embedding", return_value=[0.1, 0.2]):
+    with patch("app.rag.engine._get_qdrant_client", return_value=fake_client),          patch("app.rag.engine.get_embedding", return_value=[0.1, 0.2]):
         result = retrieve_products_context(
             "elastômero para pneu industrial, peça mecânica e correia",
             top_k=6,
         )
 
     assert result[0]["filename"] == "BOLETIM TÉCNICO FLEXX TH T160DE1.pdf"
+
+
+def test_varredura_truncada_pelo_teto_sai_em_log(caplog):
+    """O defeito corrigido aqui era uma falha SILENCIOSA. Se o teto cortar a
+    varredura de um termo, isso não pode sumir do mesmo jeito."""
+    import logging
+    from app.config import COLLECTION_NAME
+
+    fake_client = MagicMock()
+    fake_client.get_collections.return_value = _fake_collections([COLLECTION_NAME])
+    # Nunca esgota: sempre devolve página cheia e um offset não-nulo.
+    pontos = [_hit(f"Ruido {i}.pdf", 0, "cortiça e rolha") for i in range(4)]
+    fake_client.scroll.side_effect = lambda **kw: (pontos, "proxima-pagina")
+    _ligar_retrieve(fake_client, pontos)
+    fake_client.search.return_value = []
+
+    with patch("app.rag.engine._get_qdrant_client", return_value=fake_client),          patch("app.rag.engine.get_embedding", return_value=[0.1, 0.2]),          patch("app.rag.engine.BUSCA_TEXTUAL_TETO_IDS_POR_TERMO", 8),          patch("app.rag.engine.BUSCA_TEXTUAL_PAGINA_SCROLL", 4),          caplog.at_level(logging.WARNING, logger="app.rag.engine"):
+        retrieve_products_context("cola para rolha de cortiça", top_k=6)
+
+    assert any("truncada" in r.message.lower() or "truncada" in r.getMessage().lower()
+               for r in caplog.records), "truncagem da varredura não foi registrada"
 
 
 def test_falha_na_busca_por_palavra_chave_nao_derruba_a_busca_semantica():

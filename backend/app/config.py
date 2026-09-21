@@ -104,6 +104,50 @@ EXPANSAO_MAX_TERMOS = int(os.getenv("EXPANSAO_MAX_TERMOS", "6"))
 # espera, porque a busca sem ela é exatamente o comportamento anterior.
 EXPANSAO_TIMEOUT_SEGUNDOS = float(os.getenv("EXPANSAO_TIMEOUT_SEGUNDOS", "8"))
 
+# ---------------------------------------------------------------------------
+# Busca por palavra-chave no acervo (ver app/rag/engine.retrieve_products_context)
+# ---------------------------------------------------------------------------
+# CONTEXTO DO PROBLEMA QUE ESTES TETOS RESOLVEM: `client.scroll` do Qdrant é
+# PAGINAÇÃO, não busca — percorre a coleção em ordem de ID e não ordena por
+# relevância. Com um `limit=50` fixo por termo, um acervo em que trezentos
+# trechos contêm "cortiça" devolvia cinquenta ARBITRÁRIOS, e o trecho certo
+# podia nunca entrar nos candidatos. Sem exceção, sem log, resposta final com
+# cara de normal. A correção varre o termo inteiro trazendo só os IDs (baratos)
+# e busca o payload (caro) apenas dos escolhidos.
+#
+# A Query API do Qdrant, que faria busca híbrida nativa com reordenação do
+# servidor, só existe a partir da 1.10. A imagem fixada em docker-compose.yml é
+# a v1.9.2 e requirements.txt prende o cliente em >=1.9.0,<1.10.0 — então
+# reordenação aqui é local, por construção, até uma atualização planejada de
+# servidor E cliente.
+
+# Quantos IDs no MÁXIMO são varridos por flexão de termo. O acervo real tem
+# ~11.000 pontos, então este teto cobre a varredura COMPLETA de qualquer termo
+# que discrimine alguma coisa; quem estoura é o termo que aparece em mais de um
+# terço do acervo — justamente o que menos ajuda a separar produto. Quando o
+# teto corta, a varredura vira incompleta e isso SAI EM LOG (warning), porque o
+# defeito que estamos corrigindo é, na essência, uma falha silenciosa.
+# 4096 é ponto de partida para experimento, não valor validado — meça a
+# distribuição real de hits por termo antes de mexer.
+BUSCA_TEXTUAL_TETO_IDS_POR_TERMO = int(os.getenv("BUSCA_TEXTUAL_TETO_IDS_POR_TERMO", "4096"))
+
+# Tamanho de cada página do `scroll`. É o que limita o PIOR CASO em número de
+# idas ao Qdrant: são no máximo ceil(TETO / PÁGINA) chamadas por flexão. Com os
+# padrões (4096 / 2048) são no máximo 2, contra 1 da versão que trazia 50
+# payloads arbitrários — e a página só traz IDs, não o texto dos trechos.
+# 2048 é ponto de partida para experimento, não valor validado.
+BUSCA_TEXTUAL_PAGINA_SCROLL = int(os.getenv("BUSCA_TEXTUAL_PAGINA_SCROLL", "2048"))
+
+# Quantos payloads (o dado caro: cada trecho tem ~700 palavras) são realmente
+# buscados no Qdrant depois da varredura. A varredura é completa; ESTE é o
+# único corte, e ele é aplicado sobre candidatos já ORDENADOS por quantos
+# termos distintos da pergunta cada trecho cobre — não sobre ordem de ID.
+# Precisa ficar bem acima de `top_k` (6, ou 10 com consulta traduzida) para
+# sobrar margem à pontuação local, e bem abaixo do acervo para o custo de rede
+# não depender do tamanho da coleção.
+# 60 é ponto de partida para experimento, não valor validado.
+BUSCA_TEXTUAL_ORCAMENTO_PAYLOADS = int(os.getenv("BUSCA_TEXTUAL_ORCAMENTO_PAYLOADS", "60"))
+
 # Banco relacional (Fase 5 — RBAC & Governança). Usuários/perfis, separado do Qdrant (vetorial).
 POSTGRES_HOST = os.getenv("POSTGRES_HOST", "localhost")
 POSTGRES_PORT = int(os.getenv("POSTGRES_PORT", 5432))

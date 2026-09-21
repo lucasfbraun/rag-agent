@@ -46,6 +46,22 @@ def _hit(filename, chunk_index=0, content="texto do boletim"):
     return ponto
 
 
+def _ligar_retrieve(fake_client, pontos):
+    """A busca por palavra-chave passou a varrer só IDs no `scroll` e buscar o
+    payload com `client.retrieve` apenas dos candidatos escolhidos — porque
+    `scroll` é paginação por ordem de ID, não busca por relevância. Sem espelhar
+    esse seam, `retrieve` devolveria um MagicMock e nenhum trecho de
+    palavra-chave chegaria ao contexto."""
+    por_id = {}
+    for indice, ponto in enumerate(pontos):
+        ponto.id = f"ponto-{indice}"
+        por_id[ponto.id] = ponto
+    fake_client.retrieve.side_effect = lambda **kw: [
+        por_id[pid] for pid in kw["ids"] if pid in por_id
+    ]
+    return fake_client
+
+
 @pytest.fixture
 def cliente_qdrant():
     fake = MagicMock()
@@ -196,6 +212,7 @@ def test_hit_so_de_termo_traduzido_nao_expulsa_o_resultado_da_pergunta(cliente_q
         for i in range(8)
     ]
     cliente_qdrant.scroll.return_value = (ruido, None)
+    _ligar_retrieve(cliente_qdrant, ruido)
     cliente_qdrant.search.return_value = [
         _hit("Boletim FLEXX AG 2066.pdf", 0, "produção de rolhas de cortiça aglomerada")
     ]
@@ -216,10 +233,9 @@ def test_hit_de_palavra_do_usuario_continua_prioritario(cliente_qdrant):
     """A correção acima não pode rebaixar o caminho por palavra-chave que já
     existia: um trecho que casa com a palavra DO VENDEDOR continua na frente
     do semântico, com ou sem tradução ativa."""
-    cliente_qdrant.scroll.return_value = (
-        [_hit("Boletim FLEXX AG 2066.pdf", 0, "rolhas de cortiça aglomerada e adesivo")],
-        None,
-    )
+    ponto_certo = _hit("Boletim FLEXX AG 2066.pdf", 0, "rolhas de cortiça aglomerada e adesivo")
+    cliente_qdrant.scroll.return_value = ([ponto_certo], None)
+    _ligar_retrieve(cliente_qdrant, [ponto_certo])
     cliente_qdrant.search.return_value = [
         _hit(f"Semantico {i}.pdf", i, "outro assunto") for i in range(8)
     ]
