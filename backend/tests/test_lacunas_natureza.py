@@ -303,3 +303,187 @@ def test_catalogo_indisponivel_no_caminho_de_natureza_nao_inventa_resposta(
 
     assert "indisponível" in resposta
     mock_completion.assert_not_called()
+
+
+# --- 7. a evidencia citavel chegando a resposta (Bloco 1) -------------------
+#
+# O Bloco 1 da avaliacao de arquitetura: toda afirmacao tecnica vem com o
+# documento de origem e o trecho literal, porque o usuario-alvo e um vendedor
+# que NAO conhece os produtos e precisa conferir sozinho.
+#
+# As duas rotas devolviam `sources: []` fixo para a resposta de natureza. O
+# vendedor lia "o Boletim Tecnico do proprio produto declara que ele e isso" --
+# a afirmacao mais forte do motor -- sem NENHUM documento citado.
+
+TRECHO_REAL = "FLEXX EL 1000 é um elastômero de alta resiliência."
+
+
+def _payload_com_evidencia(nivel="identidade_declarada", **extra):
+    base = {n: {"total": 0, "produtos": [], "truncado": False} for n in NIVEIS}
+    base[nivel] = {
+        "total": 1,
+        "produtos": ["FLEXX EL 1000"],
+        "truncado": False,
+        "evidencias": {
+            "FLEXX EL 1000": {
+                "tipo_de_prova": "textual",
+                "documento": "Boletim FLEXX EL 1000.pdf",
+                "trecho": TRECHO_REAL,
+            }
+        },
+    }
+    base.update(extra)
+    return json.dumps({"nivel_atendido": nivel, "niveis": base})
+
+
+@patch("app.rag.engine.retrieve_products_context", return_value=[])
+@patch("app.rag.engine.execute_mcp_tool")
+@patch("app.rag.engine.litellm.completion")
+@patch("app.rag.engine.expandir_termos_do_dominio", return_value=[])
+def test_resposta_de_natureza_cita_documento_e_trecho_literal(
+    _mock_expandir, mock_completion, mock_execute, _mock_retrieve
+):
+    mock_execute.return_value = _payload_com_evidencia()
+
+    resultado = run_pu_matcher_agent(query="quais produtos são elastômeros?")
+
+    assert "Boletim FLEXX EL 1000.pdf" in resultado["answer"]
+    # LITERAL: o trecho sai na resposta como esta no documento, sem parafrase.
+    assert TRECHO_REAL in resultado["answer"]
+    mock_completion.assert_not_called()
+
+
+@patch("app.rag.engine.retrieve_products_context", return_value=[])
+@patch("app.rag.engine.execute_mcp_tool")
+@patch("app.rag.engine.litellm.completion")
+@patch("app.rag.engine.expandir_termos_do_dominio", return_value=[])
+def test_rota_sincrona_devolve_sources_de_verdade(
+    _mock_expandir, mock_completion, mock_execute, _mock_retrieve
+):
+    """Era `[]` fixo. Sem isto a interface nao tem o que oferecer para abrir."""
+    mock_execute.return_value = _payload_com_evidencia()
+
+    resultado = run_pu_matcher_agent(query="quais produtos são elastômeros?")
+
+    assert resultado["sources"] == ["Boletim FLEXX EL 1000.pdf"]
+    assert resultado["model_used"] == "catalogo-estruturado"
+
+
+@patch("app.rag.engine.retrieve_products_context", return_value=[])
+@patch("app.rag.engine.execute_mcp_tool")
+@patch("app.rag.engine.litellm.completion")
+@patch("app.rag.engine.expandir_termos_do_dominio", return_value=[])
+def test_rota_de_streaming_devolve_sources_de_verdade(
+    _mock_expandir, mock_completion, mock_execute, _mock_retrieve
+):
+    """O chat usa o streaming: `sources: []` la e o caso que o vendedor ve."""
+    mock_execute.return_value = _payload_com_evidencia()
+
+    eventos = [
+        json.loads(linha)
+        for linha in stream_pu_matcher_agent(query="quais produtos são elastômeros?")
+    ]
+    meta = next(e for e in eventos if e["type"] == "meta")
+    texto = "".join(e.get("content", "") for e in eventos if e["type"] == "delta")
+
+    assert meta["sources"] == ["Boletim FLEXX EL 1000.pdf"]
+    assert TRECHO_REAL in texto
+
+
+@patch("app.rag.engine.retrieve_products_context", return_value=[])
+@patch("app.rag.engine.execute_mcp_tool")
+@patch("app.rag.engine.litellm.completion")
+@patch("app.rag.engine.expandir_termos_do_dominio", return_value=[])
+def test_nivel_estrutural_cita_a_classificacao_e_nao_um_trecho_inventado(
+    _mock_expandir, mock_completion, mock_execute, _mock_retrieve
+):
+    """Ali a prova e o caminho na arvore do catalogo. Atribuir ao boletim uma
+    frase que ele nao tem seria pior que nao citar nada -- e este e o nivel
+    apresentado como a evidencia MAIS FORTE do sistema."""
+    niveis = {n: {"total": 0, "produtos": [], "truncado": False} for n in NIVEIS}
+    niveis["classificacao_estrutural"] = {
+        "total": 1,
+        "produtos": ["FLEXX EL 1000"],
+        "truncado": False,
+        "evidencias": {
+            "FLEXX EL 1000": {
+                "tipo_de_prova": "estrutural",
+                "classificacao": "Elastômeros",
+                "documento": "Boletim FLEXX EL 1000.pdf",
+            }
+        },
+    }
+    mock_execute.return_value = json.dumps(
+        {"nivel_atendido": "classificacao_estrutural", "niveis": niveis}
+    )
+
+    resultado = run_pu_matcher_agent(query="quais produtos são elastômeros?")
+
+    assert "Elastômeros" in resultado["answer"]
+    assert "prova estrutural" in resultado["answer"]
+    assert "Trecho do documento" not in resultado["answer"]
+    assert resultado["sources"] == ["Boletim FLEXX EL 1000.pdf"]
+
+
+@patch("app.rag.engine.retrieve_products_context", return_value=[])
+@patch("app.rag.engine.execute_mcp_tool")
+@patch("app.rag.engine.litellm.completion")
+@patch("app.rag.engine.expandir_termos_do_dominio", return_value=[])
+def test_lista_completa_cita_documento_e_avisa_que_o_trecho_fica_sob_demanda(
+    _mock_expandir, mock_completion, mock_execute, _mock_retrieve
+):
+    """Centenas de trechos literais numa resposta so nao sao conferiveis. A
+    lista completa cita o documento e diz como pedir o trecho."""
+    niveis = {n: {"total": 0, "produtos": [], "truncado": False} for n in NIVEIS}
+    niveis["identidade_declarada"] = {
+        "total": 2,
+        "produtos": ["FLEXX EL 1000", "FLEXX EL 1001"],
+        "truncado": False,
+        "evidencias": {
+            "FLEXX EL 1000": {
+                "tipo_de_prova": "textual",
+                "documento": "Boletim FLEXX EL 1000.pdf",
+            },
+            "FLEXX EL 1001": {
+                "tipo_de_prova": "textual",
+                "documento": "Boletim FLEXX EL 1001.pdf",
+            },
+        },
+    }
+    mock_execute.return_value = json.dumps(
+        {"nivel_atendido": "identidade_declarada", "niveis": niveis}
+    )
+
+    resultado = run_pu_matcher_agent(
+        query="liste todos os produtos que são elastômeros"
+    )
+
+    assert "Boletim FLEXX EL 1000.pdf" in resultado["answer"]
+    assert "Boletim FLEXX EL 1001.pdf" in resultado["answer"]
+    assert "trecho literal" in resultado["answer"]
+    assert resultado["sources"] == [
+        "Boletim FLEXX EL 1000.pdf",
+        "Boletim FLEXX EL 1001.pdf",
+    ]
+
+
+@patch("app.rag.engine.retrieve_products_context", return_value=[])
+@patch("app.rag.engine.execute_mcp_tool")
+@patch("app.rag.engine.litellm.completion")
+@patch("app.rag.engine.expandir_termos_do_dominio", return_value=[])
+def test_payload_sem_evidencia_ainda_responde(
+    _mock_expandir, mock_completion, mock_execute, _mock_retrieve
+):
+    """A ferramenta MCP tambem e chamada pelo LLM e o payload pode vir de uma
+    versao anterior. Falta de evidencia degrada a citacao, nao a resposta."""
+    mock_execute.return_value = _payload(
+        "identidade_declarada",
+        identidade_declarada={
+            "total": 1, "produtos": ["FLEXX EL 1000"], "truncado": False,
+        },
+    )
+
+    resultado = run_pu_matcher_agent(query="quais produtos são elastômeros?")
+
+    assert "FLEXX EL 1000" in resultado["answer"]
+    assert resultado["sources"] == []

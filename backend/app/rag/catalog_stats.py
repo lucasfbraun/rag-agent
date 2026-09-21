@@ -255,6 +255,43 @@ def _variantes_do_termo(termo: str) -> List[str]:
     return list(dict.fromkeys(variantes))
 
 
+def _padrao_identidade_declarada(termo: str, filepath: str) -> Optional[str]:
+    """Regex única da regra de identidade — predicado e trecho usam esta.
+
+    Existe separada porque o predicado casa sobre o texto normalizado
+    enquanto o recorte literal refaz a busca sobre o texto original com
+    espaços colapsados: são duas buscas, mas UMA regra. Duas regras fariam a
+    resposta citar uma frase diferente da que aceitou o produto.
+    """
+    nome_arquivo = _SEPARADOR_CAMINHO.split(filepath)[-1]
+    if "boletim" not in _normalizar_sem_acentos(nome_arquivo):
+        return None
+    padrao_produto = _padrao_nome_do_produto(_produto_do_filepath(filepath))
+    variantes = _variantes_do_termo(termo)
+    if not padrao_produto or not variantes:
+        return None
+    alternativas = "|".join(re.escape(v) for v in variantes)
+    # "poliuretano/produto/material <adjetivo>" é a forma como um boletim
+    # costuma declarar natureza, e vale tanto para elastomérico quanto para
+    # qualquer outro adjetivo derivado do termo.
+    return (
+        padrao_produto
+        + r"\s*(?:,|-)?\s*(?:e|trata-se\s+de|consiste\s+em)\s+"
+        + r"(?:um\s+|uma\s+)?"
+        + rf"(?:(?:poliuretano|produto|material|sistema)\s+)?(?:{alternativas})\b"
+    )
+
+
+def _match_identidade_declarada(
+    termo: str, filepath: str, content: str
+) -> Optional[re.Match]:
+    """A regra de identidade, devolvendo ONDE ela casou."""
+    padrao = _padrao_identidade_declarada(termo, filepath)
+    if not padrao:
+        return None
+    return re.search(padrao, _normalizar_sem_acentos(content))
+
+
 def _conteudo_declara_produto_como(
     termo: str, filepath: str, content: str
 ) -> bool:
@@ -271,29 +308,7 @@ def _conteudo_declara_produto_como(
     produção de poliuretano elastomérico" não — aquilo é finalidade, e tem
     nível próprio na cascata (`_conteudo_comprova_composicao_do_termo`).
     """
-    nome_arquivo = _SEPARADOR_CAMINHO.split(filepath)[-1]
-    if "boletim" not in _normalizar_sem_acentos(nome_arquivo):
-        return False
-    padrao_produto = _padrao_nome_do_produto(_produto_do_filepath(filepath))
-    if not padrao_produto:
-        return False
-    variantes = _variantes_do_termo(termo)
-    if not variantes:
-        return False
-    alternativas = "|".join(re.escape(v) for v in variantes)
-    # "poliuretano/produto/material <adjetivo>" é a forma como um boletim
-    # costuma declarar natureza, e vale tanto para elastomérico quanto para
-    # qualquer outro adjetivo derivado do termo.
-    padrao_natureza = (
-        rf"(?:(?:poliuretano|produto|material|sistema)\s+)?(?:{alternativas})\b"
-    )
-    return bool(re.search(
-        padrao_produto
-        + r"\s*(?:,|-)?\s*(?:e|trata-se\s+de|consiste\s+em)\s+"
-        + r"(?:um\s+|uma\s+)?"
-        + padrao_natureza,
-        _normalizar_sem_acentos(content),
-    ))
+    return _match_identidade_declarada(termo, filepath, content) is not None
 
 
 def _conteudo_declara_produto_como_isocianato(filepath: str, content: str) -> bool:
@@ -372,6 +387,51 @@ def _conteudo_comprova_tipo_elastomero(filepath: str, content: str) -> bool:
     return any(re.search(padrao, texto) for padrao in evidencias_positivas)
 
 
+def _flexoes_da_palavra(palavra: str) -> set[str]:
+    """Flexões conservadoras, suficientes para singular/plural sem usar
+    prefixos abertos que confundem `correia` com `corretamente`.
+
+    Usa `_singular_e_plural` — a mesma regra da cascata de natureza. Antes
+    havia aqui uma segunda cópia que só sabia tirar e pôr um "s", com o
+    mesmo defeito: "catalisadores" não encontrava "catalisador", e uma
+    busca por menção do plural em -es voltava vazia.
+
+    Estava aninhada em `_termo_bate_no_conteudo`; subiu para o módulo quando
+    `_padrao_do_termo_no_conteudo` passou a precisar das MESMAS flexões para
+    localizar no texto o trecho que sustenta a menção. Duas regras de flexão
+    diferentes fariam a resposta citar uma frase que não é a que decidiu.
+    """
+    if palavra in {"pu", "pus", "poliuretano", "poliuretanos"}:
+        return {"pu", "pus", "poliuretano", "poliuretanos"}
+    return set(_singular_e_plural(palavra)) or {palavra}
+
+
+def _padrao_do_termo_no_conteudo(termo_busca: str) -> Optional[str]:
+    """Regex que localiza no texto o que `_termo_bate_no_conteudo` aceitou.
+
+    Serve só para RECORTAR O TRECHO de evidência: quem decide se o produto
+    entra continua sendo `_termo_bate_no_conteudo`, comparando tokens. Se
+    este padrão não encontrar nada (termo com dígito, por exemplo, que a
+    tokenização trata como separador), a resposta cita o documento sem trecho
+    — nunca inventa um.
+    """
+    tokens = [
+        p for p in _SEPARADOR_PALAVRA_CONTEUDO.split(_normalizar_sem_acentos(termo_busca))
+        if p
+    ]
+    if not tokens:
+        return None
+    grupos = [
+        "(?:" + "|".join(
+            re.escape(f) for f in sorted(_flexoes_da_palavra(t), key=len, reverse=True)
+        ) + ")"
+        for t in tokens
+    ]
+    # Fronteira só em letras, e não em `\b`, porque a tokenização de
+    # `_SEPARADOR_PALAVRA_CONTEUDO` trata dígito como separador.
+    return r"(?<![a-z])" + r"[^a-z]+".join(grupos) + r"(?![a-z])"
+
+
 def _termo_bate_no_conteudo(termo_busca: str, content_lower: str) -> bool:
     """True se `termo_busca` aparece no conteúdo do documento.
 
@@ -388,18 +448,7 @@ def _termo_bate_no_conteudo(termo_busca: str, content_lower: str) -> bool:
     def _normalizar(texto: str) -> str:
         return _normalizar_sem_acentos(texto)
 
-    def _flexoes(palavra: str) -> set[str]:
-        """Flexões conservadoras, suficientes para singular/plural sem usar
-        prefixos abertos que confundem `correia` com `corretamente`.
-
-        Usa `_singular_e_plural` — a mesma regra da cascata de natureza. Antes
-        havia aqui uma segunda cópia que só sabia tirar e pôr um "s", com o
-        mesmo defeito: "catalisadores" não encontrava "catalisador", e uma
-        busca por menção do plural em -es voltava vazia.
-        """
-        if palavra in {"pu", "pus", "poliuretano", "poliuretanos"}:
-            return {"pu", "pus", "poliuretano", "poliuretanos"}
-        return set(_singular_e_plural(palavra)) or {palavra}
+    _flexoes = _flexoes_da_palavra
 
     termo_tokens = [p for p in _SEPARADOR_PALAVRA_CONTEUDO.split(_normalizar(termo_busca)) if p]
     conteudo_tokens = [p for p in _SEPARADOR_PALAVRA_CONTEUDO.split(_normalizar(content_lower)) if p]
@@ -414,34 +463,57 @@ def _termo_bate_no_conteudo(termo_busca: str, content_lower: str) -> bool:
     return False
 
 
-def _codigo_bate_no_texto(codigo: str, texto: str) -> bool:
-    """Confirma código completo, tolerando espaço, hífen ou quebra de linha."""
+def _padrao_do_codigo(codigo: str) -> Optional[str]:
+    """Regex que casa o código completo, tolerando espaço, hífen e quebra."""
     partes = re.findall(r"[a-z0-9]+", _normalizar_sem_acentos(codigo))
     if not partes:
+        return None
+    return (
+        r"(?<![a-z0-9])"
+        + r"[\s\-_®]*".join(map(re.escape, partes))
+        + r"(?![a-z0-9])"
+    )
+
+
+def _codigo_bate_no_texto(codigo: str, texto: str) -> bool:
+    """Confirma código completo, tolerando espaço, hífen ou quebra de linha."""
+    padrao = _padrao_do_codigo(codigo)
+    if not padrao:
         return False
-    separador = r"[\s\-_®]*"
-    padrao = r"(?<![a-z0-9])" + separador.join(map(re.escape, partes))
-    padrao += r"(?![a-z0-9])"
     return bool(re.search(padrao, _normalizar_sem_acentos(texto)))
 
 
-def _trecho_da_mencao(codigo: str, content: str, largura: int = 320) -> str:
-    """Recorta contexto suficiente para distinguir uso, comparação e negação."""
+def _trecho_em_volta(
+    padrao: Optional[str], content: str, largura: int = 320
+) -> str:
+    """Recorta um trecho LITERAL do `content` em volta da primeira ocorrência.
+
+    O recorte é feito sobre o texto original (só com espaços em branco
+    colapsados), não sobre a forma normalizada usada para localizar: o que
+    volta é o que está escrito no documento, com acento e maiúscula, para que
+    quem lê a resposta possa conferir a frase no PDF. A busca acontece na
+    forma sem acento porque é assim que todas as regras deste módulo casam.
+
+    `largura` é o teto do trecho, em caracteres — nunca se devolve o chunk
+    inteiro, que no acervo real chega a 700 palavras.
+    """
     texto = re.sub(r"\s+", " ", content or "").strip()
-    partes = re.findall(r"[a-z0-9]+", _normalizar_sem_acentos(codigo))
-    if not texto or not partes:
+    if not texto or not padrao:
         return ""
-    padrao = r"(?<![a-z0-9])" + r"[\s\-_®]*".join(map(re.escape, partes))
-    padrao += r"(?![a-z0-9])"
     match = re.search(padrao, _normalizar_sem_acentos(texto))
     if not match:
         return ""
     metade = largura // 2
-    inicio = max(0, match.start() - metade)
+    inicio = max(0, min(match.start(), len(texto)) - metade)
     fim = min(len(texto), match.end() + metade)
     prefixo = "…" if inicio else ""
     sufixo = "…" if fim < len(texto) else ""
     return f"{prefixo}{texto[inicio:fim].strip()}{sufixo}"
+
+
+def _trecho_da_mencao(codigo: str, content: str, largura: int = 320) -> str:
+    """Recorta contexto suficiente para distinguir uso, comparação e negação."""
+    return _trecho_em_volta(_padrao_do_codigo(codigo), content, largura)
 
 
 def buscar_produtos_que_mencionam(
@@ -587,14 +659,44 @@ def buscar_produtos_que_mencionam(
     return resultados
 
 
-def _resumo_lista(produtos: set, listar_todos: bool) -> Dict[str, Any]:
+def _resumo_lista(
+    produtos: set,
+    listar_todos: bool,
+    evidencias: Optional[Dict[str, Dict[str, Any]]] = None,
+) -> Dict[str, Any]:
+    """Resumo de um nível; com `evidencias`, cita a prova de cada produto.
+
+    ORÇAMENTO DE TAMANHO (decisão de 18/09/2026). O trecho literal só
+    acompanha a PRÉVIA (até 10 produtos). Com `listar_todos=True` o acervo
+    real devolve centenas de produtos, e centenas de trechos de até 240
+    caracteres viram uma parede de texto que ninguém lê — o oposto do que a
+    citação existe para fazer. Na lista completa fica o nome do documento,
+    que é o suficiente para o vendedor abrir o PDF e conferir, e ele pode
+    pedir o detalhe de um produto específico.
+    """
     lista = sorted(produtos)
     limite = None if listar_todos else 10
-    return {
+    exibidos = lista if limite is None else lista[:limite]
+    resumo: Dict[str, Any] = {
         "total": len(lista),
-        "produtos": lista if limite is None else lista[:limite],
+        "produtos": exibidos,
         "truncado": limite is not None and len(lista) > limite,
     }
+    if evidencias is not None:
+        resumo["evidencias"] = {
+            produto: (
+                dict(evidencias[produto])
+                if limite is not None
+                else {
+                    chave: valor
+                    for chave, valor in evidencias[produto].items()
+                    if chave != "trecho"
+                }
+            )
+            for produto in exibidos
+            if produto in evidencias
+        }
+    return resumo
 
 
 def listar_produtos_por_aplicacao(
@@ -930,6 +1032,25 @@ NIVEIS_DE_EVIDENCIA = (
     "mencao_no_documento",
 )
 
+# A CASCATA GUARDA A EVIDÊNCIA QUE ACEITOU CADA PRODUTO (18/09/2026)
+#
+# O Bloco 1 da avaliação de arquitetura exige que toda afirmação técnica venha
+# com o documento de origem e o trecho literal, porque o usuário-alvo é um
+# vendedor que NÃO conhece os produtos e precisa conferir sozinho. A cascata
+# afirmava "o Boletim do próprio produto declara que ele é isso" e devolvia
+# `sources: []` — a afirmação mais forte do motor, sem nada para conferir.
+#
+# O filepath e o content já estavam em mãos no exato ponto em que o produto era
+# aceito; a evidência era calculada e jogada fora. Agora é guardada, sob duas
+# restrições de custo:
+#
+#   - UMA evidência por produto por nível, a PRIMEIRA que aparecer. A varredura
+#     passa por ~11.000 pontos e um produto pode ser aceito por dezenas deles;
+#     guardar todas multiplicaria memória por nada, já que a resposta cita uma.
+#   - Trecho com teto de caracteres, nunca o chunk inteiro (que no acervo real
+#     chega a 700 palavras e encheria a tela com uma citação só).
+_LARGURA_TRECHO_EVIDENCIA = 240
+
 # Aditivos e catalisadores participam da reação, mas não SÃO o material que ela
 # produz — vale para elastômero, para espuma e para qualquer outra natureza.
 # Era uma regra escrita à mão dentro do caminho de elastômero; virou dado, e
@@ -978,25 +1099,20 @@ def _produto_e_familia_auxiliar(produto: str, termos_perguntados: List[str]) -> 
     return False
 
 
-def _conteudo_comprova_composicao_do_termo(
-    termo: str, filepath: str, content: str
-) -> bool:
-    """O boletim comprova que o produto PRODUZ ou COMPÕE algo daquele tipo.
+def _padroes_composicao_do_termo(termo: str, filepath: str) -> List[str]:
+    """Regexes únicas da regra de composição — predicado e trecho usam estas.
 
-    Versão genérica de `_conteudo_comprova_tipo_elastomero`. Distinta da
-    identidade de propósito: "sistema para obtenção de elastômeros" prova
-    finalidade, não natureza, e a resposta precisa dizer qual das duas está
-    mostrando em vez de tratar como equivalentes.
+    Mesma disciplina de `_padrao_identidade_declarada`: quem decide e quem
+    cita a evidência leem da MESMA regra.
     """
     nome_arquivo = _SEPARADOR_CAMINHO.split(filepath)[-1]
     if "boletim" not in _normalizar_sem_acentos(nome_arquivo):
-        return False
+        return []
     variantes = _variantes_do_termo(termo)
     if not variantes:
-        return False
+        return []
     alternativas = "|".join(re.escape(v) for v in variantes)
-    texto = _normalizar_sem_acentos(content)
-    padroes = (
+    return [
         rf"\bproduz(?:ir|em)?\s+(?:um\s+|uma\s+)?(?:{alternativas})\b",
         rf"\bobter\s+(?:um\s+|uma\s+)?(?:{alternativas})\b",
         rf"\b(?:formacao|producao|fabricacao|obtencao)\s+(?:de\s+)?"
@@ -1009,8 +1125,41 @@ def _conteudo_comprova_composicao_do_termo(
         # identidade sendo rotulada com o texto do nível de composição, que
         # diz ao vendedor o contrário do que a fonte afirma.
         rf"\b(?:sistema|poliuretano)\s+(?:{alternativas})\b",
-    )
-    return any(re.search(padrao, texto) for padrao in padroes)
+    ]
+
+
+def _match_composicao_do_termo(
+    termo: str, filepath: str, content: str
+) -> Optional[re.Match]:
+    """A regra de composição, devolvendo ONDE ela casou."""
+    texto = _normalizar_sem_acentos(content)
+    for padrao in _padroes_composicao_do_termo(termo, filepath):
+        match = re.search(padrao, texto)
+        if match:
+            return match
+    return None
+
+
+def _conteudo_comprova_composicao_do_termo(
+    termo: str, filepath: str, content: str
+) -> bool:
+    """O boletim comprova que o produto PRODUZ ou COMPÕE algo daquele tipo.
+
+    Versão genérica de `_conteudo_comprova_tipo_elastomero`. Distinta da
+    identidade de propósito: "sistema para obtenção de elastômeros" prova
+    finalidade, não natureza, e a resposta precisa dizer qual das duas está
+    mostrando em vez de tratar como equivalentes.
+    """
+    return _match_composicao_do_termo(termo, filepath, content) is not None
+
+
+def _trecho_de_composicao(termo: str, filepath: str, content: str) -> str:
+    """Trecho literal do boletim que sustenta a composição comprovada."""
+    for padrao in _padroes_composicao_do_termo(termo, filepath):
+        trecho = _trecho_em_volta(padrao, content, _LARGURA_TRECHO_EVIDENCIA)
+        if trecho:
+            return trecho
+    return ""
 
 
 def listar_produtos_por_tipo(
@@ -1031,17 +1180,30 @@ def listar_produtos_por_tipo(
     "borracha" em "elastômero"). Entram em todos os níveis junto com o termo
     original, para que a terminologia do usuário não precise coincidir com a
     do acervo.
+
+    Cada nível traz `evidencias`: por produto listado, o documento de origem e
+    — nos três níveis textuais — o trecho literal do boletim que o aceitou.
+    Ver o comentário sobre evidência acima de `_LARGURA_TRECHO_EVIDENCIA` e a
+    regra de orçamento em `_resumo_lista`.
     """
     termos = [t for t in [termo, *(sinonimos or [])] if t and t.strip()]
     if not termos:
         return {
             "termo_buscado": termo,
             "nivel_atendido": None,
-            "niveis": {nivel: _resumo_lista(set(), listar_todos) for nivel in NIVEIS_DE_EVIDENCIA},
+            "niveis": {
+                nivel: _resumo_lista(set(), listar_todos, {})
+                for nivel in NIVEIS_DE_EVIDENCIA
+            },
             "classificacoes_encontradas": [],
         }
 
     por_nivel: Dict[str, set] = {nivel: set() for nivel in NIVEIS_DE_EVIDENCIA}
+    # nível -> produto -> evidência. `setdefault` garante a restrição de custo:
+    # a PRIMEIRA evidência encontrada fica, as seguintes são descartadas.
+    evidencia_por_nivel: Dict[str, Dict[str, Dict[str, Any]]] = {
+        nivel: {} for nivel in NIVEIS_DE_EVIDENCIA
+    }
     excluidos: set = set()
 
     # Invariantes do laço, calculados UMA vez. Estavam sendo recalculados por
@@ -1059,6 +1221,11 @@ def listar_produtos_por_tipo(
         client = get_qdrant_client()
         classificacoes_por_produto: Dict[str, set] = {}
         nomes_classificacoes: Dict[str, str] = {}
+        # produto -> rótulo -> documento onde a hierarquia foi lida. O nível
+        # estrutural só é resolvido DEPOIS da varredura (a interseção com os
+        # alvos depende de conhecer todas as classificações do acervo), então
+        # a origem precisa esperar aqui até lá.
+        documento_da_classificacao: Dict[str, Dict[str, str]] = {}
         offset = None
         while True:
             pontos, offset = client.scroll(
@@ -1075,12 +1242,16 @@ def listar_produtos_por_tipo(
                 if not produto:
                     continue
                 content = payload.get("content") or ""
+                nome_arquivo = _SEPARADOR_CAMINHO.split(filepath)[-1]
 
                 # Nível 1 — hierarquia do catálogo, independente do texto.
                 if _documento_atual_com_produto_catalogavel(filepath, produto):
                     for rotulo, nome in _classificacoes_do_filepath(filepath, produto):
                         classificacoes_por_produto.setdefault(produto, set()).add(rotulo)
                         nomes_classificacoes.setdefault(rotulo, nome)
+                        documento_da_classificacao.setdefault(
+                            produto, {}
+                        ).setdefault(rotulo, nome_arquivo)
 
                 # Natureza conflitante declarada: tira o produto dos níveis de
                 # classificação (1 a 3), nunca do nível de menção.
@@ -1089,12 +1260,47 @@ def listar_produtos_por_tipo(
                         excluidos.add(produto)
 
                 for t in termos:
+                    # A EVIDÊNCIA É RECORTADA DA MESMA REGRA QUE ACEITOU. Nada
+                    # aqui muda quem entra em cada nível: as condições são as
+                    # de sempre; só se acrescenta de onde veio a prova.
                     if _conteudo_declara_produto_como(t, filepath, content):
                         por_nivel["identidade_declarada"].add(produto)
+                        evidencia_por_nivel["identidade_declarada"].setdefault(
+                            produto,
+                            {
+                                "tipo_de_prova": "textual",
+                                "documento": nome_arquivo,
+                                "trecho": _trecho_em_volta(
+                                    _padrao_identidade_declarada(t, filepath),
+                                    content,
+                                    _LARGURA_TRECHO_EVIDENCIA,
+                                ),
+                            },
+                        )
                     if _conteudo_comprova_composicao_do_termo(t, filepath, content):
                         por_nivel["composicao_comprovada"].add(produto)
+                        evidencia_por_nivel["composicao_comprovada"].setdefault(
+                            produto,
+                            {
+                                "tipo_de_prova": "textual",
+                                "documento": nome_arquivo,
+                                "trecho": _trecho_de_composicao(t, filepath, content),
+                            },
+                        )
                     if _termo_bate_no_conteudo(t, content.lower()):
                         por_nivel["mencao_no_documento"].add(produto)
+                        evidencia_por_nivel["mencao_no_documento"].setdefault(
+                            produto,
+                            {
+                                "tipo_de_prova": "textual",
+                                "documento": nome_arquivo,
+                                "trecho": _trecho_em_volta(
+                                    _padrao_do_termo_no_conteudo(t),
+                                    content,
+                                    _LARGURA_TRECHO_EVIDENCIA,
+                                ),
+                            },
+                        )
             if offset is None:
                 break
     except Exception as e:
@@ -1109,6 +1315,19 @@ def listar_produtos_por_tipo(
         for produto, classificacoes in classificacoes_por_produto.items()
         if classificacoes.intersection(alvos)
     }
+    # A PROVA ESTRUTURAL NÃO É UM TRECHO DE TEXTO. Ela é o caminho na árvore do
+    # catálogo: o produto está dentro da pasta daquela linha. Inventar um
+    # "trecho" aqui seria atribuir ao boletim uma frase que ele não tem — e é
+    # justamente esse nível que a resposta apresenta como a evidência MAIS
+    # FORTE. A estrutura diz isso em `tipo_de_prova`, e quem apresenta cita a
+    # classificação e o documento, não uma citação inexistente.
+    for produto in por_nivel["classificacao_estrutural"]:
+        rotulo = sorted(classificacoes_por_produto[produto].intersection(alvos))[0]
+        evidencia_por_nivel["classificacao_estrutural"][produto] = {
+            "tipo_de_prova": "estrutural",
+            "classificacao": nomes_classificacoes[rotulo],
+            "documento": documento_da_classificacao.get(produto, {}).get(rotulo, ""),
+        }
 
     # Aditivos/catalisadores e naturezas conflitantes saem dos níveis que
     # afirmam CLASSIFICAÇÃO. O nível de menção é explicitamente "apareceu no
@@ -1129,7 +1348,9 @@ def listar_produtos_por_tipo(
         "termos_pesquisados": termos,
         "nivel_atendido": nivel_atendido,
         "niveis": {
-            nivel: _resumo_lista(por_nivel[nivel], listar_todos)
+            nivel: _resumo_lista(
+                por_nivel[nivel], listar_todos, evidencia_por_nivel[nivel]
+            )
             for nivel in NIVEIS_DE_EVIDENCIA
         },
         "classificacoes_encontradas": sorted(nomes_classificacoes[a] for a in alvos),

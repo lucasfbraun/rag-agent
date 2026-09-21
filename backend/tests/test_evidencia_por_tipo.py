@@ -24,6 +24,7 @@ import pytest
 
 from app.rag.catalog_stats import (
     NIVEIS_DE_EVIDENCIA,
+    _LARGURA_TRECHO_EVIDENCIA,
     _conteudo_comprova_composicao_do_termo,
     _conteudo_declara_produto_como,
     _variantes_do_termo,
@@ -314,3 +315,188 @@ def test_sistema_e_poliuretano_continuam_provando_composicao():
     caminho = rf"{RAIZ}\FLEXX EL\FLEXX EL 1000\Boletim FLEXX EL 1000.pdf"
     for texto in ("Sistema elastomérico bicomponente.", "Poliuretano elastomérico de alta dureza."):
         assert _conteudo_comprova_composicao_do_termo("elastomero", caminho, texto) is True
+
+
+# --- a evidência citável: Bloco 1 chegando à cascata (18/09/2026) -----------
+#
+# O Bloco 1 da avaliação de arquitetura exige que toda afirmação técnica venha
+# com o documento de origem e o trecho literal, porque o usuário-alvo é um
+# vendedor que NÃO conhece os produtos e precisa conferir sozinho.
+#
+# Este caminho violava isso da pior forma possível: dizia "o Boletim Técnico do
+# próprio produto declara que ele é isso" — a afirmação mais forte do motor —
+# e devolvia `sources: []`. O filepath e o content já estavam em mãos no exato
+# ponto da aceitação; a evidência era calculada e jogada fora.
+
+
+def _evidencia(resultado, nivel, produto):
+    return (resultado["niveis"][nivel].get("evidencias") or {}).get(produto)
+
+
+def test_identidade_declarada_cita_documento_e_trecho_literal():
+    conteudo = (
+        "Vantagens: alta resiliencia. FLEXX EL 1000 é um elastômero de alta "
+        "resiliência para peças técnicas. Armazenar em local seco."
+    )
+    pontos = [
+        _ponto(rf"{RAIZ}\FLEXX EL\FLEXX EL 1000\Boletim FLEXX EL 1000.pdf", conteudo)
+    ]
+    resultado = _listar(pontos, "elastomero")
+
+    evidencia = _evidencia(resultado, "identidade_declarada", "FLEXX EL 1000")
+    assert evidencia["documento"] == "Boletim FLEXX EL 1000.pdf"
+    assert evidencia["tipo_de_prova"] == "textual"
+    # LITERAL, não parafraseado: o vendedor confere o trecho contra o PDF.
+    assert evidencia["trecho"].strip("…") in conteudo
+    # E é o trecho que DECIDIU, não uma frase qualquer do documento.
+    assert "é um elastômero" in evidencia["trecho"]
+
+
+def test_composicao_comprovada_cita_o_trecho_que_a_comprovou():
+    conteudo = (
+        "Descrição: sistema bicomponente para obtenção de elastômeros de "
+        "dureza média. Validade: 6 meses."
+    )
+    pontos = [
+        _ponto(rf"{RAIZ}\FLEXX EL\FLEXX EL 1000\Boletim FLEXX EL 1000.pdf", conteudo)
+    ]
+    resultado = _listar(pontos, "elastomero")
+
+    evidencia = _evidencia(resultado, "composicao_comprovada", "FLEXX EL 1000")
+    assert evidencia["trecho"].strip("…") in conteudo
+    assert "obtenção de elastômeros" in evidencia["trecho"]
+
+
+def test_mencao_cita_o_trecho_e_nao_apenas_o_nome_do_arquivo():
+    """O nível mais fraco é o que MAIS precisa do trecho: "apareceu no
+    documento" sem mostrar onde não dá ao vendedor como julgar se a menção era
+    uso, comparação ou restrição."""
+    conteudo = "Compatível com peças de elastômero vizinhas na montagem."
+    pontos = [
+        _ponto(rf"{RAIZ}\FLEXX AG\FLEXX AG 2032\Boletim FLEXX AG 2032.pdf", conteudo)
+    ]
+    resultado = _listar(pontos, "elastomero")
+
+    evidencia = _evidencia(resultado, "mencao_no_documento", "FLEXX AG 2032")
+    assert evidencia["documento"] == "Boletim FLEXX AG 2032.pdf"
+    assert evidencia["trecho"].strip("…") in conteudo
+    assert "elastômero" in evidencia["trecho"]
+
+
+def test_classificacao_estrutural_cita_a_classificacao_e_nao_inventa_trecho():
+    """A prova aqui é o CAMINHO NA ÁRVORE do catálogo, não uma frase. Atribuir
+    ao boletim uma citação que ele não tem seria pior que não citar nada —
+    e este é justamente o nível apresentado como a evidência MAIS FORTE."""
+    pontos = [
+        _ponto(
+            rf"{RAIZ}\Elastômeros\FLEXX EL 1000\Boletim FLEXX EL 1000.pdf",
+            "Sistema bicomponente para obtenção de elastômeros.",
+        )
+    ]
+    resultado = _listar(pontos, "elastômeros")
+    assert resultado["nivel_atendido"] == "classificacao_estrutural"
+
+    evidencia = _evidencia(resultado, "classificacao_estrutural", "FLEXX EL 1000")
+    assert evidencia["tipo_de_prova"] == "estrutural"
+    assert evidencia["classificacao"] == "Elastômeros"
+    assert evidencia["documento"] == "Boletim FLEXX EL 1000.pdf"
+    assert "trecho" not in evidencia
+
+
+def test_uma_evidencia_por_produto_por_nivel_a_primeira_que_aparecer():
+    """A varredura passa por ~11.000 pontos e um produto pode ser aceito por
+    dezenas deles. Guardar todas multiplicaria memória por nada: a resposta
+    cita uma."""
+    pontos = [
+        _ponto(
+            rf"{RAIZ}\FLEXX EL\FLEXX EL 1000\Boletim FLEXX EL 1000.pdf",
+            "FLEXX EL 1000 é um elastômero de alta resiliência.",
+        ),
+        _ponto(
+            rf"{RAIZ}\FLEXX EL\FLEXX EL 1000\Boletim FLEXX EL 1000 rev2.pdf",
+            "FLEXX EL 1000 é um elastômero revisado.",
+        ),
+    ]
+    resultado = _listar(pontos, "elastomero")
+
+    evidencias = resultado["niveis"]["identidade_declarada"]["evidencias"]
+    assert list(evidencias) == ["FLEXX EL 1000"]
+    assert evidencias["FLEXX EL 1000"]["documento"] == "Boletim FLEXX EL 1000.pdf"
+
+
+def test_trecho_tem_teto_e_nao_devolve_o_chunk_inteiro():
+    """Chunk no acervo real chega a 700 palavras. Um chunk inteiro por produto
+    numa lista de dez é uma parede de texto, não uma citação conferível."""
+    enchimento = "Informacao de praxe sobre armazenamento e manuseio. " * 80
+    conteudo = (
+        enchimento + "FLEXX EL 1000 é um elastômero de alta resiliência. " + enchimento
+    )
+    pontos = [
+        _ponto(rf"{RAIZ}\FLEXX EL\FLEXX EL 1000\Boletim FLEXX EL 1000.pdf", conteudo)
+    ]
+    resultado = _listar(pontos, "elastomero")
+
+    trecho = _evidencia(resultado, "identidade_declarada", "FLEXX EL 1000")["trecho"]
+    assert len(conteudo) > 4000
+    # Teto + o comprimento da própria frase casada, com folga.
+    assert len(trecho) < _LARGURA_TRECHO_EVIDENCIA + 200
+    assert trecho.strip("…") in conteudo
+
+
+def test_lista_completa_troca_o_trecho_pelo_nome_do_documento():
+    """DECISÃO DE ORÇAMENTO. A prévia traz trecho literal; `listar_todos` pode
+    devolver centenas de produtos, e centenas de citações não são conferíveis.
+    Na lista completa fica o documento, suficiente para abrir o PDF."""
+    pontos = [
+        _ponto(
+            rf"{RAIZ}\FLEXX EL\FLEXX EL {n}\Boletim FLEXX EL {n}.pdf",
+            f"FLEXX EL {n} é um elastômero de alta resiliência.",
+        )
+        for n in range(1000, 1015)
+    ]
+    previa = _listar(pontos, "elastomero")
+    completa = _listar(pontos, "elastomero", listar_todos=True)
+
+    nivel_previa = previa["niveis"]["identidade_declarada"]
+    nivel_completa = completa["niveis"]["identidade_declarada"]
+
+    # A semântica da cascata não muda: os mesmos 15 produtos entram.
+    assert nivel_previa["total"] == nivel_completa["total"] == 15
+    assert len(nivel_previa["produtos"]) == 10
+    assert len(nivel_previa["evidencias"]) == 10
+    assert all(e.get("trecho") for e in nivel_previa["evidencias"].values())
+
+    assert len(nivel_completa["produtos"]) == 15
+    assert len(nivel_completa["evidencias"]) == 15
+    assert all("trecho" not in e for e in nivel_completa["evidencias"].values())
+    assert all(e["documento"] for e in nivel_completa["evidencias"].values())
+
+
+def test_evidencia_acompanha_apenas_os_produtos_realmente_listados():
+    """Prévia de 10 não pode carregar evidência dos 15 — o payload vai para o
+    LLM via MCP e pagar contexto por produto que não aparece é desperdício."""
+    pontos = [
+        _ponto(
+            rf"{RAIZ}\FLEXX EL\FLEXX EL {n}\Boletim FLEXX EL {n}.pdf",
+            f"FLEXX EL {n} é um elastômero.",
+        )
+        for n in range(1000, 1015)
+    ]
+    nivel = _listar(pontos, "elastomero")["niveis"]["identidade_declarada"]
+    assert set(nivel["evidencias"]) == set(nivel["produtos"])
+
+
+def test_produto_excluido_do_nivel_nao_leva_evidencia_junto():
+    """A exclusão de isocianato/auxiliares acontece DEPOIS da varredura. Se a
+    evidência não respeitasse a lista final, a resposta citaria fonte de um
+    produto que ela mesma não lista."""
+    pontos = [
+        _ponto(
+            rf"{RAIZ}\FLEXX ISO\FLEXX ISO 131001\Boletim FLEXX ISO 131001.pdf",
+            "FLEXX ISO 131001 é um isocianato. Combinado com poliol, "
+            "permite obtenção de elastômero.",
+        )
+    ]
+    nivel = _listar(pontos, "elastomero")["niveis"]["composicao_comprovada"]
+    assert nivel["total"] == 0
+    assert nivel["evidencias"] == {}
