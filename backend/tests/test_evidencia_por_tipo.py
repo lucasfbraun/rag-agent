@@ -500,3 +500,77 @@ def test_produto_excluido_do_nivel_nao_leva_evidencia_junto():
     nivel = _listar(pontos, "elastomero")["niveis"]["composicao_comprovada"]
     assert nivel["total"] == 0
     assert nivel["evidencias"] == {}
+
+
+# --- alias de negócio: o nome que as pessoas usam x o código do acervo -------
+
+def test_elastomero_resolve_na_linha_th_do_catalogo():
+    """Confirmado pelo usuário em 21/09/2026: TH é a linha de elastômeros.
+
+    A pergunta não encontrava a linha porque no acervo ela se chama TH, e a
+    resposta determinística listava as classificações reais — nenhuma delas
+    "elastômero". O alias faz a pergunta de NATUREZA resolver no nível
+    `classificacao_estrutural`, a evidência mais forte da cascata, em vez de
+    cair para declaração de boletim ou menção no texto.
+    """
+    pontos = [
+        _ponto(
+            rf"{RAIZ}\FLEXX® TH\FLEXX TH T160DE1\Boletim FLEXX TH T160DE1.pdf",
+            "Sistema bicomponente para peças técnicas de reposição.",
+        )
+    ]
+    resultado = _listar(pontos, "elastomeros")
+
+    assert resultado["nivel_atendido"] == "classificacao_estrutural"
+    assert resultado["niveis"]["classificacao_estrutural"]["total"] == 1
+    assert "FLEXX® TH" in resultado["classificacoes_encontradas"]
+
+
+def test_borracha_chega_na_linha_th_pela_traducao():
+    """O alias cobre o termo técnico; a tradução leigo→técnico cobre o resto.
+    "borracha" → sinônimo "elastômero" → alias → FLEXX TH. Sem isso, o termo do
+    vendedor precisaria coincidir com o código corporativo do acervo."""
+    pontos = [
+        _ponto(
+            rf"{RAIZ}\FLEXX® TH\FLEXX TH T160DE1\Boletim FLEXX TH T160DE1.pdf",
+            "Sistema bicomponente para peças técnicas de reposição.",
+        )
+    ]
+    resultado = _listar(pontos, "borracha", sinonimos=["elastômero"])
+    assert resultado["nivel_atendido"] == "classificacao_estrutural"
+
+
+def test_termo_desconhecido_continua_devolvendo_zero():
+    """O alias não pode virar porta aberta: a regra geral continua sendo
+    correspondência exata, para termo desconhecido não virar uma lista de
+    produtos apenas relacionados."""
+    pontos = [
+        _ponto(
+            rf"{RAIZ}\FLEXX® TH\FLEXX TH T160DE1\Boletim FLEXX TH T160DE1.pdf",
+            "Sistema bicomponente para peças técnicas de reposição.",
+        )
+    ]
+    resultado = _listar(pontos, "termo que nao existe")
+    assert resultado["niveis"]["classificacao_estrutural"]["total"] == 0
+
+
+def test_alias_soma_a_descoberta_dinamica_em_vez_de_esconde_la():
+    """Enquanto o alias dava `return` antecipado, cadastrar "elastomero →
+    flexx th" ESCONDIA uma pasta chamada literalmente "Elastômeros": o atalho
+    de negócio passava na frente da fonte de verdade estrutural."""
+    pontos = [
+        _ponto(
+            rf"{RAIZ}\FLEXX® TH\FLEXX TH T160DE1\Boletim FLEXX TH T160DE1.pdf",
+            "Sistema bicomponente para peças técnicas.",
+        ),
+        _ponto(
+            rf"{RAIZ}\Elastômeros\FLEXX EL 1000\Boletim FLEXX EL 1000.pdf",
+            "Sistema bicomponente para peças técnicas.",
+        ),
+    ]
+    resultado = _listar(pontos, "elastomeros")
+
+    assert resultado["nivel_atendido"] == "classificacao_estrutural"
+    encontradas = set(resultado["classificacoes_encontradas"])
+    assert "FLEXX® TH" in encontradas, "o alias de negócio sumiu"
+    assert "Elastômeros" in encontradas, "a descoberta dinâmica foi escondida pelo alias"

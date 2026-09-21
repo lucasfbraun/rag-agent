@@ -197,3 +197,21 @@ def test_prompt_nao_ressuscita_o_parametro_aposentado():
 )
 def test_regras_caras_continuam_no_prompt(regra):
     assert regra in AGENT_SYSTEM_PROMPT
+
+
+def test_prompt_proibe_citar_numero_sem_mostrar_os_produtos():
+    """CASO REAL (21/09/2026): perguntado sobre a tecnologia elastômero, o
+    agente respondeu "encontrei 45 produtos que mencionam aplicações
+    relacionadas, mas não são classificados como elastômeros" — e não mostrou
+    nenhum, nem ofereceu mostrar.
+
+    Para quem não conhece o catálogo é a pior resposta possível: afirma que
+    existe, recusa-se a contar, e não deixa caminho. A regra dos quatro níveis
+    já cobria `consultar_produtos_por_tipo`; o número veio de outra ferramenta,
+    então a proibição precisa ser geral.
+    """
+    from app.rag.engine import AGENT_SYSTEM_PROMPT
+
+    assert "CITOU UM NÚMERO, MOSTRE OS PRODUTOS" in AGENT_SYSTEM_PROMPT
+    assert "É PROIBIDO" in AGENT_SYSTEM_PROMPT
+    assert "quer ver esses 45?" in AGENT_SYSTEM_PROMPT

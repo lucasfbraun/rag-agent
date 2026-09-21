@@ -786,16 +786,44 @@ def listar_produtos_por_aplicacao(
 
 _ROTULO_RAIZ_CATALOGO = "documentacao de produto"
 _ROTULOS_DOCUMENTO_HISTORICO = {"obsoleto", "obsoletos", "revisao anterior"}
+# ALIASES DE NEGÓCIO: nome que as pessoas usam → código no caminho do acervo.
+#
+# Este mapa é deliberadamente PEQUENO e só cresce com fato confirmado por quem
+# conhece o catálogo. Códigos e nomes das demais linhas são descobertos
+# dinamicamente nos caminhos do Qdrant e não precisam entrar aqui — a regra
+# geral continua sendo correspondência exata, para que um termo desconhecido
+# devolva zero em vez de virar uma lista de produtos só relacionados.
+#
+# O que justifica uma entrada aqui: a árvore usa um código corporativo que
+# ninguém fala em voz alta. "Quais produtos são elastômeros?" não encontrava a
+# linha porque no acervo ela se chama TH — confirmado pelo usuário em
+# 21/09/2026, depois que a resposta determinística listou as classificações
+# reais e nenhuma delas era "elastômero".
+#
+# O efeito vai além da pergunta por linha: `listar_produtos_por_tipo` resolve o
+# nível `classificacao_estrutural` por aqui, então a pergunta de NATUREZA
+# ("quais produtos são elastômeros?") passa a ser respondida pela evidência
+# mais forte da cascata — a hierarquia do catálogo — em vez de cair para
+# declaração de boletim ou menção no texto.
 _ALIASES_CLASSIFICACAO_CATALOGO = {
     # O acervo usa o código corporativo RG no caminho, enquanto as pessoas
-    # normalmente dizem "rígidos". Códigos e nomes das demais linhas são
-    # descobertos dinamicamente e não precisam entrar neste mapa.
+    # normalmente dizem "rígidos".
     "rigido": {"flexx rg"},
     "rigidos": {"flexx rg"},
     "rigida": {"flexx rg"},
     "rigidas": {"flexx rg"},
     "poliuretano rigido": {"flexx rg"},
     "poliuretanos rigidos": {"flexx rg"},
+    # TH é a linha de elastômeros. Inclui a forma adjetiva porque
+    # `_variantes_do_termo` a gera e o boletim a usa ("sistema elastomérico").
+    "elastomero": {"flexx th"},
+    "elastomeros": {"flexx th"},
+    "elastomerico": {"flexx th"},
+    "elastomericos": {"flexx th"},
+    "elastomerica": {"flexx th"},
+    "elastomericas": {"flexx th"},
+    "poliuretano elastomerico": {"flexx th"},
+    "poliuretanos elastomericos": {"flexx th"},
 }
 
 
@@ -884,14 +912,24 @@ def _resolver_classificacoes_catalogo(
     classificacoes_disponiveis: set[str],
 ) -> set[str]:
     termo = _rotulo_estrutural_catalogo(termo_classificacao)
-    alvos_semanticos = _ALIASES_CLASSIFICACAO_CATALOGO.get(termo)
-    if alvos_semanticos:
-        return classificacoes_disponiveis.intersection(alvos_semanticos)
-    return {
+
+    # O alias SOMA à descoberta dinâmica, não a substitui.
+    #
+    # Enquanto o alias dava `return` antecipado, cadastrar "elastomero →
+    # flexx th" ESCONDIA uma pasta que se chamasse literalmente "Elastômeros":
+    # o atalho de negócio passava na frente da fonte de verdade estrutural.
+    # Defeito silencioso, e do pior tipo — só apareceria num acervo onde as
+    # duas coisas coexistem, provavelmente no dia em que alguém renomeasse a
+    # pasta e a resposta continuasse a mesma sem explicação.
+    por_alias = classificacoes_disponiveis.intersection(
+        _ALIASES_CLASSIFICACAO_CATALOGO.get(termo, set())
+    )
+    por_descoberta = {
         classificacao
         for classificacao in classificacoes_disponiveis
         if termo in _aliases_de_rotulo_classificacao(classificacao)
     }
+    return por_alias | por_descoberta
 
 
 def listar_produtos_por_classificacao_catalogo(
