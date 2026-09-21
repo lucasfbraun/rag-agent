@@ -29,8 +29,19 @@ def upgrade() -> None:
     # O enum `status_documento` já existe (criado por c2f8a05b71d4); referenciar
     # com create_type=False evita o "type already exists" que derruba a
     # migração no meio.
-    status_documento = sa.Enum(
-        "pendente", "aprovado", "rejeitado", name="status_documento", create_type=False
+    #
+    # PRECISA ser `postgresql.ENUM`, e NÃO `sa.Enum`: `sa.Enum` aceita
+    # `create_type` no `**kw` e o DESCARTA em silêncio — o `op.create_table`
+    # então emite `CREATE TYPE status_documento` com checkfirst=False (ver
+    # `alembic.ddl.impl.DefaultImpl.create_table`) num banco onde o tipo já
+    # existe, e o deploy entra em crash-loop. Mesmo desenho das migrations
+    # c2f8a05b71d4 e d4a91c37e2b8, que compartilham este enum.
+    #
+    # E os rótulos são MAIÚSCULOS: o SQLAlchemy grava o NOME do membro do
+    # enum Python, não o valor, e foi assim que o tipo nasceu no banco.
+    # `server_default="pendente"` seria `invalid input value for enum`.
+    status_documento = postgresql.ENUM(
+        "PENDENTE", "APROVADO", "REJEITADO", name="status_documento", create_type=False
     )
 
     op.create_table(
@@ -41,7 +52,7 @@ def upgrade() -> None:
         sa.Column("termo", sa.String(200), nullable=False),
         sa.Column("termo_normalizado", sa.String(200), nullable=False),
         sa.Column("observacao", sa.Text(), nullable=True),
-        sa.Column("status", status_documento, nullable=False, server_default="pendente"),
+        sa.Column("status", status_documento, nullable=False, server_default="PENDENTE"),
         sa.Column("motivo_decisao", sa.Text(), nullable=True),
         sa.Column(
             "criado_por_id",

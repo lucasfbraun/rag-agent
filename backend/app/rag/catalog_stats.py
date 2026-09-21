@@ -937,7 +937,11 @@ def _aliases_cadastrados(termo: str) -> set:
     resultado sem os apelidos é exatamente o comportamento anterior a este
     recurso, e é melhor que um erro na cara do vendedor.
     """
-    if _fonte_de_aliases_cadastrados is None:
+    if _fonte_de_aliases_cadastrados is None or not termo:
+        # Termo vazio (a pergunta era "???" ou "---") casaria com uma chave
+        # vazia gravada por engano — e casaria pelo nível
+        # `classificacao_estrutural`, o mais forte da cascata, devolvendo a
+        # linha inteira como evidência forte para uma pergunta sem letras.
         return set()
     try:
         return set(_fonte_de_aliases_cadastrados().get(termo, set()))

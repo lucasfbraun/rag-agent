@@ -36,7 +36,8 @@ import threading
 import time
 import uuid
 from datetime import datetime, timezone
-from typing import Dict, List, Optional, Set
+from types import MappingProxyType
+from typing import Dict, List, Mapping, Optional, Set
 
 from sqlalchemy import select
 from sqlalchemy.orm import Session
@@ -101,16 +102,22 @@ def normalizar(texto: str) -> str:
 # TTL cobre outra réplica do backend aprovando um termo, a invalidação cobre o
 # caso normal de quem aprovou estar no mesmo processo e esperar efeito imediato.
 _TTL_CACHE_SEGUNDOS = 60.0
-_cache_mapa: Optional[Dict[str, Set[str]]] = None
+_cache_mapa: Optional[Mapping[str, Set[str]]] = None
 _cache_carregado_em: float = 0.0
+# CONTADOR DE GERAÇÃO. Sem ele, uma invalidação que acontece ENQUANTO outra
+# thread está no banco é perdida: a leitura volta com o mapa velho e o grava
+# com carimbo novo, válido por mais 60s. A leitura só publica o que carregou se
+# a geração não mudou no meio do caminho.
+_geracao_cache: int = 0
 _cache_lock = threading.Lock()
 
 
 def invalidar_cache() -> None:
-    global _cache_mapa, _cache_carregado_em
+    global _cache_mapa, _cache_carregado_em, _geracao_cache
     with _cache_lock:
         _cache_mapa = None
         _cache_carregado_em = 0.0
+        _geracao_cache += 1
 
 
 def _carregar_mapa() -> Dict[str, Set[str]]:
@@ -124,22 +131,62 @@ def _carregar_mapa() -> Dict[str, Set[str]]:
             .where(TermoDeNegocio.status == StatusDocumento.APROVADO)
         ).all()
     for termo_normalizado, rotulo in linhas:
+        if not termo_normalizado:
+            # Chave vazia casaria com QUALQUER pergunta sem letras, e casaria
+            # pelo nível `classificacao_estrutural` — o mais forte da cascata.
+            # `criar()` recusa isso hoje; esta linha protege o que já estiver
+            # gravado de antes.
+            continue
         mapa.setdefault(termo_normalizado, set()).add(rotulo)
     return mapa
 
 
-def mapa_de_aliases() -> Dict[str, Set[str]]:
-    """Fonte registrada em `catalog_stats`. Nunca levanta para o chamador."""
+def mapa_de_aliases() -> Mapping[str, Set[str]]:
+    """Fonte registrada em `catalog_stats`. Devolve um mapa IMUTÁVEL.
+
+    O dict devolvido era o próprio cache: um chamador distraído mutando-o
+    contaminaria todas as respostas do processo por 60 segundos, sem rastro.
+    """
     global _cache_mapa, _cache_carregado_em
-    agora = time.monotonic()
     with _cache_lock:
+        agora = time.monotonic()
         if _cache_mapa is not None and (agora - _cache_carregado_em) < _TTL_CACHE_SEGUNDOS:
             return _cache_mapa
-    mapa = _carregar_mapa()
+        geracao_na_leitura = _geracao_cache
+
+    mapa = MappingProxyType(_carregar_mapa())
+
     with _cache_lock:
-        _cache_mapa = mapa
-        _cache_carregado_em = time.monotonic()
+        if geracao_na_leitura == _geracao_cache:
+            _cache_mapa = mapa
+            _cache_carregado_em = time.monotonic()
+        # Geração diferente = alguém aprovou enquanto líamos. O que acabamos de
+        # carregar já nasceu velho; não vira cache, e a próxima chamada relê.
     return mapa
+
+
+# --- cache da lista de classificações do acervo -----------------------------
+#
+# `classificacoes_do_acervo()` varre a COLEÇÃO INTEIRA (~11.000 pontos no
+# acervo real, ~0,9 s de CPU). Ela é chamada a cada `criar()` e a cada
+# renderização da aba — e o Streamlit re-executa o script inteiro a cada
+# interação, renderizando TODAS as abas. Sem cache, aprovar um ensinamento
+# qualquer na aba ao lado já custava uma varredura completa do Qdrant.
+#
+# TTL mais longo que o dos apelidos porque a árvore do catálogo só muda numa
+# ingestão, não numa aprovação. Ainda assim é curto o bastante para uma linha
+# recém-indexada ficar cadastrável no mesmo turno de trabalho.
+_TTL_CLASSIFICACOES_SEGUNDOS = 300.0
+_cache_classificacoes: Optional[List[str]] = None
+_cache_classificacoes_em: float = 0.0
+_lock_classificacoes = threading.Lock()
+
+
+def invalidar_cache_de_classificacoes() -> None:
+    global _cache_classificacoes, _cache_classificacoes_em
+    with _lock_classificacoes:
+        _cache_classificacoes = None
+        _cache_classificacoes_em = 0.0
 
 
 def registrar_no_resolvedor() -> None:
@@ -149,17 +196,36 @@ def registrar_no_resolvedor() -> None:
 
 # --- classificações disponíveis (para a tela oferecer, não digitar) ---------
 
-def classificacoes_do_acervo() -> List[str]:
+def classificacoes_do_acervo(forcar: bool = False) -> List[str]:
     """Rótulos reais da árvore do catálogo, como aparecem no acervo.
 
     A tela usa isto num seletor em vez de campo livre. Não é conforto: digitar
     "FLEXX TH" onde o acervo diz "FLEXX® TH" produziria um apelido que nunca
     resolve, sem nenhum erro visível.
+
+    Uma falha ao ler o acervo PROPAGA e não vira cache: gravar lista vazia
+    porque o Qdrant piscou deixaria "nenhuma classificação encontrada" na tela
+    por cinco minutos depois de ele voltar.
     """
+    global _cache_classificacoes, _cache_classificacoes_em
+    if not forcar:
+        with _lock_classificacoes:
+            agora = time.monotonic()
+            if (
+                _cache_classificacoes is not None
+                and (agora - _cache_classificacoes_em) < _TTL_CLASSIFICACOES_SEGUNDOS
+            ):
+                return list(_cache_classificacoes)
+
     resultado = catalog_stats.listar_produtos_por_classificacao_catalogo(
         "__inexistente__"
     )
-    return list(resultado.get("classificacoes_disponiveis") or [])
+    classificacoes = list(resultado.get("classificacoes_disponiveis") or [])
+
+    with _lock_classificacoes:
+        _cache_classificacoes = classificacoes
+        _cache_classificacoes_em = time.monotonic()
+    return list(classificacoes)
 
 
 # --- CRUD -------------------------------------------------------------------
@@ -178,11 +244,28 @@ def criar(
         raise TermoInvalidoError("Escolha a linha do catálogo.")
     if len(termo) < 2:
         raise TermoInvalidoError("O termo precisa ter pelo menos 2 caracteres.")
+    # "---" tem 3 caracteres e normaliza para "". A chave vazia nunca resolve
+    # para o que a pessoa quis E casa com QUALQUER pergunta cujo termo também
+    # normalize para vazio — pelo nível `classificacao_estrutural`, o mais
+    # forte da cascata. Falha silenciosa nas duas pontas.
+    if len(normalizar(termo)) < 2:
+        raise TermoInvalidoError(
+            "O termo precisa ter pelo menos 2 letras ou números — só símbolos "
+            "não identificam nada."
+        )
     if len(termo) > 200 or len(classificacao) > 200:
         raise TermoInvalidoError("Termo ou classificação longos demais (máx. 200).")
 
     rotulo = normalizar(classificacao)
     disponiveis = {normalizar(c): c for c in classificacoes_do_acervo()}
+    if rotulo not in disponiveis:
+        # Antes de dizer "essa linha não existe", relê o acervo ignorando o
+        # cache. Uma linha indexada há dois minutos tem que ser cadastrável
+        # AGORA — recusar por causa de uma lista de cinco minutos atrás seria o
+        # cache inventando a falha silenciosa que ele deveria evitar.
+        disponiveis = {
+            normalizar(c): c for c in classificacoes_do_acervo(forcar=True)
+        }
     if rotulo not in disponiveis:
         raise ClassificacaoInexistenteError(
             f'A linha "{classificacao}" não existe na árvore do acervo. '
@@ -226,7 +309,11 @@ def aprovar(session: Session, item_id, *, aprovador: User) -> TermoDeNegocio:
     item.decidido_por_id = aprovador.id
     item.decidido_em = _utcnow()
     session.flush()
-    invalidar_cache()
+    # A invalidação NÃO acontece aqui: `flush()` ainda não é `commit()`. Entre
+    # um e outro, uma pergunta concorrente abre outra conexão, não enxerga a
+    # linha, e regrava o cache VAZIO com carimbo novo — válido por 60 s, com a
+    # tela mostrando "Em uso" e o agente dizendo que não encontrou. Quem commita
+    # é quem invalida (ver `_commit_traduzindo_erros` no router).
     logger.info(
         "Termo de negócio aprovado: %r -> %s", item.termo, item.classificacao
     )
@@ -243,11 +330,9 @@ def recusar(session: Session, item_id, *, aprovador: User, motivo: str) -> Termo
     item.decidido_por_id = aprovador.id
     item.decidido_em = _utcnow()
     session.flush()
-    invalidar_cache()
     return item
 
 
 def excluir(session: Session, item_id) -> None:
     session.delete(_obter(session, item_id))
     session.flush()
-    invalidar_cache()

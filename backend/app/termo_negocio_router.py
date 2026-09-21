@@ -22,6 +22,7 @@ from app.db import get_session
 from app.models import StatusDocumento, TermoDeNegocio, User
 from app.termo_negocio_service import (
     ClassificacaoInexistenteError,
+    invalidar_cache,
     TermoInvalidoError,
     TermoNaoEncontradoError,
     aprovar,
@@ -87,6 +88,12 @@ def _commit_traduzindo_erros(session: Session):
     try:
         yield
         session.commit()
+        # DEPOIS do commit, nunca antes. Invalidar no `flush()` abria uma
+        # janela em que uma pergunta concorrente lia o banco pela sua própria
+        # conexão, não via a linha ainda não commitada, e regravava o cache
+        # vazio com carimbo novo — válido por 60 s, com a tela mostrando
+        # "Em uso" e o agente respondendo que não encontrou.
+        invalidar_cache()
     except ClassificacaoInexistenteError as e:
         session.rollback()
         raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(e))
