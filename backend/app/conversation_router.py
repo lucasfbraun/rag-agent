@@ -26,6 +26,7 @@ class ConversationMessageResponse(BaseModel):
     role: str
     content: str
     sources: list[str]
+    source_refs: list[dict]
     model_used: str | None
     created_at: datetime
 
@@ -57,6 +58,7 @@ def _response(conversation: Conversation) -> ConversationResponse:
                 role=message.role,
                 content=message.content,
                 sources=message.sources or [],
+                source_refs=message.source_refs or [],
                 model_used=message.model_used,
                 created_at=message.created_at,
             )

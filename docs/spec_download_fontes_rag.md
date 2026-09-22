@@ -73,6 +73,10 @@ Adicionar `source_refs JSONB nullable` em `conversation_messages`.
 Isso permite que um pedido posterior use as fontes ja resolvidas da ultima
 resposta, sem depender de nova busca vetorial nem de decisao do LLM.
 
+Status: concluido na migration `9b1a2c3d4e5f`, no model
+`ConversationMessage`, no `save_exchange` e nos endpoints de conversa. O campo
+e opcional e mensagens antigas voltam com `source_refs: []`.
+
 ### 4. Interface no frontend
 
 Onde o chat hoje mostra apenas os nomes em `sources`, renderizar as fontes com

@@ -232,6 +232,7 @@ def match_product(
             query=req.query,
             answer=res["answer"],
             sources=res.get("sources"),
+            source_refs=res.get("source_refs"),
             model_used=res.get("model_used"),
             caminho=res.get("caminho"),
             termos_busca=res.get("termos_busca"),
@@ -299,6 +300,7 @@ def match_product_stream(
     def persist_and_stream():
         answer_parts = []
         sources = []
+        source_refs = []
         model_used = req.model_name
         # Rastro de recuperação: só o evento `meta` o conhece, e ele chega
         # antes do primeiro delta. Guardar aqui é o que permite gravá-lo junto
@@ -318,6 +320,7 @@ def match_product_stream(
 
             if event.get("type") == "meta":
                 sources = event.get("sources") or []
+                source_refs = event.get("source_refs") or []
                 model_used = event.get("model_used") or req.model_name
                 caminho = event.get("caminho")
                 termos_busca = event.get("termos_busca")
@@ -339,6 +342,7 @@ def match_product_stream(
                         query=req.query,
                         answer=answer,
                         sources=sources,
+                        source_refs=source_refs,
                         model_used=model_used,
                         caminho=caminho,
                         termos_busca=termos_busca,

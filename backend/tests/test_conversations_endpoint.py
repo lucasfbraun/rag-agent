@@ -122,6 +122,13 @@ def test_match_persiste_pergunta_resposta_e_metadados_na_conversa(
         agent.return_value = {
             "answer": "Use o produto FLEXX TESTE.",
             "sources": ["Boletim Teste.pdf"],
+            "source_refs": [
+                {
+                    "id": "src_0123456789abcdef0123456789abcdef",
+                    "nome_arquivo": "Boletim Teste.pdf",
+                    "download_url": "/api/documentos/fontes/src_0123456789abcdef0123456789abcdef/download",
+                }
+            ],
             "model_used": "gpt-4o-mini",
         }
         response = client.post(
@@ -143,6 +150,13 @@ def test_match_persiste_pergunta_resposta_e_metadados_na_conversa(
     assert saved["messages"][0]["content"] == query
     assert saved["messages"][1]["content"] == "Use o produto FLEXX TESTE."
     assert saved["messages"][1]["sources"] == ["Boletim Teste.pdf"]
+    assert saved["messages"][1]["source_refs"] == [
+        {
+            "id": "src_0123456789abcdef0123456789abcdef",
+            "nome_arquivo": "Boletim Teste.pdf",
+            "download_url": "/api/documentos/fontes/src_0123456789abcdef0123456789abcdef/download",
+        }
+    ]
     assert saved["messages"][1]["model_used"] == "gpt-4o-mini"
 
 
@@ -155,6 +169,13 @@ def test_match_stream_persiste_resposta_completa_apos_done(client, auth_factory)
                 {
                     "type": "meta",
                     "sources": ["Boletim Stream.pdf"],
+                    "source_refs": [
+                        {
+                            "id": "src_fedcba9876543210fedcba9876543210",
+                            "nome_arquivo": "Boletim Stream.pdf",
+                            "download_url": "/api/documentos/fontes/src_fedcba9876543210fedcba9876543210/download",
+                        }
+                    ],
                     "model_used": "gpt-4o-mini",
                 }
             )
@@ -184,6 +205,13 @@ def test_match_stream_persiste_resposta_completa_apos_done(client, auth_factory)
     ).json()
     assert saved["messages"][1]["content"] == "Resposta completa."
     assert saved["messages"][1]["sources"] == ["Boletim Stream.pdf"]
+    assert saved["messages"][1]["source_refs"] == [
+        {
+            "id": "src_fedcba9876543210fedcba9876543210",
+            "nome_arquivo": "Boletim Stream.pdf",
+            "download_url": "/api/documentos/fontes/src_fedcba9876543210fedcba9876543210/download",
+        }
+    ]
     assert saved["messages"][1]["model_used"] == "gpt-4o-mini"
 
 
