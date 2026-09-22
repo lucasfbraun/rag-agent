@@ -62,6 +62,10 @@ Regras:
 - responder `404` para referencia inexistente ou arquivo removido;
 - responder `400` para identificador invalido.
 
+Status: concluido em `GET /api/documentos/fontes/{source_id}/download`. O
+endpoint exige `VIEW_CATALOG`, resolve o id pelo modulo de fontes e traduz id
+malformado para `400` e arquivo ausente para `404`.
+
 ### 3. Persistencia no historico
 
 Adicionar `source_refs JSONB nullable` em `conversation_messages`.

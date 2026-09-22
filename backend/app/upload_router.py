@@ -9,11 +9,17 @@ import uuid
 from contextlib import contextmanager
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile, status
+from fastapi.responses import FileResponse
 from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
 from app.auth.permissions import Permission, has_permission, require_permission
 from app.db import get_session
+from app.document_source_service import (
+    SourceIdInvalidoError,
+    SourceNaoEncontradaError,
+    resolver_source_id,
+)
 from app.models import DocumentoEnviado, StatusDocumento, User
 from app.upload_service import (
     DecisaoInvalidaError,
@@ -63,6 +69,30 @@ class DocumentoResponse(BaseModel):
 
 class DecisaoRequest(BaseModel):
     motivo: str = Field(min_length=1, max_length=1000)
+
+
+@router.get("/fontes/{source_id}/download")
+def baixar_fonte_rag(
+    source_id: str,
+    usuario: User = Depends(require_permission(Permission.VIEW_CATALOG)),
+):
+    """Baixa um arquivo citado como fonte pelo RAG.
+
+    O `source_id` e opaco: o cliente nao recebe caminho de arquivo e tambem nao
+    escolhe caminho para o servidor abrir. A resolucao valida formato,
+    assinatura e raiz permitida no modulo de fontes.
+    """
+    try:
+        caminho = resolver_source_id(source_id)
+    except SourceIdInvalidoError as e:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, str(e))
+    except SourceNaoEncontradaError as e:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, str(e))
+    return FileResponse(
+        path=caminho,
+        filename=caminho.name,
+        media_type="application/octet-stream",
+    )
 
 
 @contextmanager
