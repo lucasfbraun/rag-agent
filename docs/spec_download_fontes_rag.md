@@ -40,6 +40,11 @@ Adicionar uma representacao estruturada de fonte:
 O campo `sources` atual continua existindo como lista de nomes para
 compatibilidade. O novo campo `source_refs` carrega os dados de download.
 
+Status: concluido no modulo `app.document_source_service`. A interface publica
+da etapa e `montar_source_refs(docs)` e `resolver_source_id(source_id)`. O id da
+fonte e derivado de HMAC do caminho canonico e o caminho absoluto nao aparece na
+resposta JSON.
+
 ### 2. Endpoint de download
 
 Criar:
@@ -96,4 +101,3 @@ Cada etapa finalizada deve ser documentada e commitada separadamente:
 5. retornar `source_refs` no agente e no streaming;
 6. renderizar downloads no frontend;
 7. adicionar o atalho conversacional para "traga o arquivo".
-

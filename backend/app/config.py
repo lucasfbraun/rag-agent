@@ -175,6 +175,20 @@ if not SECRET_KEY:
 ACCESS_TOKEN_EXPIRE_MINUTES = int(os.getenv("ACCESS_TOKEN_EXPIRE_MINUTES", 480))  # 8h, um turno
 REMEMBER_ME_EXPIRE_DAYS = int(os.getenv("REMEMBER_ME_EXPIRE_DAYS", 30))
 
+# Raizes autorizadas para servir arquivos citados pelo RAG. Separadas por
+# virgula para funcionar igual em Linux e Windows (os.pathsep conflita com
+# "C:\..." em ambiente local). O endpoint de download nunca usa o filepath
+# vindo do cliente; ele resolve um identificador assinado e confirma que o
+# arquivo ainda vive dentro de uma destas raizes.
+RAG_DOWNLOAD_ROOTS = tuple(
+    raiz.strip()
+    for raiz in os.getenv(
+        "RAG_DOWNLOAD_ROOTS",
+        "/app/data/raw_documents,/app/data/uploads,data/raw_documents,data/uploads",
+    ).split(",")
+    if raiz.strip()
+)
+
 # ---------------------------------------------------------------------------
 # Active Directory / LDAP (vínculo de usuário — ver app/auth/ldap_service.py)
 # ---------------------------------------------------------------------------
