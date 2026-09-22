@@ -83,6 +83,11 @@ Onde o chat hoje mostra apenas os nomes em `sources`, renderizar as fontes com
 acao de download quando `source_refs` existir. Mensagens antigas sem
 `source_refs` continuam mostrando o texto atual.
 
+Pre-requisito concluido: o agente sincrono e o streaming ja publicam
+`source_refs`. No caminho conversacional, as referencias sao montadas a partir
+dos payloads recuperados do Qdrant; nos demais caminhos, o campo sai como lista
+vazia ate existir caminho fisico confiavel para aquelas fontes deterministicas.
+
 ### 5. Pedido conversacional de arquivo
 
 Detectar pedidos como:

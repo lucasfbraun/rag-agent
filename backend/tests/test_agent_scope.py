@@ -46,6 +46,7 @@ def test_stream_de_pergunta_culinaria_nao_consulta_catalogo_nem_modelo():
     assert eventos[0] == {
         "type": "meta",
         "sources": [],
+        "source_refs": [],
         "model_used": "escopo-deterministico",
         "caminho": "escopo-deterministico",
         "termos_busca": [],

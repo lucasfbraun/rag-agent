@@ -7,6 +7,7 @@ from itertools import zip_longest
 from typing import List, Dict, Any, Optional
 import litellm
 from qdrant_client.http import models as qmodels
+from app.document_source_service import montar_source_refs
 from app.templates import obter_instrucao_template
 from app.mcp.pu_mcp_server import MCP_TOOLS_DEFINITIONS, execute_mcp_tool
 from app.rag.doc_sections import (
@@ -2059,7 +2060,13 @@ def _com_rastro(
     medição, e um detector novo que alguém esqueça de marcar cai em
     `CAMINHO_DESCONHECIDO` no relatório em vez de mentir sobre qual foi.
     """
-    return {**resposta, "caminho": caminho, "termos_busca": list(termos or [])}
+    resposta_completa = {**resposta}
+    resposta_completa.setdefault("source_refs", [])
+    return {
+        **resposta_completa,
+        "caminho": caminho,
+        "termos_busca": list(termos or []),
+    }
 
 
 def run_pu_matcher_agent(
@@ -2174,9 +2181,15 @@ MENSAGEM / DEMANDA DO VENDEDOR OU CLIENTE:
         answer = choice.message.content
 
     answer = _aplicar_guardrails_resposta(query, answer, history)
-    sources = list(set([d.get("filename") for d in docs if d.get("filename")]))
+    sources = sorted(set([d.get("filename") for d in docs if d.get("filename")]))
+    source_refs = montar_source_refs(docs)
     return _com_rastro(
-        {"answer": answer, "sources": sources, "model_used": model_name},
+        {
+            "answer": answer,
+            "sources": sources,
+            "source_refs": source_refs,
+            "model_used": model_name,
+        },
         CAMINHO_CONVERSACIONAL,
         _termos_efetivamente_pesquisados(query_recuperacao),
     )
@@ -2207,7 +2220,8 @@ def stream_pu_matcher_agent(
     resposta_fora_do_escopo = _responder_fora_do_escopo(query)
     if resposta_fora_do_escopo is not None:
         yield _json.dumps({
-            "type": "meta", "sources": [], "model_used": "escopo-deterministico",
+            "type": "meta", "sources": [], "source_refs": [],
+            "model_used": "escopo-deterministico",
             "caminho": CAMINHO_FORA_DE_ESCOPO, "termos_busca": [],
         }) + "\n"
         yield _json.dumps({
@@ -2222,6 +2236,7 @@ def stream_pu_matcher_agent(
             yield _json.dumps({
                 "type": "meta",
                 "sources": resposta_reversa["sources"],
+                "source_refs": resposta_reversa.get("source_refs", []),
                 "model_used": resposta_reversa["model_used"],
                 "caminho": CAMINHO_BUSCA_REVERSA,
                 "termos_busca": _detectar_codigos_produto(query),
@@ -2237,6 +2252,7 @@ def stream_pu_matcher_agent(
             yield _json.dumps({
                 "type": "meta",
                 "sources": resposta_composta["sources"],
+                "source_refs": resposta_composta.get("source_refs", []),
                 "model_used": resposta_composta["model_used"],
                 "caminho": CAMINHO_REQUISITOS_COMPOSTOS, "termos_busca": [],
             }) + "\n"
@@ -2260,6 +2276,7 @@ def stream_pu_matcher_agent(
                 yield _json.dumps({
                     "type": "meta",
                     "sources": resposta_natureza["sources"],
+                    "source_refs": resposta_natureza.get("source_refs", []),
                     "model_used": resposta_natureza["model_used"],
                     "caminho": CAMINHO_NATUREZA,
                     "termos_busca": [termo_natureza],
@@ -2272,7 +2289,8 @@ def stream_pu_matcher_agent(
 
         if classificacao_catalogo:
             yield _json.dumps({
-                "type": "meta", "sources": [], "model_used": "catalogo-estruturado",
+                "type": "meta", "sources": [], "source_refs": [],
+                "model_used": "catalogo-estruturado",
                 "caminho": CAMINHO_CLASSIFICACAO,
                 "termos_busca": [classificacao_catalogo],
             }) + "\n"
@@ -2290,6 +2308,7 @@ def stream_pu_matcher_agent(
             yield _json.dumps({
                 "type": "meta",
                 "sources": resposta_aplicacao["sources"],
+                "source_refs": resposta_aplicacao.get("source_refs", []),
                 "model_used": resposta_aplicacao["model_used"],
                 "caminho": CAMINHO_APLICACAO, "termos_busca": [],
             }) + "\n"
@@ -2324,9 +2343,11 @@ MENSAGEM / DEMANDA DO VENDEDOR OU CLIENTE:
 """
     messages.append({"role": "user", "content": user_prompt})
 
-    sources = list(set([d.get("filename") for d in docs if d.get("filename")]))
+    sources = sorted(set([d.get("filename") for d in docs if d.get("filename")]))
+    source_refs = montar_source_refs(docs)
     yield _json.dumps({
-        "type": "meta", "sources": sources, "model_used": model_name,
+        "type": "meta", "sources": sources, "source_refs": source_refs,
+        "model_used": model_name,
         "caminho": CAMINHO_CONVERSACIONAL,
         "termos_busca": _termos_efetivamente_pesquisados(query_recuperacao),
     }) + "\n"
