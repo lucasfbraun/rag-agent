@@ -338,11 +338,10 @@ def _filtrar_docs_por_codigo_exato(
 ) -> List[Dict[str, Any]]:
     if not codigos:
         return docs
-    filtrados = [
+    return [
         doc for doc in docs
         if any(_doc_casa_com_codigo(doc, codigo) for codigo in codigos)
     ]
-    return filtrados or docs
 
 
 def _responder_download_direto_de_fontes(
@@ -354,6 +353,16 @@ def _responder_download_direto_de_fontes(
     docs = retrieve_products_context(query, top_k=10, incluir_sensivel=ver_custos)
     codigos = _detectar_codigos_produto(query)
     docs = _filtrar_docs_por_codigo_exato(docs, codigos)
+    if codigos and not docs:
+        return {
+            "answer": (
+                "Nao encontrei nenhum arquivo cujo nome ou caminho bata "
+                f"exatamente com {', '.join(c.upper() for c in codigos)}."
+            ),
+            "sources": [],
+            "source_refs": [],
+            "model_used": "atalho-download-fontes",
+        }
     source_refs = montar_source_refs(docs)
     if not source_refs:
         sources = sorted(set([d.get("filename") for d in docs if d.get("filename")]))

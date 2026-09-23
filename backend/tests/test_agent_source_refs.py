@@ -124,6 +124,38 @@ def test_run_pu_matcher_agent_download_direto_filtra_codigo_exato(
     ]
 
 
+def test_run_pu_matcher_agent_download_direto_nao_cai_em_vizinhos_sem_codigo(
+    tmp_path, monkeypatch
+):
+    arquivo_rge = tmp_path / "Boletim FLEXX RGE 2020.pdf"
+    arquivo_iso = tmp_path / "Boletim FLEXX ISO 131500.pdf"
+    for arquivo in (arquivo_rge, arquivo_iso):
+        arquivo.write_bytes(b"conteudo")
+    monkeypatch.setattr(fontes, "RAG_DOWNLOAD_ROOTS", (str(tmp_path),))
+    docs = [
+        {
+            "filename": arquivo_rge.name,
+            "filepath": str(arquivo_rge),
+            "chunk_index": 0,
+            "content": "vizinho semantico",
+        },
+        {
+            "filename": arquivo_iso.name,
+            "filepath": str(arquivo_iso),
+            "chunk_index": 0,
+            "content": "outro vizinho",
+        },
+    ]
+
+    with patch("app.rag.engine.retrieve_products_context", return_value=docs):
+        resposta = run_pu_matcher_agent(query="me traga o boletim do AG 2060")
+
+    assert resposta["sources"] == []
+    assert resposta["source_refs"] == []
+    assert "AG 2060" in resposta["answer"]
+    assert arquivo_rge.name not in resposta["answer"]
+
+
 def test_stream_pu_matcher_agent_publica_source_refs_no_meta(tmp_path, monkeypatch):
     arquivo = tmp_path / "Boletim FLEXX AG 2032.pdf"
     arquivo.write_bytes(b"conteudo")
