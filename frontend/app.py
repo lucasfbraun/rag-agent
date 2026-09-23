@@ -379,6 +379,7 @@ def _carregar_conversa(conversation_id: str) -> bool:
                 "role": message["role"],
                 "content": message["content"],
                 "sources": message.get("sources") or [],
+                "source_refs": message.get("source_refs") or [],
                 "model_used": message.get("model_used") or "",
             }
             for message in data.get("messages", [])
@@ -428,6 +429,67 @@ def _enviar_feedback(query: str, resposta: dict, util: bool) -> bool:
         return resp.status_code == 200
     except requests.exceptions.RequestException:
         return False
+
+
+def _url_download_fonte(download_url: str) -> str:
+    if download_url.startswith("http://") or download_url.startswith("https://"):
+        return download_url
+    if download_url.startswith("/"):
+        return f"{API_BASE}{download_url}"
+    return f"{API_BASE}/{download_url}"
+
+
+def _baixar_fonte_rag(ref: dict):
+    """Baixa fonte citada pelo RAG usando o token de sessao atual."""
+    url = ref.get("download_url")
+    if not url:
+        return False, "Fonte sem URL de download.", None
+    try:
+        resposta = requests.get(
+            _url_download_fonte(url), headers=_auth_headers(), timeout=60
+        )
+    except requests.exceptions.RequestException:
+        return False, "Nao foi possivel baixar o arquivo.", None
+
+    if resposta.status_code == 401:
+        _fazer_logout()
+        st.rerun()
+    if resposta.status_code != 200:
+        return False, f"Download indisponivel ({resposta.status_code}).", None
+    return True, "", resposta.content
+
+
+def _renderizar_fontes_da_resposta(msg: dict, key_prefix: str):
+    refs = msg.get("source_refs") or []
+    if refs:
+        st.caption("📚 **Boletins Técnicos (TDS) Consultados:**")
+        for indice, ref in enumerate(refs):
+            nome = ref.get("nome_arquivo") or "arquivo"
+            source_id = ref.get("id") or str(indice)
+            col_nome, col_acao = st.columns([5, 1])
+            with col_nome:
+                st.caption(nome)
+            with col_acao:
+                chave = f"baixar_fonte_{key_prefix}_{indice}_{source_id}"
+                if st.button("Baixar", key=chave, icon=":material/download:"):
+                    ok, erro, conteudo = _baixar_fonte_rag(ref)
+                    if ok:
+                        st.download_button(
+                            "Salvar",
+                            data=conteudo,
+                            file_name=nome,
+                            mime="application/octet-stream",
+                            key=f"salvar_fonte_{key_prefix}_{indice}_{source_id}",
+                            icon=":material/save:",
+                        )
+                    else:
+                        st.error(erro)
+        return
+
+    if msg.get("sources"):
+        st.caption(
+            f"📚 **Boletins Técnicos (TDS) Consultados:** {', '.join(msg['sources'])}"
+        )
 
 
 def _renderizar_form_correcao(idx: int, pergunta: str, msg: dict):
@@ -2079,8 +2141,7 @@ st.caption(
 for idx, msg in enumerate(st.session_state.messages):
     with st.chat_message(msg["role"], avatar=_avatar(msg["role"])):
         st.markdown(msg["content"])
-        if "sources" in msg and msg["sources"]:
-            st.caption(f"📚 **Boletins Técnicos (TDS) Consultados:** {', '.join(msg['sources'])}")
+        _renderizar_fontes_da_resposta(msg, f"historico_{idx}")
         if "model_used" in msg and msg["model_used"]:
             st.caption(f"🤖 Modelo: `{msg['model_used']}`")
         if msg["role"] == "assistant":
@@ -2140,6 +2201,7 @@ if prompt:
         if use_streaming:
             _stream_state = {
                 "sources": [],
+                "source_refs": [],
                 "model": selected_model,
                 "answer": "",
                 "expired": False,
@@ -2166,6 +2228,7 @@ if prompt:
 
                             if event["type"] == "meta":
                                 _stream_state["sources"] = event.get("sources", [])
+                                _stream_state["source_refs"] = event.get("source_refs", [])
                                 _stream_state["model"] = event.get("model_used", selected_model)
                                 st.session_state.active_conversation_id = event.get(
                                     "conversation_id", st.session_state.active_conversation_id
@@ -2194,14 +2257,14 @@ if prompt:
                 _fazer_logout()
                 st.rerun()
 
-            if _stream_state["sources"]:
-                st.caption(f"📚 **Boletins Técnicos (TDS) Consultados:** {', '.join(_stream_state['sources'])}")
+            _renderizar_fontes_da_resposta(_stream_state, "stream_atual")
             st.caption(f"🤖 Modelo: `{_stream_state['model']}`")
 
             st.session_state.messages.append({
                 "role": "assistant",
                 "content": _stream_state["answer"],
                 "sources": _stream_state["sources"],
+                "source_refs": _stream_state["source_refs"],
                 "model_used": _stream_state["model"]
             })
             _renderizar_feedback(len(st.session_state.messages) - 1, st.session_state.messages[-1])
@@ -2221,14 +2284,14 @@ if prompt:
                             "conversation_id", st.session_state.active_conversation_id
                         )
                         st.markdown(data["answer"])
-                        if data.get("sources"):
-                            st.caption(f"📚 **Boletins Técnicos (TDS) Consultados:** {', '.join(data['sources'])}")
+                        _renderizar_fontes_da_resposta(data, "sync_atual")
                         if data.get("model_used"):
                             st.caption(f"🤖 Modelo: `{data['model_used']}`")
                         st.session_state.messages.append({
                             "role": "assistant",
                             "content": data["answer"],
                             "sources": data.get("sources", []),
+                            "source_refs": data.get("source_refs", []),
                             "model_used": data.get("model_used", "")
                         })
                         _renderizar_feedback(len(st.session_state.messages) - 1, st.session_state.messages[-1])

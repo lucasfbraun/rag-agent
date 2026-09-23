@@ -90,6 +90,13 @@ def _fake_get(url, **_kwargs):
                         "role": "assistant",
                         "content": "Resposta salva",
                         "sources": ["Boletim X.pdf"],
+                        "source_refs": [
+                            {
+                                "id": "src_0123456789abcdef0123456789abcdef",
+                                "nome_arquivo": "Boletim X.pdf",
+                                "download_url": "/api/documentos/fontes/src_0123456789abcdef0123456789abcdef/download",
+                            }
+                        ],
                         "model_used": "gpt-4o-mini",
                         "created_at": "2026-09-02T12:01:00Z",
                     },
@@ -138,6 +145,7 @@ def test_selecionar_conversa_renderiza_mensagens_salvas():
     markdown_values = [element.value for element in app.markdown]
     assert "Qual produto atende colchoes?" in markdown_values
     assert "Resposta salva" in markdown_values
+    assert "Baixar" in [button.label for button in app.button]
 
 
 def test_excluir_conversa_ativa_limpa_a_tela():

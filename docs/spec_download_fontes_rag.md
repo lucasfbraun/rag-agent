@@ -88,6 +88,10 @@ Pre-requisito concluido: o agente sincrono e o streaming ja publicam
 dos payloads recuperados do Qdrant; nos demais caminhos, o campo sai como lista
 vazia ate existir caminho fisico confiavel para aquelas fontes deterministicas.
 
+Status: concluido. O chat preserva `source_refs` ao carregar historico e ao
+receber respostas novas; quando existem referencias estruturadas, exibe acao de
+download autenticado. Mensagens antigas continuam usando apenas `sources`.
+
 ### 5. Pedido conversacional de arquivo
 
 Detectar pedidos como:
