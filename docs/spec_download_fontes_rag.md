@@ -145,6 +145,22 @@ do backend porque o Alembic encontrou dois heads (`9b1a2c3d4e5f` e
 revision sem mudanca de schema para unir as duas linhas de migration e um teste
 de regressao para garantir que o grafo volte a ter um unico head.
 
+## Correcao do pedido "me traga o arquivo"
+
+Status: concluido. Em consulta real sobre AG 2032, a resposta exibiu `sources`
+com os PDFs consultados, mas o pedido seguinte "me traga o arquivo" respondeu
+que nao havia arquivo recuperado. A causa era que `source_refs` so era montado
+quando o `filepath` do Qdrant ja era baixavel no ambiente atual; se o caminho
+vinha de outro ambiente ou ficava fora das raizes do container, o agente
+mostrava o nome da fonte mas persistia `source_refs: []`.
+
+Agora o modulo de fontes tenta primeiro o `filepath` permitido e, se ele nao
+servir, resolve o arquivo pelo `filename` dentro das raizes configuradas. O
+orquestrador tambem enriquece respostas que tenham `sources` sem `source_refs`,
+incluindo metadados de streaming. Assim, apos uma resposta que cite
+`Boletim FLEXX AG 2032 ESP.pdf`, o turno seguinte pode reutilizar a fonte e
+mostrar o download.
+
 ## Sequencia de commits
 
 Cada etapa finalizada deve ser documentada e commitada separadamente:
@@ -158,3 +174,4 @@ Cada etapa finalizada deve ser documentada e commitada separadamente:
 7. adicionar o atalho conversacional para "traga o arquivo".
 8. revisar e testar a entrega com subagentes.
 9. corrigir o grafo de migrations para o deploy.
+10. resolver fontes por nome quando o caminho do indice nao e baixavel.

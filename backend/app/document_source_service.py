@@ -81,24 +81,49 @@ def _esta_em_raiz_permitida(path: Path, raizes: Iterable[Path]) -> bool:
     return False
 
 
+def _buscar_por_filename(filename: str, raizes: Iterable[Path]) -> Path | None:
+    nome_normalizado = filename.casefold()
+    candidatos: list[Path] = []
+    for raiz in raizes:
+        if not raiz.exists() or not raiz.is_dir():
+            continue
+        for candidato in raiz.rglob("*"):
+            if candidato.is_file() and candidato.name.casefold() == nome_normalizado:
+                candidatos.append(candidato)
+    if not candidatos:
+        return None
+    return sorted(candidatos, key=_normalizar_caminho)[0]
+
+
+def _caminho_baixavel_do_doc(doc: dict[str, Any], raizes: list[Path]) -> Path | None:
+    filepath = doc.get("filepath")
+    if filepath:
+        caminho = Path(str(filepath))
+        if _esta_em_raiz_permitida(caminho, raizes):
+            return caminho
+
+    filename = doc.get("filename")
+    if not filename:
+        return None
+    return _buscar_por_filename(str(filename), raizes)
+
+
 def montar_source_refs(docs: list[dict[str, Any]]) -> list[dict[str, str]]:
     """Monta referencias baixaveis a partir dos payloads recuperados do Qdrant.
 
     Deduplica por caminho canonico, ignora payload incompleto e ignora arquivos
-    fora das raizes permitidas. A interface devolve dicts para encaixar direto
-    nos payloads JSON ja usados pelos endpoints.
+    fora das raizes permitidas. Quando o payload traz um `filepath` antigo ou
+    de outro ambiente, tenta resolver pelo `filename` dentro das raizes
+    configuradas. A interface devolve dicts para encaixar direto nos payloads
+    JSON ja usados pelos endpoints.
     """
     raizes = _raizes_permitidas()
     vistos: set[str] = set()
     refs: list[SourceRef] = []
 
     for doc in docs:
-        filepath = doc.get("filepath")
-        if not filepath:
-            continue
-
-        caminho = Path(str(filepath))
-        if not _esta_em_raiz_permitida(caminho, raizes):
+        caminho = _caminho_baixavel_do_doc(doc, raizes)
+        if caminho is None:
             continue
 
         chave = _normalizar_caminho(caminho)
@@ -143,4 +168,3 @@ def resolver_source_id(source_id: str) -> Path:
             if _source_id_para_caminho(candidato) == source_id:
                 return candidato
     raise SourceNaoEncontradaError("Arquivo de fonte nao encontrado.")
-

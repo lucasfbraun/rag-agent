@@ -40,6 +40,28 @@ def test_run_pu_matcher_agent_devolve_source_refs_dos_docs_recuperados(
     ]
 
 
+def test_run_pu_matcher_agent_resolve_source_refs_por_nome_quando_path_e_antigo(
+    tmp_path, monkeypatch
+):
+    arquivo = tmp_path / "Boletim FLEXX AG 2032 ESP.pdf"
+    arquivo.write_bytes(b"conteudo")
+    monkeypatch.setattr(fontes, "RAG_DOWNLOAD_ROOTS", (str(tmp_path),))
+    docs = [{
+        "filename": arquivo.name,
+        "filepath": "/mnt/acervo/antigo/" + arquivo.name,
+        "chunk_index": 0,
+        "content": "dados do AG 2032",
+    }]
+
+    with patch("app.rag.engine.retrieve_products_context", return_value=docs), \
+         patch("app.rag.engine.litellm.completion", return_value=_final_completion("ok")):
+        resposta = run_pu_matcher_agent(query="me fale sobre AG 2032")
+
+    assert resposta["sources"] == [arquivo.name]
+    assert resposta["source_refs"][0]["nome_arquivo"] == arquivo.name
+    assert resposta["source_refs"][0]["download_url"].endswith("/download")
+
+
 def test_stream_pu_matcher_agent_publica_source_refs_no_meta(tmp_path, monkeypatch):
     arquivo = tmp_path / "Boletim FLEXX AG 2032.pdf"
     arquivo.write_bytes(b"conteudo")
@@ -62,4 +84,3 @@ def test_stream_pu_matcher_agent_publica_source_refs_no_meta(tmp_path, monkeypat
     assert meta["sources"] == [arquivo.name]
     assert meta["source_refs"][0]["nome_arquivo"] == arquivo.name
     assert meta["source_refs"][0]["download_url"].endswith("/download")
-

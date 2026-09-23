@@ -29,6 +29,24 @@ def test_monta_source_refs_deduplica_e_nao_expoe_filepath(tmp_path, monkeypatch)
     assert str(arquivo) not in str(refs)
 
 
+def test_monta_source_refs_resolve_por_filename_quando_filepath_nao_serve(
+    tmp_path, monkeypatch
+):
+    arquivo = tmp_path / "Boletim FLEXX AG 2032.pdf"
+    arquivo.write_bytes(b"conteudo")
+    monkeypatch.setattr(fontes, "RAG_DOWNLOAD_ROOTS", (str(tmp_path),))
+
+    refs = fontes.montar_source_refs([
+        {
+            "filename": arquivo.name,
+            "filepath": "/caminho/antigo/fora/do/container/" + arquivo.name,
+        }
+    ])
+
+    assert refs[0]["nome_arquivo"] == arquivo.name
+    assert fontes.resolver_source_id(refs[0]["id"]) == arquivo
+
+
 def test_ignora_arquivo_fora_das_raizes_permitidas(tmp_path, monkeypatch):
     permitido = tmp_path / "permitido"
     proibido = tmp_path / "proibido"

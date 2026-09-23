@@ -2061,12 +2061,25 @@ def _com_rastro(
     `CAMINHO_DESCONHECIDO` no relatório em vez de mentir sobre qual foi.
     """
     resposta_completa = {**resposta}
-    resposta_completa.setdefault("source_refs", [])
+    if not resposta_completa.get("source_refs"):
+        resposta_completa["source_refs"] = _source_refs_das_sources(
+            resposta_completa.get("sources") or []
+        )
     return {
         **resposta_completa,
         "caminho": caminho,
         "termos_busca": list(termos or []),
     }
+
+
+def _source_refs_das_sources(sources: List[str]) -> List[Dict[str, str]]:
+    return montar_source_refs([{"filename": fonte} for fonte in sources if fonte])
+
+
+def _source_refs_da_resposta(resposta: Dict[str, Any]) -> List[Dict[str, str]]:
+    return resposta.get("source_refs") or _source_refs_das_sources(
+        resposta.get("sources") or []
+    )
 
 
 def run_pu_matcher_agent(
@@ -2236,7 +2249,7 @@ def stream_pu_matcher_agent(
             yield _json.dumps({
                 "type": "meta",
                 "sources": resposta_reversa["sources"],
-                "source_refs": resposta_reversa.get("source_refs", []),
+                "source_refs": _source_refs_da_resposta(resposta_reversa),
                 "model_used": resposta_reversa["model_used"],
                 "caminho": CAMINHO_BUSCA_REVERSA,
                 "termos_busca": _detectar_codigos_produto(query),
@@ -2252,7 +2265,7 @@ def stream_pu_matcher_agent(
             yield _json.dumps({
                 "type": "meta",
                 "sources": resposta_composta["sources"],
-                "source_refs": resposta_composta.get("source_refs", []),
+                "source_refs": _source_refs_da_resposta(resposta_composta),
                 "model_used": resposta_composta["model_used"],
                 "caminho": CAMINHO_REQUISITOS_COMPOSTOS, "termos_busca": [],
             }) + "\n"
@@ -2276,7 +2289,7 @@ def stream_pu_matcher_agent(
                 yield _json.dumps({
                     "type": "meta",
                     "sources": resposta_natureza["sources"],
-                    "source_refs": resposta_natureza.get("source_refs", []),
+                    "source_refs": _source_refs_da_resposta(resposta_natureza),
                     "model_used": resposta_natureza["model_used"],
                     "caminho": CAMINHO_NATUREZA,
                     "termos_busca": [termo_natureza],
@@ -2308,7 +2321,7 @@ def stream_pu_matcher_agent(
             yield _json.dumps({
                 "type": "meta",
                 "sources": resposta_aplicacao["sources"],
-                "source_refs": resposta_aplicacao.get("source_refs", []),
+                "source_refs": _source_refs_da_resposta(resposta_aplicacao),
                 "model_used": resposta_aplicacao["model_used"],
                 "caminho": CAMINHO_APLICACAO, "termos_busca": [],
             }) + "\n"
