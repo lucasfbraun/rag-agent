@@ -107,6 +107,11 @@ Quando o pedido tiver `conversation_id`, buscar a ultima resposta do assistente
 com `source_refs` e devolver uma resposta curta com essas mesmas referencias.
 Se o usuario citar um termo especifico, filtrar pelo nome do arquivo.
 
+Status: concluido. `/api/match` e `/api/match/stream` detectam pedidos de
+arquivo usando o historico da conversa, reutilizam a ultima resposta do
+assistente com `source_refs`, filtram por termo quando o usuario cita codigo ou
+nome, persistem o novo turno e nao chamam RAG/LLM nesse caminho.
+
 ## Sequencia de commits
 
 Cada etapa finalizada deve ser documentada e commitada separadamente:

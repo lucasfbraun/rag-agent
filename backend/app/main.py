@@ -28,6 +28,7 @@ from app.conversation_service import (
     create_conversation,
     get_conversation,
     history_for_agent,
+    responder_pedido_de_arquivo,
     save_exchange,
 )
 import logging
@@ -215,6 +216,23 @@ def match_product(
                 conversation_id=req.conversation_id,
                 user_id=current_user.id,
             )
+            resposta_arquivo = responder_pedido_de_arquivo(
+                persisted_conversation, req.query
+            )
+            if resposta_arquivo is not None:
+                conversation = save_exchange(
+                    session,
+                    user_id=current_user.id,
+                    conversation_id=persisted_conversation.id,
+                    query=req.query,
+                    answer=resposta_arquivo["answer"],
+                    sources=resposta_arquivo.get("sources"),
+                    source_refs=resposta_arquivo.get("source_refs"),
+                    model_used=resposta_arquivo.get("model_used"),
+                    caminho="atalho-download-fontes",
+                    termos_busca=[],
+                )
+                return {**resposta_arquivo, "conversation_id": str(conversation.id)}
             history = history_for_agent(persisted_conversation)
 
         res = run_pu_matcher_agent(
@@ -287,6 +305,42 @@ def match_product_stream(
             )
     except ConversationNotFoundError:
         raise HTTPException(status_code=404, detail="Conversa não encontrada.")
+
+    resposta_arquivo = responder_pedido_de_arquivo(conversation, req.query)
+    if resposta_arquivo is not None:
+        def stream_atalho_download():
+            yield json.dumps({
+                "type": "meta",
+                "sources": resposta_arquivo.get("sources") or [],
+                "source_refs": resposta_arquivo.get("source_refs") or [],
+                "model_used": resposta_arquivo.get("model_used"),
+                "caminho": "atalho-download-fontes",
+                "termos_busca": [],
+                "conversation_id": str(conversation.id),
+            }) + "\n"
+            yield json.dumps({
+                "type": "delta",
+                "content": resposta_arquivo["answer"],
+            }) + "\n"
+            save_exchange(
+                session,
+                user_id=current_user.id,
+                conversation_id=conversation.id,
+                query=req.query,
+                answer=resposta_arquivo["answer"],
+                sources=resposta_arquivo.get("sources"),
+                source_refs=resposta_arquivo.get("source_refs"),
+                model_used=resposta_arquivo.get("model_used"),
+                caminho="atalho-download-fontes",
+                termos_busca=[],
+            )
+            yield json.dumps({"type": "done"}) + "\n"
+
+        return StreamingResponse(
+            stream_atalho_download(),
+            media_type="application/x-ndjson",
+            headers={"X-Accel-Buffering": "no"},
+        )
 
     generator = stream_pu_matcher_agent(
         query=req.query,
