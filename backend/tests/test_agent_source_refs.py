@@ -156,6 +156,87 @@ def test_run_pu_matcher_agent_download_direto_nao_cai_em_vizinhos_sem_codigo(
     assert arquivo_rge.name not in resposta["answer"]
 
 
+def test_run_pu_matcher_agent_download_generico_traz_todos_do_codigo(
+    tmp_path, monkeypatch
+):
+    boletim = tmp_path / "Boletim FLEXX CL 2060.pdf"
+    fispq = tmp_path / "FISPQ GHS FLEXX CL 2060.pdf"
+    vizinho = tmp_path / "Boletim FLEXX CL 2081.pdf"
+    for arquivo in (boletim, fispq, vizinho):
+        arquivo.write_bytes(b"conteudo")
+    monkeypatch.setattr(fontes, "RAG_DOWNLOAD_ROOTS", (str(tmp_path),))
+    docs = [
+        {"filename": boletim.name, "filepath": str(boletim), "content": ""},
+        {"filename": fispq.name, "filepath": str(fispq), "content": ""},
+        {"filename": vizinho.name, "filepath": str(vizinho), "content": ""},
+    ]
+
+    with patch("app.rag.engine.retrieve_products_context", return_value=docs):
+        resposta = run_pu_matcher_agent(query="me traga o arquivo do CL 2060")
+
+    assert [ref["nome_arquivo"] for ref in resposta["source_refs"]] == [
+        boletim.name,
+        fispq.name,
+    ]
+
+
+def test_run_pu_matcher_agent_download_boletim_filtra_tipo_especifico(
+    tmp_path, monkeypatch
+):
+    boletim = tmp_path / "Boletim FLEXX CL 2060.pdf"
+    fispq = tmp_path / "FISPQ GHS FLEXX CL 2060.pdf"
+    for arquivo in (boletim, fispq):
+        arquivo.write_bytes(b"conteudo")
+    monkeypatch.setattr(fontes, "RAG_DOWNLOAD_ROOTS", (str(tmp_path),))
+    docs = [
+        {"filename": boletim.name, "filepath": str(boletim), "content": ""},
+        {"filename": fispq.name, "filepath": str(fispq), "content": ""},
+    ]
+
+    with patch("app.rag.engine.retrieve_products_context", return_value=docs):
+        resposta = run_pu_matcher_agent(query="me traga o boletim do CL 2060")
+
+    assert resposta["sources"] == [boletim.name]
+    assert [ref["nome_arquivo"] for ref in resposta["source_refs"]] == [boletim.name]
+
+
+def test_run_pu_matcher_agent_download_fispq_filtra_tipo_especifico(
+    tmp_path, monkeypatch
+):
+    boletim = tmp_path / "Boletim FLEXX CL 2060.pdf"
+    fispq = tmp_path / "FISPQ GHS FLEXX CL 2060.pdf"
+    for arquivo in (boletim, fispq):
+        arquivo.write_bytes(b"conteudo")
+    monkeypatch.setattr(fontes, "RAG_DOWNLOAD_ROOTS", (str(tmp_path),))
+    docs = [
+        {"filename": boletim.name, "filepath": str(boletim), "content": ""},
+        {"filename": fispq.name, "filepath": str(fispq), "content": ""},
+    ]
+
+    with patch("app.rag.engine.retrieve_products_context", return_value=docs):
+        resposta = run_pu_matcher_agent(query="me traga a fispq do CL 2060")
+
+    assert resposta["sources"] == [fispq.name]
+    assert [ref["nome_arquivo"] for ref in resposta["source_refs"]] == [fispq.name]
+
+
+def test_run_pu_matcher_agent_download_tipo_especifico_inexistente_nao_traz_tudo(
+    tmp_path, monkeypatch
+):
+    boletim = tmp_path / "Boletim FLEXX CL 2060.pdf"
+    boletim.write_bytes(b"conteudo")
+    monkeypatch.setattr(fontes, "RAG_DOWNLOAD_ROOTS", (str(tmp_path),))
+    docs = [{"filename": boletim.name, "filepath": str(boletim), "content": ""}]
+
+    with patch("app.rag.engine.retrieve_products_context", return_value=docs):
+        resposta = run_pu_matcher_agent(query="me traga a fispq do CL 2060")
+
+    assert resposta["sources"] == []
+    assert resposta["source_refs"] == []
+    assert "fispq" in resposta["answer"]
+    assert boletim.name not in resposta["answer"]
+
+
 def test_stream_pu_matcher_agent_publica_source_refs_no_meta(tmp_path, monkeypatch):
     arquivo = tmp_path / "Boletim FLEXX AG 2032.pdf"
     arquivo.write_bytes(b"conteudo")

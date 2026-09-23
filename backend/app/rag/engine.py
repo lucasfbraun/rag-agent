@@ -302,6 +302,16 @@ _TERMOS_GENERICOS_PEDIDO_ARQUIVO = {
     "documentos", "traga", "trazer", "manda", "mande", "envia", "envie",
     "me", "o", "a", "os", "as", "um", "uma", "do", "da", "de", "para",
 }
+_TIPOS_ESPECIFICOS_DE_ARQUIVO = {
+    "boletim": ("boletim",),
+    "fispq": ("fispq",),
+    "ficha": ("ficha",),
+    "emergencia": ("ficha", "emergencia"),
+    "proposta": ("proposta",),
+    "iso": ("iso",),
+    "laudo": ("laudo",),
+    "certificado": ("certificado",),
+}
 
 
 def _termos_especificos_do_pedido_de_arquivo(query: str) -> List[str]:
@@ -344,6 +354,34 @@ def _filtrar_docs_por_codigo_exato(
     ]
 
 
+def _tipo_especifico_pedido(query: str) -> tuple[str, tuple[str, ...]] | None:
+    termos = set(re.findall(r"[a-z0-9]+", _normalizar_para_regra(query)))
+    for tipo, marcadores in _TIPOS_ESPECIFICOS_DE_ARQUIVO.items():
+        if tipo in termos:
+            return tipo, marcadores
+    return None
+
+
+def _doc_casa_com_tipo(doc: Dict[str, Any], marcadores: tuple[str, ...]) -> bool:
+    alvo = _texto_codigo_normalizado(
+        " ".join(filter(None, [doc.get("filename"), doc.get("filepath")]))
+    )
+    return any(
+        re.search(r"\b" + re.escape(marcador) + r"\b", alvo)
+        for marcador in marcadores
+    )
+
+
+def _filtrar_docs_por_tipo_pedido(
+    docs: List[Dict[str, Any]], query: str
+) -> tuple[List[Dict[str, Any]], str | None]:
+    tipo_pedido = _tipo_especifico_pedido(query)
+    if tipo_pedido is None:
+        return docs, None
+    tipo, marcadores = tipo_pedido
+    return [doc for doc in docs if _doc_casa_com_tipo(doc, marcadores)], tipo
+
+
 def _responder_download_direto_de_fontes(
     query: str, ver_custos: bool = False
 ) -> Optional[Dict[str, Any]]:
@@ -358,6 +396,19 @@ def _responder_download_direto_de_fontes(
             "answer": (
                 "Nao encontrei nenhum arquivo cujo nome ou caminho bata "
                 f"exatamente com {', '.join(c.upper() for c in codigos)}."
+            ),
+            "sources": [],
+            "source_refs": [],
+            "model_used": "atalho-download-fontes",
+        }
+    docs, tipo_pedido = _filtrar_docs_por_tipo_pedido(docs, query)
+    if tipo_pedido and not docs:
+        detalhe_codigo = (
+            f" para {', '.join(c.upper() for c in codigos)}" if codigos else ""
+        )
+        return {
+            "answer": (
+                f"Nao encontrei nenhum arquivo do tipo {tipo_pedido}{detalhe_codigo}."
             ),
             "sources": [],
             "source_refs": [],

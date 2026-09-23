@@ -203,6 +203,17 @@ documento recuperado bate exatamente com ele, o fluxo nao cai mais para os
 vizinhos semanticos. Em vez disso, responde que nao encontrou arquivo com match
 exato para o codigo pedido.
 
+## Filtro por tipo de arquivo
+
+Status: concluido. O download direto agora diferencia pedidos genericos e
+especificos. Pedidos por "arquivo", "documento" ou "pdf" mantem todos os
+arquivos relacionados ao codigo/produto citado, como Boletim e FISPQ. Pedidos
+por tipo especifico filtram o retorno: "boletim" retorna apenas boletins,
+"FISPQ" retorna apenas FISPQs, "ficha"/"emergencia" retorna fichas de
+emergencia, e tambem ha marcadores para proposta, ISO, laudo e certificado.
+Quando o tipo pedido nao existe para o produto citado, o fluxo informa a
+ausencia desse tipo em vez de devolver outro documento relacionado.
+
 ## Sequencia de commits
 
 Cada etapa finalizada deve ser documentada e commitada separadamente:
@@ -222,3 +233,4 @@ Cada etapa finalizada deve ser documentada e commitada separadamente:
 13. permitir download direto de arquivo em conversa nova quando o pedido cita produto/documento.
 14. filtrar download direto por codigo exato quando o usuario cita um produto.
 15. bloquear fallback para vizinhos quando nao ha match exato do codigo.
+16. filtrar downloads por tipo de documento quando o pedido for especifico.
