@@ -167,6 +167,18 @@ Status: concluido. O `.env.example` documenta `RAG_DOWNLOAD_ROOTS` com as raizes
 padrao do Docker e o caminho `/mnt/acervo`, usado quando o acervo de origem esta
 montado a partir de um compartilhamento SMB.
 
+## Correcao de performance do download
+
+Status: concluido. A resolucao por `filename` funcionava para arquivos em SMB,
+mas podia varrer recursivamente o acervo montado a cada resposta do agente.
+Foi adicionado `RAG_DOWNLOAD_PATH_ALIASES` para mapear o prefixo gravado no
+Qdrant diretamente para o mount local do container, por exemplo
+`//10.1.1.205/flexivel/GRUPOS/Qualidade/Documentação de Produto=/mnt/acervo`.
+Com esse alias, `source_refs` sao montadas por caminho direto e o fallback por
+nome fica apenas para casos sem mapeamento. O resolver de download tambem guarda
+em cache local os ids emitidos durante a resposta, evitando varredura no clique
+imediato do usuario.
+
 ## Sequencia de commits
 
 Cada etapa finalizada deve ser documentada e commitada separadamente:
@@ -182,3 +194,4 @@ Cada etapa finalizada deve ser documentada e commitada separadamente:
 9. corrigir o grafo de migrations para o deploy.
 10. resolver fontes por nome quando o caminho do indice nao e baixavel.
 11. documentar `RAG_DOWNLOAD_ROOTS` no `.env.example`.
+12. adicionar alias de caminho para evitar varredura lenta do SMB.

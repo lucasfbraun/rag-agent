@@ -47,6 +47,51 @@ def test_monta_source_refs_resolve_por_filename_quando_filepath_nao_serve(
     assert fontes.resolver_source_id(refs[0]["id"]) == arquivo
 
 
+def test_monta_source_refs_usa_alias_de_path_sem_varrer_por_filename(
+    tmp_path, monkeypatch
+):
+    acervo = tmp_path / "acervo"
+    arquivo = (
+        acervo
+        / "DOCUMENTACAO RESTAURADA"
+        / "FLEXX AG"
+        / "FLEXX AG 2032 ESP"
+        / "Boletim FLEXX AG 2032 ESP.pdf"
+    )
+    arquivo.parent.mkdir(parents=True)
+    arquivo.write_bytes(b"conteudo")
+    monkeypatch.setattr(fontes, "RAG_DOWNLOAD_ROOTS", (str(acervo),))
+    monkeypatch.setattr(
+        fontes,
+        "RAG_DOWNLOAD_PATH_ALIASES",
+        (
+            (
+                "//10.1.1.205/flexivel/GRUPOS/Qualidade/Documentacao de Produto",
+                str(acervo),
+            ),
+        ),
+    )
+    monkeypatch.setattr(
+        fontes,
+        "_buscar_por_filename",
+        lambda *_args, **_kwargs: pytest.fail("nao deveria varrer por filename"),
+    )
+
+    refs = fontes.montar_source_refs([
+        {
+            "filename": arquivo.name,
+            "filepath": (
+                "//10.1.1.205/flexivel/GRUPOS/Qualidade/Documentacao de Produto/"
+                "DOCUMENTACAO RESTAURADA/FLEXX AG/FLEXX AG 2032 ESP/"
+                "Boletim FLEXX AG 2032 ESP.pdf"
+            ),
+        }
+    ])
+
+    assert refs[0]["nome_arquivo"] == arquivo.name
+    assert fontes.resolver_source_id(refs[0]["id"]) == arquivo
+
+
 def test_ignora_arquivo_fora_das_raizes_permitidas(tmp_path, monkeypatch):
     permitido = tmp_path / "permitido"
     proibido = tmp_path / "proibido"

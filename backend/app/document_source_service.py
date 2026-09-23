@@ -21,12 +21,13 @@ import os
 from pathlib import Path
 from typing import Any, Iterable
 
-from app.config import RAG_DOWNLOAD_ROOTS, SECRET_KEY
+from app.config import RAG_DOWNLOAD_PATH_ALIASES, RAG_DOWNLOAD_ROOTS, SECRET_KEY
 
 
 DOWNLOAD_ROUTE_PREFIX = "/api/documentos/fontes"
 _SOURCE_ID_PREFIX = "src_"
 _SOURCE_ID_HEX_LENGTH = 32
+_SOURCE_ID_CACHE: dict[str, Path] = {}
 
 
 class SourceIdInvalidoError(ValueError):
@@ -81,6 +82,30 @@ def _esta_em_raiz_permitida(path: Path, raizes: Iterable[Path]) -> bool:
     return False
 
 
+def _partes_de_caminho_textual(caminho: str) -> list[str]:
+    return [parte for parte in caminho.replace("\\", "/").split("/") if parte]
+
+
+def _caminho_por_alias(filepath: str, raizes: Iterable[Path]) -> Path | None:
+    partes_filepath = _partes_de_caminho_textual(filepath)
+    partes_filepath_norm = [parte.casefold() for parte in partes_filepath]
+
+    for origem, destino in RAG_DOWNLOAD_PATH_ALIASES:
+        partes_origem = _partes_de_caminho_textual(origem)
+        partes_origem_norm = [parte.casefold() for parte in partes_origem]
+        if not partes_origem_norm:
+            continue
+        if partes_filepath_norm[: len(partes_origem_norm)] != partes_origem_norm:
+            continue
+
+        candidato = Path(destino)
+        for parte in partes_filepath[len(partes_origem):]:
+            candidato = candidato / parte
+        if _esta_em_raiz_permitida(candidato, raizes):
+            return candidato
+    return None
+
+
 def _buscar_por_filename(filename: str, raizes: Iterable[Path]) -> Path | None:
     nome_normalizado = filename.casefold()
     candidatos: list[Path] = []
@@ -98,6 +123,10 @@ def _buscar_por_filename(filename: str, raizes: Iterable[Path]) -> Path | None:
 def _caminho_baixavel_do_doc(doc: dict[str, Any], raizes: list[Path]) -> Path | None:
     filepath = doc.get("filepath")
     if filepath:
+        caminho_alias = _caminho_por_alias(str(filepath), raizes)
+        if caminho_alias is not None:
+            return caminho_alias
+
         caminho = Path(str(filepath))
         if _esta_em_raiz_permitida(caminho, raizes):
             return caminho
@@ -133,6 +162,7 @@ def montar_source_refs(docs: list[dict[str, Any]]) -> list[dict[str, str]]:
 
         nome = str(doc.get("filename") or caminho.name)
         source_id = _source_id_para_caminho(caminho)
+        _SOURCE_ID_CACHE[source_id] = caminho
         refs.append(
             SourceRef(
                 id=source_id,
@@ -159,7 +189,17 @@ def _validar_source_id(source_id: str) -> None:
 def resolver_source_id(source_id: str) -> Path:
     """Resolve um id opaco para arquivo existente dentro das raizes permitidas."""
     _validar_source_id(source_id)
-    for raiz in _raizes_permitidas():
+    raizes = _raizes_permitidas()
+    caminho_em_cache = _SOURCE_ID_CACHE.get(source_id)
+    if (
+        caminho_em_cache is not None
+        and caminho_em_cache.is_file()
+        and _esta_em_raiz_permitida(caminho_em_cache, raizes)
+        and _source_id_para_caminho(caminho_em_cache) == source_id
+    ):
+        return caminho_em_cache
+
+    for raiz in raizes:
         if not raiz.exists() or not raiz.is_dir():
             continue
         for candidato in raiz.rglob("*"):

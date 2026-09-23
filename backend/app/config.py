@@ -189,6 +189,16 @@ RAG_DOWNLOAD_ROOTS = tuple(
     if raiz.strip()
 )
 
+# Mapeia caminhos gravados no Qdrant para mounts locais do container.
+# Formato: origem=destino,origem2=destino2
+# Exemplo:
+# //10.1.1.205/flexivel/GRUPOS/Qualidade/Documentação de Produto=/mnt/acervo
+RAG_DOWNLOAD_PATH_ALIASES = tuple(
+    tuple(parte.strip() for parte in item.split("=", 1))
+    for item in os.getenv("RAG_DOWNLOAD_PATH_ALIASES", "").split(",")
+    if "=" in item
+)
+
 # ---------------------------------------------------------------------------
 # Active Directory / LDAP (vínculo de usuário — ver app/auth/ldap_service.py)
 # ---------------------------------------------------------------------------
