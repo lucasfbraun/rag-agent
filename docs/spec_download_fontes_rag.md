@@ -161,6 +161,12 @@ incluindo metadados de streaming. Assim, apos uma resposta que cite
 `Boletim FLEXX AG 2032 ESP.pdf`, o turno seguinte pode reutilizar a fonte e
 mostrar o download.
 
+## Atualizacao de configuracao
+
+Status: concluido. O `.env.example` documenta `RAG_DOWNLOAD_ROOTS` com as raizes
+padrao do Docker e o caminho `/mnt/acervo`, usado quando o acervo de origem esta
+montado a partir de um compartilhamento SMB.
+
 ## Sequencia de commits
 
 Cada etapa finalizada deve ser documentada e commitada separadamente:
@@ -175,3 +181,4 @@ Cada etapa finalizada deve ser documentada e commitada separadamente:
 8. revisar e testar a entrega com subagentes.
 9. corrigir o grafo de migrations para o deploy.
 10. resolver fontes por nome quando o caminho do indice nao e baixavel.
+11. documentar `RAG_DOWNLOAD_ROOTS` no `.env.example`.
