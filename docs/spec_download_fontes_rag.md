@@ -112,6 +112,31 @@ arquivo usando o historico da conversa, reutilizam a ultima resposta do
 assistente com `source_refs`, filtram por termo quando o usuario cita codigo ou
 nome, persistem o novo turno e nao chamam RAG/LLM nesse caminho.
 
+## Validacao por subagentes
+
+Status: concluido. Foram instanciados dois subagentes de revisao:
+
+- Standards: nao encontrou violacao dura de padrao documentado, mas apontou
+  oportunidades de refinamento: tipar melhor `source_refs`, mover o endpoint de
+  download para um router mais coeso e reduzir duplicacao na montagem de eventos
+  `meta` do streaming.
+- Spec: encontrou tres ajustes necessarios antes de considerar a entrega
+  completamente fechada: preservar melhor o nome original no download quando o
+  arquivo fisico tem prefixo tecnico, restringir o detector de pedido de arquivo
+  para nao capturar perguntas normais sobre boletim/PDF/documento, e alinhar o
+  streaming para aplicar o atalho apenas quando houver `conversation_id`.
+
+Testes executados nesta etapa:
+
+```powershell
+python -m pytest tests/test_document_source_service.py tests/test_document_source_download_endpoint.py tests/test_agent_source_refs.py tests/test_agent_scope.py tests/test_tool_calling_sequence.py tests/test_conversation_file_shortcut.py --basetemp=../.tmp_pytest_review
+python -m pytest frontend/tests/test_conversation_history_ui.py frontend/tests/test_documentos_ui.py --basetemp=.tmp_pytest_frontend_review
+```
+
+Resultado: 30 testes backend e 19 testes frontend passaram. Permanece uma
+pendencia de validacao com banco real para testes dependentes de PostgreSQL,
+porque o ambiente local nao autenticou o usuario configurado anteriormente.
+
 ## Sequencia de commits
 
 Cada etapa finalizada deve ser documentada e commitada separadamente:
@@ -123,3 +148,4 @@ Cada etapa finalizada deve ser documentada e commitada separadamente:
 5. retornar `source_refs` no agente e no streaming;
 6. renderizar downloads no frontend;
 7. adicionar o atalho conversacional para "traga o arquivo".
+8. revisar e testar a entrega com subagentes.
