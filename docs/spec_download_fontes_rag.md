@@ -137,6 +137,14 @@ Resultado: 30 testes backend e 19 testes frontend passaram. Permanece uma
 pendencia de validacao com banco real para testes dependentes de PostgreSQL,
 porque o ambiente local nao autenticou o usuario configurado anteriormente.
 
+## Correcao de deploy
+
+Status: concluido. A primeira subida em Ubuntu apos `git pull` falhou no startup
+do backend porque o Alembic encontrou dois heads (`9b1a2c3d4e5f` e
+`a3d6f81c47e9`) ao rodar `alembic upgrade head`. Foi adicionada uma merge
+revision sem mudanca de schema para unir as duas linhas de migration e um teste
+de regressao para garantir que o grafo volte a ter um unico head.
+
 ## Sequencia de commits
 
 Cada etapa finalizada deve ser documentada e commitada separadamente:
@@ -149,3 +157,4 @@ Cada etapa finalizada deve ser documentada e commitada separadamente:
 6. renderizar downloads no frontend;
 7. adicionar o atalho conversacional para "traga o arquivo".
 8. revisar e testar a entrega com subagentes.
+9. corrigir o grafo de migrations para o deploy.
