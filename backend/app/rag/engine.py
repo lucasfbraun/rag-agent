@@ -319,6 +319,32 @@ def _eh_pedido_direto_de_arquivo(query: str) -> bool:
     return bool(_detectar_codigos_produto(query) or _termos_especificos_do_pedido_de_arquivo(query))
 
 
+def _texto_codigo_normalizado(texto: str) -> str:
+    return re.sub(r"[^a-z0-9]+", " ", _normalizar_para_regra(texto)).strip()
+
+
+def _doc_casa_com_codigo(doc: Dict[str, Any], codigo: str) -> bool:
+    alvo = _texto_codigo_normalizado(
+        " ".join(filter(None, [doc.get("filename"), doc.get("filepath")]))
+    )
+    partes = _texto_codigo_normalizado(codigo).split()
+    if not partes:
+        return False
+    return bool(re.search(r"\b" + r"\s+".join(map(re.escape, partes)) + r"\b", alvo))
+
+
+def _filtrar_docs_por_codigo_exato(
+    docs: List[Dict[str, Any]], codigos: List[str]
+) -> List[Dict[str, Any]]:
+    if not codigos:
+        return docs
+    filtrados = [
+        doc for doc in docs
+        if any(_doc_casa_com_codigo(doc, codigo) for codigo in codigos)
+    ]
+    return filtrados or docs
+
+
 def _responder_download_direto_de_fontes(
     query: str, ver_custos: bool = False
 ) -> Optional[Dict[str, Any]]:
@@ -326,6 +352,8 @@ def _responder_download_direto_de_fontes(
         return None
 
     docs = retrieve_products_context(query, top_k=10, incluir_sensivel=ver_custos)
+    codigos = _detectar_codigos_produto(query)
+    docs = _filtrar_docs_por_codigo_exato(docs, codigos)
     source_refs = montar_source_refs(docs)
     if not source_refs:
         sources = sorted(set([d.get("filename") for d in docs if d.get("filename")]))

@@ -85,6 +85,45 @@ def test_run_pu_matcher_agent_traz_arquivo_direto_sem_historico(tmp_path, monkey
     assert "Use o download abaixo" in resposta["answer"]
 
 
+def test_run_pu_matcher_agent_download_direto_filtra_codigo_exato(
+    tmp_path, monkeypatch
+):
+    arquivo_cl_2060 = tmp_path / "Boletim FLEXX CL 2060.pdf"
+    arquivo_cl_2081 = tmp_path / "Boletim FLEXX CL 2081.pdf"
+    arquivo_iso = tmp_path / "ISO 22635 - Dimensao.pdf"
+    for arquivo in (arquivo_cl_2060, arquivo_cl_2081, arquivo_iso):
+        arquivo.write_bytes(b"conteudo")
+    monkeypatch.setattr(fontes, "RAG_DOWNLOAD_ROOTS", (str(tmp_path),))
+    docs = [
+        {
+            "filename": arquivo_cl_2060.name,
+            "filepath": str(arquivo_cl_2060),
+            "chunk_index": 0,
+            "content": "dados do CL 2060",
+        },
+        {
+            "filename": arquivo_iso.name,
+            "filepath": str(arquivo_iso),
+            "chunk_index": 0,
+            "content": "norma citada no contexto",
+        },
+        {
+            "filename": arquivo_cl_2081.name,
+            "filepath": str(arquivo_cl_2081),
+            "chunk_index": 0,
+            "content": "dados do CL 2081",
+        },
+    ]
+
+    with patch("app.rag.engine.retrieve_products_context", return_value=docs):
+        resposta = run_pu_matcher_agent(query="me traga o arquivo do CL 2060")
+
+    assert resposta["sources"] == [arquivo_cl_2060.name]
+    assert [ref["nome_arquivo"] for ref in resposta["source_refs"]] == [
+        arquivo_cl_2060.name
+    ]
+
+
 def test_stream_pu_matcher_agent_publica_source_refs_no_meta(tmp_path, monkeypatch):
     arquivo = tmp_path / "Boletim FLEXX AG 2032.pdf"
     arquivo.write_bytes(b"conteudo")

@@ -190,6 +190,14 @@ download sem chamar o LLM. Pedidos genericos como "me traga o arquivo", sem
 produto/documento citado e sem fontes anteriores, continuam recebendo a mensagem
 orientando a consultar o acervo primeiro.
 
+## Precisao por codigo explicito
+
+Status: concluido. Quando o pedido direto de download cita um codigo de produto,
+como "CL 2060", os documentos recuperados pelo RAG agora sao filtrados por match
+exato desse codigo no nome/caminho do arquivo antes de montar os downloads. Isso
+evita retornar vizinhos semanticos ou documentos relacionados, como `CL 2081`,
+ISO ou propostas comerciais, quando o usuario pediu um produto especifico.
+
 ## Sequencia de commits
 
 Cada etapa finalizada deve ser documentada e commitada separadamente:
@@ -207,3 +215,4 @@ Cada etapa finalizada deve ser documentada e commitada separadamente:
 11. documentar `RAG_DOWNLOAD_ROOTS` no `.env.example`.
 12. adicionar alias de caminho para evitar varredura lenta do SMB.
 13. permitir download direto de arquivo em conversa nova quando o pedido cita produto/documento.
+14. filtrar download direto por codigo exato quando o usuario cita um produto.
