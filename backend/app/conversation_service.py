@@ -98,6 +98,9 @@ def responder_pedido_de_arquivo(
             "model_used": "atalho-download-fontes",
         }
 
+    if _termos_de_filtro_do_pedido(query):
+        return None
+
     return {
         "answer": (
             "Ainda nao tenho um arquivo recuperado nesta conversa. Peca primeiro "

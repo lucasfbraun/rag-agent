@@ -27,6 +27,7 @@ from app.rag.caminhos import (
     CAMINHO_BUSCA_REVERSA,
     CAMINHO_CLASSIFICACAO,
     CAMINHO_CONVERSACIONAL,
+    CAMINHO_DOWNLOAD_DIRETO,
     CAMINHO_FORA_DE_ESCOPO,
     CAMINHO_NATUREZA,
     CAMINHO_REQUISITOS_COMPOSTOS,
@@ -279,6 +280,76 @@ REGRAS DE EVIDÊNCIA E CORREÇÃO — OBRIGATÓRIAS:
 def _normalizar_para_regra(texto: str) -> str:
     decomposed = unicodedata.normalize("NFKD", (texto or "").lower())
     return "".join(c for c in decomposed if not unicodedata.combining(c))
+
+
+_PADRAO_PEDIDO_DIRETO_DE_ARQUIVO = re.compile(
+    r"\b(?:"
+    r"download|baixar|baixe|traga|trazer|manda|mande|envia|envie"
+    r")\b.{0,80}\b(?:"
+    r"arquivo|arquivos|pdf|fonte|fontes|boletim|boletins|fispq|ficha|"
+    r"documento|documentos"
+    r")\b|"
+    r"\b(?:"
+    r"arquivo|arquivos|pdf|fonte|fontes|boletim|boletins|fispq|ficha|"
+    r"documento|documentos"
+    r")\b.{0,80}\b(?:"
+    r"download|baixar|baixe|traga|trazer|manda|mande|envia|envie"
+    r")\b"
+)
+_TERMOS_GENERICOS_PEDIDO_ARQUIVO = {
+    "agora", "arquivo", "arquivos", "pdf", "download", "baixar", "baixe",
+    "fonte", "fontes", "boletim", "boletins", "fispq", "ficha", "documento",
+    "documentos", "traga", "trazer", "manda", "mande", "envia", "envie",
+    "me", "o", "a", "os", "as", "um", "uma", "do", "da", "de", "para",
+}
+
+
+def _termos_especificos_do_pedido_de_arquivo(query: str) -> List[str]:
+    termos = re.findall(r"[a-z0-9]+", _normalizar_para_regra(query))
+    return [
+        termo for termo in termos
+        if len(termo) >= 2 and termo not in _TERMOS_GENERICOS_PEDIDO_ARQUIVO
+    ]
+
+
+def _eh_pedido_direto_de_arquivo(query: str) -> bool:
+    texto = _normalizar_para_regra(query)
+    if not _PADRAO_PEDIDO_DIRETO_DE_ARQUIVO.search(texto):
+        return False
+    return bool(_detectar_codigos_produto(query) or _termos_especificos_do_pedido_de_arquivo(query))
+
+
+def _responder_download_direto_de_fontes(
+    query: str, ver_custos: bool = False
+) -> Optional[Dict[str, Any]]:
+    if not _eh_pedido_direto_de_arquivo(query):
+        return None
+
+    docs = retrieve_products_context(query, top_k=10, incluir_sensivel=ver_custos)
+    source_refs = montar_source_refs(docs)
+    if not source_refs:
+        sources = sorted(set([d.get("filename") for d in docs if d.get("filename")]))
+        return {
+            "answer": (
+                "Encontrei referencias no acervo, mas nenhum arquivo baixavel "
+                "esta disponivel nas raizes configuradas para download."
+            ),
+            "sources": sources,
+            "source_refs": [],
+            "model_used": "atalho-download-fontes",
+        }
+
+    nomes = [ref["nome_arquivo"] for ref in source_refs]
+    return {
+        "answer": (
+            "Encontrei o(s) arquivo(s) relacionado(s) ao pedido: "
+            + ", ".join(nomes)
+            + ". Use o download abaixo."
+        ),
+        "sources": nomes,
+        "source_refs": source_refs,
+        "model_used": "atalho-download-fontes",
+    }
 
 
 _RESPOSTA_FORA_DO_ESCOPO = (
@@ -2109,6 +2180,14 @@ def run_pu_matcher_agent(
             CAMINHO_FORA_DE_ESCOPO,
         )
 
+    resposta_download_direto = _responder_download_direto_de_fontes(query, ver_custos)
+    if resposta_download_direto is not None:
+        return _com_rastro(
+            resposta_download_direto,
+            CAMINHO_DOWNLOAD_DIRETO,
+            _termos_especificos_do_pedido_de_arquivo(query),
+        )
+
     resposta_reversa = _responder_busca_reversa_produto(query, ver_custos)
     if resposta_reversa is not None:
         return _com_rastro(
@@ -2244,6 +2323,24 @@ def stream_pu_matcher_agent(
         return
 
     try:
+        resposta_download_direto = _responder_download_direto_de_fontes(
+            query, ver_custos
+        )
+        if resposta_download_direto is not None:
+            yield _json.dumps({
+                "type": "meta",
+                "sources": resposta_download_direto["sources"],
+                "source_refs": _source_refs_da_resposta(resposta_download_direto),
+                "model_used": resposta_download_direto["model_used"],
+                "caminho": CAMINHO_DOWNLOAD_DIRETO,
+                "termos_busca": _termos_especificos_do_pedido_de_arquivo(query),
+            }) + "\n"
+            yield _json.dumps({
+                "type": "delta", "content": resposta_download_direto["answer"],
+            }) + "\n"
+            yield _json.dumps({"type": "done"}) + "\n"
+            return
+
         resposta_reversa = _responder_busca_reversa_produto(query, ver_custos)
         if resposta_reversa is not None:
             yield _json.dumps({

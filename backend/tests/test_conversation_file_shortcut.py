@@ -61,3 +61,8 @@ def test_pedido_de_arquivo_sem_fonte_anterior_responde_sem_chamar_llm():
     assert resposta["model_used"] == "atalho-download-fontes"
     assert "Ainda nao tenho" in resposta["answer"]
 
+
+def test_pedido_de_arquivo_com_codigo_sem_fonte_anterior_segue_para_rag():
+    conversa = _conversation(_assistant([]))
+
+    assert responder_pedido_de_arquivo(conversa, "me traga o arquivo do AG 2032") is None

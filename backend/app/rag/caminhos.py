@@ -33,6 +33,7 @@ CAMINHO_NATUREZA = "natureza-do-produto"
 CAMINHO_CLASSIFICACAO = "classificacao-catalogo"
 CAMINHO_APLICACAO = "aplicacao-com-evidencia"
 CAMINHO_CONVERSACIONAL = "conversacional-rag"
+CAMINHO_DOWNLOAD_DIRETO = "download-direto-fontes"
 
 # Respostas gravadas antes desta sessão não têm caminho registrado. Elas
 # entram no relatório sob este rótulo em vez de sumirem: uma pergunta real já
@@ -48,6 +49,7 @@ ROTULOS_DE_CAMINHO: dict[str, str] = {
     CAMINHO_CLASSIFICACAO: "Listagem por tecnologia/linha do catálogo",
     CAMINHO_APLICACAO: "Aplicação com evidência literal no boletim",
     CAMINHO_CONVERSACIONAL: "Recuperação vetorial + LLM (caminho aberto)",
+    CAMINHO_DOWNLOAD_DIRETO: "Download direto de fontes do RAG",
     CAMINHO_DESCONHECIDO: "Não registrado (resposta anterior à medição)",
 }
 

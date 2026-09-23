@@ -179,6 +179,17 @@ nome fica apenas para casos sem mapeamento. O resolver de download tambem guarda
 em cache local os ids emitidos durante a resposta, evitando varredura no clique
 imediato do usuario.
 
+## Download direto em conversa nova
+
+Status: concluido. O pedido direto de arquivo em uma conversa sem historico,
+por exemplo "me traga o arquivo do AG 2032", agora segue para uma recuperacao
+deterministica no acervo em vez de responder que ainda nao ha arquivo na
+conversa. Quando o pedido contem intencao de download e um termo especifico, o
+motor busca os documentos no RAG, monta `source_refs` e retorna os botoes de
+download sem chamar o LLM. Pedidos genericos como "me traga o arquivo", sem
+produto/documento citado e sem fontes anteriores, continuam recebendo a mensagem
+orientando a consultar o acervo primeiro.
+
 ## Sequencia de commits
 
 Cada etapa finalizada deve ser documentada e commitada separadamente:
@@ -195,3 +206,4 @@ Cada etapa finalizada deve ser documentada e commitada separadamente:
 10. resolver fontes por nome quando o caminho do indice nao e baixavel.
 11. documentar `RAG_DOWNLOAD_ROOTS` no `.env.example`.
 12. adicionar alias de caminho para evitar varredura lenta do SMB.
+13. permitir download direto de arquivo em conversa nova quando o pedido cita produto/documento.
