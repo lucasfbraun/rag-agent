@@ -120,7 +120,12 @@ def _buscar_por_filename(filename: str, raizes: Iterable[Path]) -> Path | None:
     return sorted(candidatos, key=_normalizar_caminho)[0]
 
 
-def _caminho_baixavel_do_doc(doc: dict[str, Any], raizes: list[Path]) -> Path | None:
+def _caminho_baixavel_do_doc(
+    doc: dict[str, Any],
+    raizes: list[Path],
+    *,
+    buscar_por_filename: bool = True,
+) -> Path | None:
     filepath = doc.get("filepath")
     if filepath:
         caminho_alias = _caminho_por_alias(str(filepath), raizes)
@@ -132,26 +137,32 @@ def _caminho_baixavel_do_doc(doc: dict[str, Any], raizes: list[Path]) -> Path | 
             return caminho
 
     filename = doc.get("filename")
-    if not filename:
+    if not filename or not buscar_por_filename:
         return None
     return _buscar_por_filename(str(filename), raizes)
 
 
-def montar_source_refs(docs: list[dict[str, Any]]) -> list[dict[str, str]]:
+def montar_source_refs(
+    docs: list[dict[str, Any]], *, buscar_por_filename: bool = True
+) -> list[dict[str, str]]:
     """Monta referencias baixaveis a partir dos payloads recuperados do Qdrant.
 
     Deduplica por caminho canonico, ignora payload incompleto e ignora arquivos
     fora das raizes permitidas. Quando o payload traz um `filepath` antigo ou
     de outro ambiente, tenta resolver pelo `filename` dentro das raizes
     configuradas. A interface devolve dicts para encaixar direto nos payloads
-    JSON ja usados pelos endpoints.
+    JSON ja usados pelos endpoints. Em consultas de catalogo,
+    `buscar_por_filename` pode ser desativado para impedir uma varredura
+    recursiva de SMB quando o payload nao traz um caminho resolvivel por alias.
     """
     raizes = _raizes_permitidas()
     vistos: set[str] = set()
     refs: list[SourceRef] = []
 
     for doc in docs:
-        caminho = _caminho_baixavel_do_doc(doc, raizes)
+        caminho = _caminho_baixavel_do_doc(
+            doc, raizes, buscar_por_filename=buscar_por_filename
+        )
         if caminho is None:
             continue
 

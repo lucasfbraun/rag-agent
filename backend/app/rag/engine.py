@@ -2243,7 +2243,7 @@ def _source_refs_da_resposta(resposta: Dict[str, Any]) -> List[Dict[str, str]]:
 
 def _fontes_das_respostas_das_tools(
     tool_messages: List[Dict[str, Any]], query: str
-) -> List[str]:
+) -> tuple[List[str], List[Dict[str, str]]]:
     """Extrai fontes estruturadas das ferramentas que responderam a consulta.
 
     O RAG inicial e a consulta de catálogo têm escopos diferentes. Quando o
@@ -2252,6 +2252,8 @@ def _fontes_das_respostas_das_tools(
     recuperados antes dela e devem substituir as fontes iniciais.
     """
     fontes: set[str] = set()
+    source_refs: List[Dict[str, str]] = []
+    source_ids: set[str] = set()
     familia_pedida = bool(_PADRAO_FAMILIA_FLEXX_SEM_CODIGO.search(
         _normalizar_para_regra(query)
     ))
@@ -2263,6 +2265,18 @@ def _fontes_das_respostas_das_tools(
                     fontes.update(
                         str(nome) for nome in item if isinstance(nome, str) and nome
                     )
+                elif chave == "source_refs" and isinstance(item, list):
+                    for ref in item:
+                        if not isinstance(ref, dict) or not ref.get("id"):
+                            continue
+                        if ref["id"] in source_ids:
+                            continue
+                        source_ids.add(ref["id"])
+                        source_refs.append({
+                            "id": str(ref["id"]),
+                            "nome_arquivo": str(ref.get("nome_arquivo") or ""),
+                            "download_url": str(ref.get("download_url") or ""),
+                        })
                 elif chave == "documento" and isinstance(item, str) and item:
                     fontes.add(item)
                 else:
@@ -2288,7 +2302,7 @@ def _fontes_das_respostas_das_tools(
                 coletar(payload)
         else:
             coletar(payload)
-    return sorted(fontes)
+    return sorted(fontes), source_refs
 
 
 def run_pu_matcher_agent(
@@ -2413,12 +2427,14 @@ MENSAGEM / DEMANDA DO VENDEDOR OU CLIENTE:
         answer = choice.message.content
 
     answer = _aplicar_guardrails_resposta(query, answer, history)
-    fontes_das_tools = _fontes_das_respostas_das_tools(tool_messages, query)
+    fontes_das_tools, source_refs_das_tools = _fontes_das_respostas_das_tools(
+        tool_messages, query
+    )
     sources = fontes_das_tools or sorted(set(
         d.get("filename") for d in docs if d.get("filename")
     ))
     source_refs = (
-        _source_refs_das_sources(fontes_das_tools)
+        source_refs_das_tools or _source_refs_das_sources(fontes_das_tools)
         if fontes_das_tools
         else montar_source_refs(docs)
     )
@@ -2638,12 +2654,14 @@ MENSAGEM / DEMANDA DO VENDEDOR OU CLIENTE:
         resposta_original = "".join(partes)
         resposta_validada = _aplicar_guardrails_resposta(query, resposta_original, history)
 
-        fontes_das_tools = _fontes_das_respostas_das_tools(tool_messages, query)
+        fontes_das_tools, source_refs_das_tools = _fontes_das_respostas_das_tools(
+            tool_messages, query
+        )
         sources = fontes_das_tools or sorted(set(
             d.get("filename") for d in docs if d.get("filename")
         ))
         source_refs = (
-            _source_refs_das_sources(fontes_das_tools)
+            source_refs_das_tools or _source_refs_das_sources(fontes_das_tools)
             if fontes_das_tools
             else montar_source_refs(docs)
         )

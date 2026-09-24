@@ -19,6 +19,7 @@ from qdrant_client.http import models as qmodels
 from app.rag.ingestion import get_qdrant_client
 from app.rag.exceptions import RetrievalIndisponivelError
 from app.config import COLLECTION_NAME
+from app.document_source_service import montar_source_refs
 
 logger = logging.getLogger(__name__)
 
@@ -637,6 +638,7 @@ def _resumo_lista(
     listar_todos: bool,
     evidencias: Optional[Dict[str, Dict[str, Any]]] = None,
     fontes_por_produto: Optional[Dict[str, set]] = None,
+    source_refs_por_produto: Optional[Dict[str, List[Dict[str, str]]]] = None,
 ) -> Dict[str, Any]:
     """Resumo de um nível; com `evidencias`, cita a prova de cada produto.
 
@@ -662,6 +664,21 @@ def _resumo_lista(
             for produto in exibidos
             for fonte in fontes_por_produto.get(produto, set())
         })
+    if source_refs_por_produto is not None:
+        refs: list[Dict[str, str]] = []
+        vistos: set[str] = set()
+        for produto in exibidos:
+            for ref in source_refs_por_produto.get(produto, []):
+                source_id = ref.get("id")
+                if not source_id or source_id in vistos:
+                    continue
+                vistos.add(source_id)
+                refs.append(ref)
+        resumo["source_refs"] = refs
+        if refs:
+            resumo["fontes"] = sorted({
+                ref["nome_arquivo"] for ref in refs if ref.get("nome_arquivo")
+            })
     if evidencias is not None:
         resumo["evidencias"] = {
             produto: (
@@ -741,6 +758,7 @@ def listar_produtos_por_aplicacao(
         produtos_por_conteudo = set()
         produtos_declarados_isocianatos = set()
         fontes_por_produto: Dict[str, set] = {}
+        documentos_por_produto: Dict[str, Dict[str, Dict[str, str]]] = {}
         offset = None
         while True:
             pontos, offset = client.scroll(
@@ -760,6 +778,10 @@ def listar_produtos_por_aplicacao(
                 nome_arquivo = _SEPARADOR_CAMINHO.split(filepath)[-1]
                 if nome_arquivo:
                     fontes_por_produto.setdefault(produto, set()).add(nome_arquivo)
+                    documentos_por_produto.setdefault(produto, {})[filepath] = {
+                        "filename": nome_arquivo,
+                        "filepath": filepath,
+                    }
 
                 if not termo_busca:
                     produtos_por_nome.add(produto)
@@ -793,17 +815,31 @@ def listar_produtos_por_aplicacao(
         raise RetrievalIndisponivelError(str(e)) from e
 
     produtos_por_conteudo.difference_update(produtos_declarados_isocianatos)
+    produtos_exibidos = set()
+    for produtos in (produtos_por_nome, produtos_por_conteudo):
+        lista = sorted(produtos)
+        limite = None if listar_todos else 10
+        produtos_exibidos.update(lista if limite is None else lista[:limite])
+    source_refs_por_produto = {
+        produto: montar_source_refs(
+            list(documentos_por_produto.get(produto, {}).values()),
+            buscar_por_filename=False,
+        )
+        for produto in produtos_exibidos
+    }
     return {
         "termo_buscado": termo_busca,
         "por_nome_ou_familia": _resumo_lista(
             produtos_por_nome,
             listar_todos,
             fontes_por_produto=fontes_por_produto,
+            source_refs_por_produto=source_refs_por_produto,
         ),
         "por_aplicacao_ou_tipo": _resumo_lista(
             produtos_por_conteudo,
             listar_todos,
             fontes_por_produto=fontes_por_produto,
+            source_refs_por_produto=source_refs_por_produto,
         ),
     }
 

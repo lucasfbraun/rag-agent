@@ -106,6 +106,22 @@ def test_ignora_arquivo_fora_das_raizes_permitidas(tmp_path, monkeypatch):
     ]) == []
 
 
+def test_montar_source_refs_pode_desativar_fallback_recursivo_por_nome(
+    tmp_path, monkeypatch
+):
+    monkeypatch.setattr(fontes, "RAG_DOWNLOAD_ROOTS", (str(tmp_path),))
+    monkeypatch.setattr(
+        fontes,
+        "_buscar_por_filename",
+        lambda *_args, **_kwargs: pytest.fail("nao deveria varrer por filename"),
+    )
+
+    assert fontes.montar_source_refs(
+        [{"filename": "arquivo.pdf", "filepath": "//servidor/sem-alias/arquivo.pdf"}],
+        buscar_por_filename=False,
+    ) == []
+
+
 def test_resolve_source_id_para_arquivo_existente(tmp_path, monkeypatch):
     arquivo = tmp_path / "boletim.pdf"
     arquivo.write_bytes(b"conteudo")

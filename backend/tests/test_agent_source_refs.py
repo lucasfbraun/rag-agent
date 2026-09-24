@@ -283,6 +283,18 @@ def test_listagem_de_familia_substitui_fontes_rag_por_fontes_dos_produtos(
             "produtos": ["FLEXX AG 2032", "FLEXX AG 2060"],
             "truncado": False,
             "fontes": [fonte_ag.name, fonte_fispq_ag.name],
+            "source_refs": [
+                {
+                    "id": "src_ag",
+                    "nome_arquivo": fonte_ag.name,
+                    "download_url": "/api/documentos/fontes/src_ag/download",
+                },
+                {
+                    "id": "src_fispq_ag",
+                    "nome_arquivo": fonte_fispq_ag.name,
+                    "download_url": "/api/documentos/fontes/src_fispq_ag/download",
+                },
+            ],
         },
         "por_aplicacao_ou_tipo": {
             "total": 0,
@@ -305,16 +317,17 @@ def test_listagem_de_familia_substitui_fontes_rag_por_fontes_dos_produtos(
              return_value=json.dumps(resultado_familia),
          ), \
          patch(
+             "app.rag.engine.montar_source_refs",
+             side_effect=AssertionError("nao deve varrer fontes por filename"),
+         ), \
+         patch(
              "app.rag.engine.litellm.completion",
              side_effect=[primeira, _final_completion("Temos 2 produtos AG.")],
          ):
         resposta = run_pu_matcher_agent(query="me traga todos os produtos flexx ag")
 
     assert resposta["sources"] == [fonte_ag.name, fonte_fispq_ag.name]
-    assert [ref["nome_arquivo"] for ref in resposta["source_refs"]] == [
-        fonte_ag.name,
-        fonte_fispq_ag.name,
-    ]
+    assert resposta["source_refs"] == resultado_familia["por_nome_ou_familia"]["source_refs"]
     assert fonte_iso.name not in resposta["sources"]
     assert fonte_sl.name not in resposta["sources"]
 

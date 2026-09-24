@@ -179,6 +179,11 @@ nome fica apenas para casos sem mapeamento. O resolver de download tambem guarda
 em cache local os ids emitidos durante a resposta, evitando varredura no clique
 imediato do usuario.
 
+Nas listagens de familia, as fontes agora sao montadas ainda durante a varredura
+estruturada do catalogo, usando o `filepath` indexado. Esse caminho desativa o
+fallback recursivo por nome; assim, uma consulta de categoria nao fica bloqueada
+varrendo o compartilhamento SMB para cada PDF.
+
 ## Download direto em conversa nova
 
 Status: concluido. O pedido direto de arquivo em uma conversa sem historico,
@@ -248,3 +253,4 @@ Cada etapa finalizada deve ser documentada e commitada separadamente:
 15. bloquear fallback para vizinhos quando nao ha match exato do codigo.
 16. filtrar downloads por tipo de documento quando o pedido for especifico.
 17. alinhar fontes do RAG ao resultado estruturado de listagens por familia.
+18. impedir varredura recursiva do SMB durante a montagem de fontes de listagem.
