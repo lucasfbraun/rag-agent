@@ -387,6 +387,47 @@ def test_stream_listagem_de_familia_publica_fontes_dos_produtos(
     assert fonte_iso.name not in meta["sources"]
 
 
+def test_listagem_por_terminologia_reutiliza_refs_sem_varrer_smb(
+    monkeypatch,
+):
+    arquivo = "Boletim FLEXX TH T160DE1.pdf"
+    refs = [{
+        "id": "src_th",
+        "nome_arquivo": arquivo,
+        "download_url": "/api/documentos/fontes/src_th/download",
+    }]
+    payload = {
+        "nivel_atendido": "identidade_declarada",
+        "niveis": {
+            "classificacao_estrutural": {"total": 0, "produtos": [], "truncado": False},
+            "identidade_declarada": {
+                "total": 1,
+                "produtos": ["FLEXX TH T160DE1"],
+                "truncado": False,
+                "evidencias": {
+                    "FLEXX TH T160DE1": {"documento": arquivo},
+                },
+                "source_refs": refs,
+            },
+            "composicao_comprovada": {"total": 0, "produtos": [], "truncado": False},
+            "mencao_no_documento": {"total": 0, "produtos": [], "truncado": False},
+        },
+    }
+
+    with patch("app.rag.engine.expandir_termos_do_dominio", return_value=[]), \
+         patch("app.rag.engine.execute_mcp_tool", return_value=json.dumps(payload)), \
+         patch(
+             "app.rag.engine.montar_source_refs",
+             side_effect=AssertionError("nao deve varrer fontes por filename"),
+         ):
+        resposta = run_pu_matcher_agent(
+            query="me traga os produtos que são FLEXX XXXXXX"
+        )
+
+    assert resposta["source_refs"] == refs
+    assert resposta["sources"] == [arquivo]
+
+
 def test_stream_pu_matcher_agent_publica_source_refs_no_meta(tmp_path, monkeypatch):
     arquivo = tmp_path / "Boletim FLEXX AG 2032.pdf"
     arquivo.write_bytes(b"conteudo")

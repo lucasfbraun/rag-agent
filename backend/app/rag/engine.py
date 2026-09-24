@@ -1121,6 +1121,7 @@ def _responder_natureza_do_produto(
     return {
         "answer": "\n".join(linhas),
         "sources": fontes,
+        "source_refs": bucket.get("source_refs") or [],
         "model_used": "catalogo-estruturado",
     }
 

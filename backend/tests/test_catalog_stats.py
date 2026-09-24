@@ -424,6 +424,34 @@ def test_natureza_elastomero_nao_inclui_produto_que_apenas_produz_elastomero():
     assert niveis["composicao_comprovada"]["produtos"] == ["FLEXX TH T160DE1"]
 
 
+def test_natureza_carrega_refs_dos_documentos_sem_busca_recursiva():
+    fake_client = MagicMock()
+    filepath = r"//servidor\Documentação de Produto\FLEXX TH T160DE1\Boletim FLEXX TH T160DE1.pdf"
+    fake_client.scroll.return_value = (
+        [_ponto_com_conteudo(filepath, "FLEXX TH T160DE1 é um elastômero de poliuretano.")],
+        None,
+    )
+    ref = {
+        "id": "src_th",
+        "nome_arquivo": "Boletim FLEXX TH T160DE1.pdf",
+        "download_url": "/api/documentos/fontes/src_th/download",
+    }
+    chamadas = []
+
+    def montar_refs(docs, *, buscar_por_filename=True):
+        chamadas.append((docs, buscar_por_filename))
+        return [ref]
+
+    with patch("app.rag.catalog_stats.get_qdrant_client", return_value=fake_client), \
+         patch("app.rag.catalog_stats.montar_source_refs", side_effect=montar_refs):
+        resultado = listar_produtos_por_tipo("elastômero", listar_todos=True)
+
+    assert resultado["niveis"]["identidade_declarada"]["source_refs"] == [ref]
+    assert chamadas == [
+        ([{"filename": "Boletim FLEXX TH T160DE1.pdf", "filepath": filepath}], False)
+    ]
+
+
 def test_tecnologia_rigidos_exclui_catalisador_semirrigido_e_inativo():
     """"Rígidos" é uma TECNOLOGIA do catálogo, não uma busca de texto.
 

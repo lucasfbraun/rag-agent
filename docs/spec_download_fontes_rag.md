@@ -232,6 +232,16 @@ Foi adicionado ao resultado da ferramenta de listagem um conjunto de nomes de
 arquivo associado aos produtos exibidos. Menções encontradas no bucket de
 conteudo continuam separadas e nao contaminam uma listagem por familia.
 
+## Latencia de listagens por terminologia
+
+Status: concluido. O mesmo principio foi aplicado ao caminho de natureza, usado
+por perguntas como "quais produtos sao X" ou "me traga os produtos que sao
+FLEXX XXXXXX". Durante a varredura do Qdrant, o catalogo agora preserva o
+`filepath` de cada produto exibido e monta `source_refs` sem fallback por nome.
+O motor repassa essas referencias diretamente para a resposta, evitando que
+`_com_rastro` inicie uma busca recursiva no SMB para cada documento. A correcao
+vale para qualquer terminologia, nao apenas para a familia AG.
+
 ## Sequencia de commits
 
 Cada etapa finalizada deve ser documentada e commitada separadamente:
@@ -254,3 +264,4 @@ Cada etapa finalizada deve ser documentada e commitada separadamente:
 16. filtrar downloads por tipo de documento quando o pedido for especifico.
 17. alinhar fontes do RAG ao resultado estruturado de listagens por familia.
 18. impedir varredura recursiva do SMB durante a montagem de fontes de listagem.
+19. impedir varredura recursiva do SMB em listagens por terminologia/natureza.

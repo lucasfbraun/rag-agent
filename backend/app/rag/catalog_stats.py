@@ -1331,6 +1331,10 @@ def listar_produtos_por_tipo(
         # alvos depende de conhecer todas as classificações do acervo), então
         # a origem precisa esperar aqui até lá.
         documento_da_classificacao: Dict[str, Dict[str, str]] = {}
+        # Mantém o caminho indexado junto do produto. A resposta de natureza
+        # também oferece download; não devemos reconstruir esse caminho
+        # procurando recursivamente no SMB depois da varredura.
+        documentos_por_produto: Dict[str, Dict[str, Dict[str, str]]] = {}
         offset = None
         while True:
             pontos, offset = client.scroll(
@@ -1348,6 +1352,11 @@ def listar_produtos_por_tipo(
                     continue
                 content = payload.get("content") or ""
                 nome_arquivo = _SEPARADOR_CAMINHO.split(filepath)[-1]
+                if nome_arquivo:
+                    documentos_por_produto.setdefault(produto, {})[filepath] = {
+                        "filename": nome_arquivo,
+                        "filepath": filepath,
+                    }
 
                 # Nível 1 — hierarquia do catálogo, independente do texto.
                 if _documento_atual_com_produto_catalogavel(filepath, produto):
@@ -1445,6 +1454,19 @@ def listar_produtos_por_tipo(
     for nivel in ("identidade_declarada", "composicao_comprovada"):
         por_nivel[nivel] -= excluidos | auxiliares
 
+    produtos_exibidos = set()
+    for produtos in por_nivel.values():
+        lista = sorted(produtos)
+        limite = None if listar_todos else 10
+        produtos_exibidos.update(lista if limite is None else lista[:limite])
+    source_refs_por_produto = {
+        produto: montar_source_refs(
+            list(documentos_por_produto.get(produto, {}).values()),
+            buscar_por_filename=False,
+        )
+        for produto in produtos_exibidos
+    }
+
     nivel_atendido = next(
         (nivel for nivel in NIVEIS_DE_EVIDENCIA if por_nivel[nivel]), None
     )
@@ -1454,7 +1476,10 @@ def listar_produtos_por_tipo(
         "nivel_atendido": nivel_atendido,
         "niveis": {
             nivel: _resumo_lista(
-                por_nivel[nivel], listar_todos, evidencia_por_nivel[nivel]
+                por_nivel[nivel],
+                listar_todos,
+                evidencia_por_nivel[nivel],
+                source_refs_por_produto=source_refs_por_produto,
             )
             for nivel in NIVEIS_DE_EVIDENCIA
         },
