@@ -2241,6 +2241,56 @@ def _source_refs_da_resposta(resposta: Dict[str, Any]) -> List[Dict[str, str]]:
     )
 
 
+def _fontes_das_respostas_das_tools(
+    tool_messages: List[Dict[str, Any]], query: str
+) -> List[str]:
+    """Extrai fontes estruturadas das ferramentas que responderam a consulta.
+
+    O RAG inicial e a consulta de catálogo têm escopos diferentes. Quando o
+    modelo usa uma ferramenta para listar uma família, os arquivos associados
+    ao resultado da ferramenta são mais específicos que os trechos semânticos
+    recuperados antes dela e devem substituir as fontes iniciais.
+    """
+    fontes: set[str] = set()
+    familia_pedida = bool(_PADRAO_FAMILIA_FLEXX_SEM_CODIGO.search(
+        _normalizar_para_regra(query)
+    ))
+
+    def coletar(valor: Any) -> None:
+        if isinstance(valor, dict):
+            for chave, item in valor.items():
+                if chave in {"fontes", "documentos"} and isinstance(item, list):
+                    fontes.update(
+                        str(nome) for nome in item if isinstance(nome, str) and nome
+                    )
+                elif chave == "documento" and isinstance(item, str) and item:
+                    fontes.add(item)
+                else:
+                    coletar(item)
+        elif isinstance(valor, list):
+            for item in valor:
+                coletar(item)
+
+    for mensagem in tool_messages:
+        if mensagem.get("role") != "tool":
+            continue
+        try:
+            payload = json.loads(mensagem.get("content") or "{}")
+        except (TypeError, json.JSONDecodeError):
+            continue
+        if mensagem.get("name") == "consultar_produtos_por_aplicacao":
+            # A ferramenta devolve dois universos separados. Para uma família,
+            # somente o bucket por nome/família representa os produtos pedidos;
+            # o bucket de conteúdo pode conter menções em outras linhas.
+            if familia_pedida:
+                coletar(payload.get("por_nome_ou_familia") or {})
+            else:
+                coletar(payload)
+        else:
+            coletar(payload)
+    return sorted(fontes)
+
+
 def run_pu_matcher_agent(
     query: str,
     template_id: str = "proposta_tecnica_completa",
@@ -2345,24 +2395,33 @@ MENSAGEM / DEMANDA DO VENDEDOR OU CLIENTE:
 
     choice = response.choices[0]
 
+    tool_messages: List[Dict[str, Any]] = []
     if choice.message.tool_calls:
         # A mensagem assistant (com TODAS as tool_calls) entra UMA vez, antes
         # do loop — não uma vez por tool_call (AUD-006: isso intercalava a
         # mesma mensagem assistant repetida entre as respostas das tools,
         # sequência inválida pro protocolo de tool calling com 2+ chamadas).
         messages.append(choice.message)
-        messages.extend(_executar_tool_calls(
+        tool_messages = _executar_tool_calls(
             choice.message.tool_calls,
             ver_custos=ver_custos, ver_laudo_completo=ver_laudo_completo,
-        ))
+        )
+        messages.extend(tool_messages)
         final_response = litellm.completion(model=model_name, messages=messages, temperature=0.2, num_retries=3)
         answer = final_response.choices[0].message.content
     else:
         answer = choice.message.content
 
     answer = _aplicar_guardrails_resposta(query, answer, history)
-    sources = sorted(set([d.get("filename") for d in docs if d.get("filename")]))
-    source_refs = montar_source_refs(docs)
+    fontes_das_tools = _fontes_das_respostas_das_tools(tool_messages, query)
+    sources = fontes_das_tools or sorted(set(
+        d.get("filename") for d in docs if d.get("filename")
+    ))
+    source_refs = (
+        _source_refs_das_sources(fontes_das_tools)
+        if fontes_das_tools
+        else montar_source_refs(docs)
+    )
     return _com_rastro(
         {
             "answer": answer,
@@ -2541,15 +2600,6 @@ MENSAGEM / DEMANDA DO VENDEDOR OU CLIENTE:
 """
     messages.append({"role": "user", "content": user_prompt})
 
-    sources = sorted(set([d.get("filename") for d in docs if d.get("filename")]))
-    source_refs = montar_source_refs(docs)
-    yield _json.dumps({
-        "type": "meta", "sources": sources, "source_refs": source_refs,
-        "model_used": model_name,
-        "caminho": CAMINHO_CONVERSACIONAL,
-        "termos_busca": _termos_efetivamente_pesquisados(query_recuperacao),
-    }) + "\n"
-
     try:
         resposta_inicial = litellm.completion(
             model=model_name,
@@ -2561,14 +2611,16 @@ MENSAGEM / DEMANDA DO VENDEDOR OU CLIENTE:
         )
         choice = resposta_inicial.choices[0]
 
+        tool_messages: List[Dict[str, Any]] = []
         if choice.message.tool_calls:
             # Mesma disciplina de run_pu_matcher_agent (AUD-006): 1 mensagem
             # assistant com TODAS as tool_calls, seguida de N mensagens tool.
             messages.append(choice.message)
-            messages.extend(_executar_tool_calls(
+            tool_messages = _executar_tool_calls(
                 choice.message.tool_calls,
                 ver_custos=ver_custos, ver_laudo_completo=ver_laudo_completo,
-            ))
+            )
+            messages.extend(tool_messages)
             response = litellm.completion(
                 model=model_name,
                 messages=messages,
@@ -2585,6 +2637,22 @@ MENSAGEM / DEMANDA DO VENDEDOR OU CLIENTE:
             partes = [choice.message.content or ""]
         resposta_original = "".join(partes)
         resposta_validada = _aplicar_guardrails_resposta(query, resposta_original, history)
+
+        fontes_das_tools = _fontes_das_respostas_das_tools(tool_messages, query)
+        sources = fontes_das_tools or sorted(set(
+            d.get("filename") for d in docs if d.get("filename")
+        ))
+        source_refs = (
+            _source_refs_das_sources(fontes_das_tools)
+            if fontes_das_tools
+            else montar_source_refs(docs)
+        )
+        yield _json.dumps({
+            "type": "meta", "sources": sources, "source_refs": source_refs,
+            "model_used": model_name,
+            "caminho": CAMINHO_CONVERSACIONAL,
+            "termos_busca": _termos_efetivamente_pesquisados(query_recuperacao),
+        }) + "\n"
         if resposta_validada == resposta_original:
             for delta in partes:
                 yield _json.dumps({"type": "delta", "content": delta}) + "\n"

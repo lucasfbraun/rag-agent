@@ -214,6 +214,19 @@ emergencia, e tambem ha marcadores para proposta, ISO, laudo e certificado.
 Quando o tipo pedido nao existe para o produto citado, o fluxo informa a
 ausencia desse tipo em vez de devolver outro documento relacionado.
 
+## Escopo das fontes em listagens de familia
+
+Status: concluido. Em consultas de categoria como "todos os produtos FLEXX AG",
+as fontes exibidas agora acompanham o bucket estruturado de produtos por
+nome/familia retornado pelo catalogo. O motor nao reutiliza mais os trechos
+semanticos iniciais como fontes finais quando eles pertencem a outras linhas,
+como ISO, SL, PI ou FT. O mesmo escopo e publicado no streaming, incluindo os
+downloads quando os arquivos estao disponiveis nas raizes configuradas.
+
+Foi adicionado ao resultado da ferramenta de listagem um conjunto de nomes de
+arquivo associado aos produtos exibidos. Menções encontradas no bucket de
+conteudo continuam separadas e nao contaminam uma listagem por familia.
+
 ## Sequencia de commits
 
 Cada etapa finalizada deve ser documentada e commitada separadamente:
@@ -234,3 +247,4 @@ Cada etapa finalizada deve ser documentada e commitada separadamente:
 14. filtrar download direto por codigo exato quando o usuario cita um produto.
 15. bloquear fallback para vizinhos quando nao ha match exato do codigo.
 16. filtrar downloads por tipo de documento quando o pedido for especifico.
+17. alinhar fontes do RAG ao resultado estruturado de listagens por familia.

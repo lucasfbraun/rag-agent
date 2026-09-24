@@ -270,6 +270,7 @@ def test_listar_por_familia_no_nome_fica_separado_do_bucket_de_conteudo():
     assert resultado["por_nome_ou_familia"]["total"] == 1
     assert resultado["por_nome_ou_familia"]["produtos"] == ["FLEXX CAT 42"]
     assert resultado["por_aplicacao_ou_tipo"]["total"] == 0
+    assert resultado["por_nome_ou_familia"]["fontes"] == ["Boletim.pdf"]
 
 
 def test_listar_por_familia_e_por_conteudo_nao_se_misturam():

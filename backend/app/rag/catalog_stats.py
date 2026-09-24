@@ -636,6 +636,7 @@ def _resumo_lista(
     produtos: set,
     listar_todos: bool,
     evidencias: Optional[Dict[str, Dict[str, Any]]] = None,
+    fontes_por_produto: Optional[Dict[str, set]] = None,
 ) -> Dict[str, Any]:
     """Resumo de um nível; com `evidencias`, cita a prova de cada produto.
 
@@ -655,6 +656,12 @@ def _resumo_lista(
         "produtos": exibidos,
         "truncado": limite is not None and len(lista) > limite,
     }
+    if fontes_por_produto is not None:
+        resumo["fontes"] = sorted({
+            fonte
+            for produto in exibidos
+            for fonte in fontes_por_produto.get(produto, set())
+        })
     if evidencias is not None:
         resumo["evidencias"] = {
             produto: (
@@ -733,6 +740,7 @@ def listar_produtos_por_aplicacao(
         produtos_por_nome = set()
         produtos_por_conteudo = set()
         produtos_declarados_isocianatos = set()
+        fontes_por_produto: Dict[str, set] = {}
         offset = None
         while True:
             pontos, offset = client.scroll(
@@ -747,6 +755,11 @@ def listar_produtos_por_aplicacao(
                 produto = _produto_do_filepath(payload.get("filepath") or "")
                 if not produto:
                     continue
+
+                filepath = payload.get("filepath") or ""
+                nome_arquivo = _SEPARADOR_CAMINHO.split(filepath)[-1]
+                if nome_arquivo:
+                    fontes_por_produto.setdefault(produto, set()).add(nome_arquivo)
 
                 if not termo_busca:
                     produtos_por_nome.add(produto)
@@ -782,8 +795,16 @@ def listar_produtos_por_aplicacao(
     produtos_por_conteudo.difference_update(produtos_declarados_isocianatos)
     return {
         "termo_buscado": termo_busca,
-        "por_nome_ou_familia": _resumo_lista(produtos_por_nome, listar_todos),
-        "por_aplicacao_ou_tipo": _resumo_lista(produtos_por_conteudo, listar_todos),
+        "por_nome_ou_familia": _resumo_lista(
+            produtos_por_nome,
+            listar_todos,
+            fontes_por_produto=fontes_por_produto,
+        ),
+        "por_aplicacao_ou_tipo": _resumo_lista(
+            produtos_por_conteudo,
+            listar_todos,
+            fontes_por_produto=fontes_por_produto,
+        ),
     }
 
 

@@ -13,6 +13,30 @@ def _final_completion(answer_text):
     return resp
 
 
+def _tool_call(call_id, name, arguments_json):
+    tool_call = MagicMock()
+    tool_call.id = call_id
+    tool_call.function.name = name
+    tool_call.function.arguments = arguments_json
+    return tool_call
+
+
+def _completion_with_tool_calls(tool_calls):
+    resp = MagicMock()
+    resp.choices = [MagicMock()]
+    resp.choices[0].message.tool_calls = tool_calls
+    resp.choices[0].message.content = None
+    return resp
+
+
+def _stream_completion_parts(parts):
+    for part in parts:
+        chunk = MagicMock()
+        chunk.choices = [MagicMock()]
+        chunk.choices[0].delta.content = part
+        yield chunk
+
+
 def test_run_pu_matcher_agent_devolve_source_refs_dos_docs_recuperados(
     tmp_path, monkeypatch
 ):
@@ -235,6 +259,119 @@ def test_run_pu_matcher_agent_download_tipo_especifico_inexistente_nao_traz_tudo
     assert resposta["source_refs"] == []
     assert "fispq" in resposta["answer"]
     assert boletim.name not in resposta["answer"]
+
+
+def test_listagem_de_familia_substitui_fontes_rag_por_fontes_dos_produtos(
+    tmp_path, monkeypatch
+):
+    fonte_ag = tmp_path / "Boletim FLEXX AG 2032.pdf"
+    fonte_fispq_ag = tmp_path / "FISPQ FLEXX AG 2032.pdf"
+    fonte_iso = tmp_path / "FISPQ FLEXX ISO 130500.pdf"
+    fonte_sl = tmp_path / "FISPQ FLEXX SL 2517.pdf"
+    for arquivo in (fonte_ag, fonte_fispq_ag, fonte_iso, fonte_sl):
+        arquivo.write_bytes(b"conteudo")
+    monkeypatch.setattr(fontes, "RAG_DOWNLOAD_ROOTS", (str(tmp_path),))
+
+    docs_rag = [
+        {"filename": fonte_iso.name, "filepath": str(fonte_iso), "content": "ruido"},
+        {"filename": fonte_sl.name, "filepath": str(fonte_sl), "content": "ruido"},
+    ]
+    resultado_familia = {
+        "termo_buscado": "AG",
+        "por_nome_ou_familia": {
+            "total": 2,
+            "produtos": ["FLEXX AG 2032", "FLEXX AG 2060"],
+            "truncado": False,
+            "fontes": [fonte_ag.name, fonte_fispq_ag.name],
+        },
+        "por_aplicacao_ou_tipo": {
+            "total": 0,
+            "produtos": [],
+            "truncado": False,
+            "fontes": [],
+        },
+    }
+    primeira = _completion_with_tool_calls([
+        _tool_call(
+            "call_ag",
+            "consultar_produtos_por_aplicacao",
+            '{"termo_busca":"AG","listar_todos":false}',
+        )
+    ])
+
+    with patch("app.rag.engine.retrieve_products_context", return_value=docs_rag), \
+         patch(
+             "app.rag.engine.execute_mcp_tool",
+             return_value=json.dumps(resultado_familia),
+         ), \
+         patch(
+             "app.rag.engine.litellm.completion",
+             side_effect=[primeira, _final_completion("Temos 2 produtos AG.")],
+         ):
+        resposta = run_pu_matcher_agent(query="me traga todos os produtos flexx ag")
+
+    assert resposta["sources"] == [fonte_ag.name, fonte_fispq_ag.name]
+    assert [ref["nome_arquivo"] for ref in resposta["source_refs"]] == [
+        fonte_ag.name,
+        fonte_fispq_ag.name,
+    ]
+    assert fonte_iso.name not in resposta["sources"]
+    assert fonte_sl.name not in resposta["sources"]
+
+
+def test_stream_listagem_de_familia_publica_fontes_dos_produtos(
+    tmp_path, monkeypatch
+):
+    fonte_ag = tmp_path / "Boletim FLEXX AG 2032.pdf"
+    fonte_iso = tmp_path / "FISPQ FLEXX ISO 130500.pdf"
+    for arquivo in (fonte_ag, fonte_iso):
+        arquivo.write_bytes(b"conteudo")
+    monkeypatch.setattr(fontes, "RAG_DOWNLOAD_ROOTS", (str(tmp_path),))
+
+    resultado_familia = {
+        "termo_buscado": "AG",
+        "por_nome_ou_familia": {
+            "total": 1,
+            "produtos": ["FLEXX AG 2032"],
+            "truncado": False,
+            "fontes": [fonte_ag.name],
+        },
+        "por_aplicacao_ou_tipo": {
+            "total": 0,
+            "produtos": [],
+            "truncado": False,
+            "fontes": [],
+        },
+    }
+    primeira = _completion_with_tool_calls([
+        _tool_call(
+            "call_ag",
+            "consultar_produtos_por_aplicacao",
+            '{"termo_busca":"AG","listar_todos":false}',
+        )
+    ])
+
+    with patch(
+        "app.rag.engine.retrieve_products_context",
+        return_value=[
+            {"filename": fonte_iso.name, "filepath": str(fonte_iso), "content": "ruido"}
+        ],
+    ), patch(
+        "app.rag.engine.execute_mcp_tool",
+        return_value=json.dumps(resultado_familia),
+    ), patch(
+        "app.rag.engine.litellm.completion",
+        side_effect=[primeira, _stream_completion_parts(["Temos 1 produto AG."])],
+    ):
+        eventos = [
+            json.loads(linha)
+            for linha in stream_pu_matcher_agent(query="me traga todos os produtos flexx ag")
+        ]
+
+    meta = next(evento for evento in eventos if evento["type"] == "meta")
+    assert meta["sources"] == [fonte_ag.name]
+    assert [ref["nome_arquivo"] for ref in meta["source_refs"]] == [fonte_ag.name]
+    assert fonte_iso.name not in meta["sources"]
 
 
 def test_stream_pu_matcher_agent_publica_source_refs_no_meta(tmp_path, monkeypatch):
